@@ -90,7 +90,7 @@ suspension = components.SimpleSuspension( ...
     'wheelbase', 1.55, ...       % [m]
     'cgHeight', 0.28, ...        % [m]
     'rollStiffDist', 0.55, ...   % 55% front roll stiffness
-    'staticFrontWeight', 0.48    % 48% front static weight
+    'staticFrontWeight', 0.48 ...   % 48% front static weight
 );
 fprintf('Suspension: SimpleSuspension (WB=%.2f m, CG=%.2f m)\n', ...
     suspension.wheelbase, suspension.cgHeight);
@@ -100,7 +100,7 @@ powertrain = components.SimplePowertrain( ...
     'maxEngineTorque', 55, ...     % [Nm]
     'totalGearRatio', 12.0, ...    % gear * final drive
     'wheelRadius', 0.2286, ...     % [m]
-    'drivetrainEfficiency', 0.90   % 90% efficient
+    'drivetrainEfficiency', 0.90 ...  % 90% efficient
 );
 fprintf('Powertrain: SimplePowertrain (Tq=%.0f Nm, Ratio=%.1f)\n', ...
     powertrain.maxEngineTorque, powertrain.totalGearRatio);
@@ -110,7 +110,7 @@ tire = components.SimpleTire( ...
     'corneringStiffness', 800, ...    % [N/deg]
     'longitudinalStiffness', 10000, ...% [N/unit slip]
     'peakMuLat', 1.8, ...             % Peak lateral friction
-    'loadSensitivityExp', -0.1         % Slight load sensitivity
+    'loadSensitivityExp', -0.1 ...        % Slight load sensitivity
 );
 fprintf('Tires: SimpleTire (Peak mu=%.1f)\n', tire.peakMuLat);
 

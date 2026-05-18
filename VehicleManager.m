@@ -304,7 +304,7 @@ classdef VehicleManager
             end
             
             % Decision logic
-            vTarget = min(vMaxCurrent, vMaxAhead, obj.maxSpeed);
+            vTarget = min(vMaxCurrent, min(vMaxAhead, obj.maxSpeed));
             
             % Compute required deceleration to reach vTarget
             if speed > vTarget * 1.02  % 2% hysteresis
