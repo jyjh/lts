@@ -1,0 +1,36 @@
+sequenceDiagram
+    participant App as Main / UI
+    participant VM as VehicleManager
+    participant DM as DriverModel
+    participant State as VehicleState
+    participant Aero as AeroManager
+    participant Susp as SuspensionComponent
+    participant Tire as TireModel
+
+    App->>VM: simulate()
+    
+    loop While vehicle is on track
+        VM->>State: read current state
+        State-->>VM: [speed, ax, ay, pitch, position]
+        
+        VM->>DM: computeInputs(State, Track look-ahead)
+        DM-->>VM: [throttle, brake, steering angle]
+        
+        VM->>Aero: computePerComponent(State)
+        Aero-->>VM: [Total Downforce, Total Drag, Aero Balance]
+        
+        VM->>Susp: computeLatLoadTransfer(ay)
+        VM->>Susp: computeLongLoadTransfer(ax)
+        Susp-->>VM: [Delta Normal Loads on all 4 corners]
+        
+        VM->>Tire: computeLateralForce(NormalLoads, slipAngles)
+        VM->>Tire: computeLongitudinalForce(NormalLoads, slipRatios)
+        Tire-->>VM: [Combined Tire Forces]
+        
+        VM->>VM: Resolve Sum of Forces & Yaw Moments
+        
+        VM->>State: updateFromDynamics(new_ax, new_ay, new_heading)
+        VM->>State: toLogStruct() (Append to history list)
+    end
+    
+    VM-->>App: return stateLog, lapTime

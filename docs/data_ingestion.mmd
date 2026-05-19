@@ -1,0 +1,28 @@
+classDiagram
+    class ExternalDataLoader {
+        <<interface>>
+        +loadCSV(filepath) double[][]
+        +loadJSON(filepath) struct
+    }
+
+    class AeroMapLoader {
+        +parseAeroCoefficients(filepath)
+        +interpolateDownforce(frontRideHeight, rearRideHeight) double
+    }
+
+    class TrackDataLoader {
+        +parseGPSCSV(filepath)
+        +smoothCurvature()
+        +generateRacingLine()
+    }
+
+    class TelemetryExporter {
+        +writeToMoTeCFormat(stateLog, filepath)
+    }
+
+    ExternalDataLoader <|.. AeroMapLoader
+    ExternalDataLoader <|.. TrackDataLoader
+    
+    AeroMapLoader --> SimpleAero : populates maps
+    TrackDataLoader --> TestTrack : builds track points
+    VehicleManager --> TelemetryExporter : sends final stateLog

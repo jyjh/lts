@@ -1,0 +1,32 @@
+graph TD
+    subgraph "Aero Department"
+        CFD[CFD Simulations] --> AeroMap[Aero Data Maps]
+        AeroMap --> ImplAero[Implement Subclasses: FrontWing, UnderbodyFloor]
+    end
+    
+    subgraph "Suspension Department"
+        Kinematics[Kinematics Software] --> KineMap[Roll Center / Camber Gain Maps]
+        KineMap --> ImplSusp[Implement Subclass: KinematicSuspension]
+    end
+    
+    subgraph "Powertrain Department"
+        Dyno[Engine Dyno / Motor Rig] --> TorqueMap[Torque/Power LUT]
+        TorqueMap --> ImplPT[Implement Subclass: MappedPowertrain]
+    end
+
+    subgraph "Vehicle Dynamics / LTS Application"
+        ImplAero --> Build[Instantiate Objects]
+        ImplSusp --> Build
+        ImplPT --> Build
+        TrackData[GPS Track Coordinates CSV] --> Build
+        Build --> VehManager(VehicleManager)
+        VehManager --> SimRun{Run simulate()}
+    end
+    
+    SimRun --> Telemetry[Export stateLog as MoTeC CSV]
+    Telemetry --> Compare[Compare Sim vs. Real MoTeC Data]
+    Compare --> Iter{Analyze Deltas & Iterate Setup}
+    
+    Iter -.-> CFD
+    Iter -.-> Kinematics
+    Iter -.-> Dyno
