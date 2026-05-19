@@ -20,7 +20,7 @@ graph TD
         ImplPT --> Build
         TrackData[GPS Track Coordinates CSV] --> Build
         Build --> VehManager(VehicleManager)
-        VehManager --> SimRun{Run simulate()}
+        VehManager --> SimRun
     end
     
     SimRun --> Telemetry[Export stateLog as MoTeC CSV]
