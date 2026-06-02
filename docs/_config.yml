@@ -1,0 +1,19 @@
+title: FSAE Transient Lap Time Simulation
+description: >-
+  An object-oriented MATLAB simulation for transient-state Lap Time Simulation
+  (LTS) for FSAE vehicles.
+baseurl: "/lts"
+url: "https://jyjh.github.io"
+github_username: jyjh
+
+theme: minima
+plugins:
+  - jekyll-feed
+
+header_pages:
+  - class-diagram/index.md
+  - simulation-loop/index.md
+  - workflow/index.md
+  - data-ingestion/index.md
+  - about.md
+

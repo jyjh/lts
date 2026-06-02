@@ -2,60 +2,108 @@
 /**
  * sync_diagram.js
  *
- * Reads the Mermaid diagram from class_diagram.mmd and injects it into
- * CLASS_DIAGRAM.md between the ```mermaid and ``` markers.
+ * Scans each page folder under docs/ for .mmd (Mermaid) source files
+ * and renders them to .svg images using the Mermaid CLI (`mmdc`).
  *
  * Usage:
- *   node docs/sync_diagram.js          # run from project root
- *   node docs/sync_diagram.js --check  # exit 1 if out of sync (for CI)
+ *   node docs/sync_diagram.js          # regenerate all SVGs
+ *   node docs/sync_diagram.js --check  # exit 1 if any SVG is missing or stale
+ *
+ * Prerequisites:
+ *   npm install -g @mermaid-js/mermaid-cli
+ *   (or: npx --yes @mermaid-js/mermaid-cli <input> -o <output>)
  */
 
 const fs = require('fs');
 const path = require('path');
+const { execSync } = require('child_process');
 
-const scriptDir = __dirname;
-const mmdFile = path.join(scriptDir, 'class_diagram.mmd');
-const mdFile = path.join(scriptDir, 'CLASS_DIAGRAM.md');
+const docsDir = path.join(__dirname);
 
-// Read source diagram
-const diagram = fs.readFileSync(mmdFile, 'utf8').trim();
+// Page folders that contain .mmd diagram sources
+const diagramFolders = [
+  'class-diagram',
+  'simulation-loop',
+  'workflow',
+  'data-ingestion',
+];
 
-// Read target markdown
-let md = fs.readFileSync(mdFile, 'utf8');
-
-// Replace content between ```mermaid and the closing ```
-// Handle both \n (Unix) and \r\n (Windows) line endings
-const markerOpen = md.includes('```mermaid\r\n') ? '```mermaid\r\n' : '```mermaid\n';
-const markerClose = '```';
-
-const startIdx = md.indexOf(markerOpen);
-if (startIdx === -1) {
-    console.error('ERROR: Could not find ```mermaid block in CLASS_DIAGRAM.md');
-    process.exit(1);
+/**
+ * Resolve the mmdc command — prefer local, fall back to npx.
+ */
+function getMmdcCommand() {
+  try {
+    execSync('mmdc --version', { stdio: 'pipe' });
+    return 'mmdc';
+  } catch {
+    return 'npx --yes @mermaid-js/mermaid-cli';
+  }
 }
 
-const contentStart = startIdx + markerOpen.length;
-const endIdx = md.indexOf(markerClose, contentStart);
-if (endIdx === -1) {
-    console.error('ERROR: Could not find closing ``` for mermaid block in CLASS_DIAGRAM.md');
-    process.exit(1);
-}
+function main() {
+  const checkMode = process.argv.includes('--check');
+  const mmdc = getMmdcCommand();
+  let allUpToDate = true;
 
-const oldDiagram = md.slice(contentStart, endIdx);
-const newMd = md.slice(0, contentStart) + diagram + '\n' + md.slice(endIdx);
-
-// Check mode (for CI)
-if (process.argv.includes('--check')) {
-    if (oldDiagram.trim() === diagram) {
-        console.log('✅ CLASS_DIAGRAM.md is in sync with class_diagram.mmd');
-        process.exit(0);
-    } else {
-        console.error('❌ CLASS_DIAGRAM.md is out of sync with class_diagram.mmd');
-        console.error('   Run: node docs/sync_diagram.js');
-        process.exit(1);
+  for (const folder of diagramFolders) {
+    const folderPath = path.join(docsDir, folder);
+    if (!fs.existsSync(folderPath)) {
+      console.warn(`⚠️  Folder not found: ${folder}/`);
+      continue;
     }
+
+    // Find all .mmd files in this folder
+    const mmdFiles = fs.readdirSync(folderPath).filter(f => f.endsWith('.mmd'));
+
+    for (const mmdFile of mmdFiles) {
+      const mmdPath = path.join(folderPath, mmdFile);
+      const svgName = mmdFile.replace(/\.mmd$/, '.svg');
+      const svgPath = path.join(folderPath, svgName);
+
+      const mmdContent = fs.readFileSync(mmdPath, 'utf8').trim();
+      const mmdHash = mmdContent.length; // simple staleness check
+
+      if (checkMode) {
+        if (!fs.existsSync(svgPath)) {
+          console.error(`❌ Missing SVG: ${folder}/${svgName}`);
+          allUpToDate = false;
+        } else {
+          const svgStat = fs.statSync(svgPath);
+          const mmdStat = fs.statSync(mmdPath);
+          if (mmdStat.mtimeMs > svgStat.mtimeMs) {
+            console.error(`❌ Stale SVG: ${folder}/${svgName} (mmd is newer)`);
+            allUpToDate = false;
+          } else {
+            console.log(`✅ Up to date: ${folder}/${svgName}`);
+          }
+        }
+        continue;
+      }
+
+      // Generate SVG
+      console.log(`🔄 Rendering ${folder}/${mmdFile} → ${svgName}...`);
+      try {
+        execSync(
+          `${mmdc} -i "${mmdPath}" -o "${svgPath}" --backgroundColor transparent`,
+          { stdio: 'pipe', cwd: docsDir }
+        );
+        console.log(`✅ Generated: ${folder}/${svgName}`);
+      } catch (err) {
+        console.error(`❌ Failed to render ${folder}/${mmdFile}`);
+        console.error(err.stderr ? err.stderr.toString() : err.message);
+        process.exitCode = 1;
+      }
+    }
+  }
+
+  if (checkMode && !allUpToDate) {
+    console.error('\nRun: node docs/sync_diagram.js');
+    process.exit(1);
+  }
+
+  if (!checkMode) {
+    console.log('\n✅ All diagrams synced.');
+  }
 }
 
-// Write updated file
-fs.writeFileSync(mdFile, newMd, 'utf8');
-console.log('✅ Synced class_diagram.mmd → CLASS_DIAGRAM.md');
+main();
