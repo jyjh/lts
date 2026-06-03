@@ -1,11 +1,18 @@
 classdef AeroManager
     % AEROMANAGER Aggregates multiple AeroComponent objects
-    % Computes total aero forces and aero balance from positioned components.
+    % Resolves each component's downforce to front/rear axle loads via
+    % moment balance, and computes total drag with its effective height
+    % above the CG.
+    %
     % Usage:
     %   mgr = AeroManager();
-    %   mgr.addComponent(FrontWing(...));
-    %   mgr.addComponent(RearWing(...));
-    %   totalDownforce = mgr.computeDownforce(vehicleState);
+    %   mgr = mgr.addComponent(FrontWing(...));
+    %   mgr = mgr.addComponent(RearWing(...));
+    %   forces = mgr.computeForces(vehicleState);
+    %     forces.Fz_front    - Downforce resolved to front axle [N]
+    %     forces.Fz_rear     - Downforce resolved to rear axle [N]
+    %     forces.F_drag      - Total drag force [N]
+    %     forces.dragHeight  - Drag resultant height above CG [m]
     
     properties
         components = {}       % Cell array of AeroComponent objects
@@ -41,65 +48,72 @@ classdef AeroManager
             end
         end
         
-        %% ---- Aggregated force computations ----
+        %% ---- Main force computation ----
         
-        function F_downforce = computeDownforce(obj, vehicleState)
-            % Sum downforce from all components
-            F_downforce = 0;
-            for i = 1:numel(obj.components)
-                F_downforce = F_downforce + obj.components{i}.computeDownforce(vehicleState);
-            end
-        end
-        
-        function F_drag = computeDrag(obj, vehicleState)
-            % Sum drag from all components
-            F_drag = 0;
-            for i = 1:numel(obj.components)
-                F_drag = F_drag + obj.components{i}.computeDrag(vehicleState);
-            end
-        end
-        
-        function balance = computeAeroBalance(obj, vehicleState)
-            % COMPUTEAEROBALANCE Fraction of total downforce on front axle
-            % Uses static weight distribution to locate CG between axles,
-            % then resolves each component's force through the axle contact patches.
-            
-            totalDownforce = 0;
-            frontAxleMoment = 0;
+        function forces = computeForces(obj, vehicleState)
+            % COMPUTEFORCES Resolve all component forces to axle loads
+            %   forces = obj.computeForces(vehicleState)
+            %
+            %   Returns a struct with:
+            %     Fz_front    - Downforce on front axle [N]
+            %     Fz_rear     - Downforce on rear axle [N]
+            %     F_drag      - Total drag force [N]
+            %     dragHeight  - Height of drag resultant above CG [m]
+            %
+            %   Each component's downforce is split between front and rear
+            %   axles using moment balance about the CG:
+            %     Fi_front = Fi * (b + xi) / wb
+            %     Fi_rear  = Fi * (a - xi) / wb
+            %   where xi is the component's longitudinal position from CG
+            %   (positive forward), a = CG-to-front-axle, b = CG-to-rear-axle.
+            %
+            %   Drag height is the weighted-average component height minus
+            %   the CG height.
             
             wb = vehicleState.vehicleManager.wheelbase;
+            cgHeight = vehicleState.vehicleManager.cgHeight;
             frontWeightFrac = vehicleState.vehicleManager.suspension.getStaticWeightDistribution();
-            b = wb * frontWeightFrac;  % distance from CG to rear axle [m]
+            
+            a = wb * (1 - frontWeightFrac);  % CG to front axle [m]
+            b = wb * frontWeightFrac;         % CG to rear axle [m]
+            
+            Fz_front = 0;
+            Fz_rear = 0;
+            F_drag = 0;
+            dragMoment = 0;  % Sum of Di * zi for weighted average height
             
             for i = 1:numel(obj.components)
-                Fi = obj.components{i}.computeDownforce(vehicleState);
-                xi = obj.components{i}.getLongitudinalPosition();
+                comp = obj.components{i};
                 
+                % Component forces
+                Fi = comp.computeDownforce(vehicleState);
+                Di = comp.computeDrag(vehicleState);
+                xi = comp.getLongitudinalPosition();  % +forward of CG
+                zi = comp.getNominalHeight();          % height above ground
+                
+                % Resolve downforce to axles via moment balance about CG
                 frontFrac = (b + xi) / wb;
                 frontFrac = max(0, min(1, frontFrac));
                 
-                totalDownforce = totalDownforce + Fi;
-                frontAxleMoment = frontAxleMoment + Fi * frontFrac;
+                Fz_front = Fz_front + Fi * frontFrac;
+                Fz_rear  = Fz_rear  + Fi * (1 - frontFrac);
+                
+                % Accumulate drag and height-weighted drag
+                F_drag = F_drag + Di;
+                dragMoment = dragMoment + Di * zi;
             end
             
-            if totalDownforce > 0
-                balance = frontAxleMoment / totalDownforce;
+            % Drag resultant height above CG
+            if F_drag > 0
+                dragHeight = dragMoment / F_drag - cgHeight;
             else
-                balance = 0.5;
+                dragHeight = 0;
             end
-        end
-        
-        function results = computePerComponent(obj, vehicleState)
-            % COMPUTEPERCOMPONENT Get forces from each component individually
-            n = numel(obj.components);
-            results = struct('name', cell(1,n), ...
-                             'downforce', zeros(1,n), ...
-                             'drag', zeros(1,n));
-            for i = 1:n
-                results(i).name = obj.components{i}.getName();
-                results(i).downforce = obj.components{i}.computeDownforce(vehicleState);
-                results(i).drag = obj.components{i}.computeDrag(vehicleState);
-            end
+            
+            forces.Fz_front   = Fz_front;
+            forces.Fz_rear    = Fz_rear;
+            forces.F_drag     = F_drag;
+            forces.dragHeight = dragHeight;
         end
     end
 end

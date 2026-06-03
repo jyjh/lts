@@ -1,10 +1,10 @@
 classdef DriverModel
-    % DRIVERMODEL Decides throttle and brake inputs based on vehicle state and track
+    % DRIVERMODEL Decides throttle and brake inputs based on vehicle state
     % Extracted from VehicleManager to be a swappable, testable component.
     %
     % Usage:
     %   driver = DriverModel(vehicleManager);
-    %   [throttle, brake] = driver.computeInputs(speed, curKappa, curMu, s, arcLen, curvature, mu);
+    %   [throttle, brake] = driver.computeInputs(state);
     
     properties
         % Reference to VehicleManager for component access
@@ -25,28 +25,42 @@ classdef DriverModel
             obj.vehicleManager = vehicleManager;
         end
         
-        function [throttle, brake] = computeInputs(obj, speed, curKappa, curMu, s, arcLen, curvature, mu)
+        function [throttle, brake] = computeInputs(obj, state)
             % COMPUTEINPUTS Decide throttle and brake for the current situation
-            %   [throttle, brake] = computeInputs(speed, curKappa, curMu, s, arcLen, curvature, mu)
+            %   [throttle, brake] = computeInputs(state)
             %
-            %   speed     - current vehicle speed [m/s]
-            %   curKappa  - current track curvature [1/m]
-            %   curMu     - current surface friction
-            %   s         - current distance along track [m]
-            %   arcLen    - arc-length parameterization of track
-            %   curvature - full curvature array
-            %   mu        - full friction array
+            %   state - VehicleState object with current vehicle state.
+            %           Expects the following properties to be set:
+            %             speed     - current vehicle speed [m/s]
+            %             s         - current distance along track [m]
+            %             curvature - current track curvature [1/m]
+            %             mu        - current surface friction
+            %           The state must have vehicleManager set for access
+            %           to components and track data.
             
             throttle = 0;
             brake = 0;
             
             vm = obj.vehicleManager;
             
+            speed    = state.speed;
+            s        = state.s;
+            curKappa = state.curvature;
+            
+            % Get track arrays from VehicleManager's track
+            track     = vm.track;
+            curvature = track.getCurvature();
+            trackPts  = track.getTrackPoints();
+            
+            % Compute arc-length parameterization
+            dx = diff(trackPts(:,1));
+            dy = diff(trackPts(:,2));
+            arcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
+            
             % Compute max lateral accel from tire grip
-            tempState = VehicleState('speed', speed, 'ax', 0, 'pitchAngle', 0, 'rideHeight', 0);
-            tempState.vehicleManager = vm;
+            aeroForces = vm.aero.computeForces(state);
+            F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
             W = vm.totalMass * 9.81;
-            F_downforce = vm.aero.computeDownforce(tempState);
             totalNormalLoad = W + F_downforce;
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
             maxLateralAccel = peakMu * 9.81;

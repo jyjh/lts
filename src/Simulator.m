@@ -53,9 +53,9 @@ classdef Simulator
             newState = state;
             
             % --- AERODYNAMIC FORCES ---
-            F_downforce = vm.aero.computeDownforce(state);
-            F_drag = vm.aero.computeDrag(state);
-            aeroBalance = vm.aero.computeAeroBalance(state);
+            aeroForces = vm.aero.computeForces(state);
+            F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
+            F_drag = aeroForces.F_drag;
             
             % --- WEIGHT AND LOAD TRANSFER ---
             W = vm.totalMass * 9.81;
@@ -63,11 +63,8 @@ classdef Simulator
             frontWeightFrac = vm.suspension.getStaticWeightDistribution();
             longTransfer = vm.suspension.computeLongLoadTransfer(state.ax, vm.totalMass);
             
-            F_downforceFront = F_downforce * aeroBalance;
-            F_downforceRear  = F_downforce * (1 - aeroBalance);
-            
-            Fz_front = W * frontWeightFrac + F_downforceFront + longTransfer.front;
-            Fz_rear  = W * (1 - frontWeightFrac) + F_downforceRear + longTransfer.rear;
+            Fz_front = W * frontWeightFrac + aeroForces.Fz_front + longTransfer.front;
+            Fz_rear  = W * (1 - frontWeightFrac) + aeroForces.Fz_rear + longTransfer.rear;
             Fz_front = max(0, Fz_front);
             Fz_rear  = max(0, Fz_rear);
             
@@ -195,10 +192,12 @@ classdef Simulator
                 curMu      = mu(idx);
                 curHeading = heading(idx);
                 
+                % Set current track properties on state (for DriverModel)
+                currentState.curvature = curKappa;
+                currentState.mu        = curMu;
+                
                 % --- DRIVER MODEL: Compute throttle and brake ---
-                [throttle, brake] = obj.driverModel.computeInputs( ...
-                    currentState.speed, curKappa, curMu, ...
-                    currentState.s, arcLen, curvature, mu);
+                [throttle, brake] = obj.driverModel.computeInputs(currentState);
                 
                 % --- PHYSICS STEP ---
                 [newState, forces] = obj.step( ...

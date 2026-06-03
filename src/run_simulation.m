@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross'
 %  ====================================================================
-trackType = 'autocross';
+trackType = 'straight';
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -231,25 +231,26 @@ title(sprintf('Track Map (Lap: %.2f s)', lapTime));
 axis equal;
 grid on;
 
-% --- Per-component aero breakdown bar chart ---
+% --- Aero axle loads vs speed ---
 subplot(2,4,8);
-% Sample aero at several speeds for breakdown
 sampleSpeeds = [10, 15, 20, 25, 30, 35];
-sampleDF = zeros(3, numel(sampleSpeeds));  % 3 components
+sampleFf = zeros(1, numel(sampleSpeeds));
+sampleFr = zeros(1, numel(sampleSpeeds));
+sampleFd = zeros(1, numel(sampleSpeeds));
 for j = 1:numel(sampleSpeeds)
     tempState = VehicleState('speed', sampleSpeeds(j), 'ax', 0, 'pitchAngle', 0, 'rideHeight', 0);
-    tempState.vehicleManager = vehicle;  % needed for airDensity access
-    pc = aero.computePerComponent(tempState);
-    for k = 1:min(3, numel(pc))
-        sampleDF(k, j) = pc(k).downforce;
-    end
+    tempState.vehicleManager = vehicle;
+    af = aero.computeForces(tempState);
+    sampleFf(j) = af.Fz_front;
+    sampleFr(j) = af.Fz_rear;
+    sampleFd(j) = af.F_drag;
 end
-% bar(sampleSpeeds * 3.6, sampleDF', 'stacked');
-% xlabel('Speed [km/h]');
-% ylabel('Downforce [N]');
-% title('Aero Breakdown by Component');
-% legend({perComp(1).name, perComp(2).name, perComp(3).name}, 'Location', 'northwest');
-% grid on;
+bar(sampleSpeeds * 3.6, [sampleFf', sampleFr', sampleFd'], 'grouped');
+xlabel('Speed [km/h]');
+ylabel('Force [N]');
+title('Aero Loads by Axle');
+legend('Front axle', 'Rear axle', 'Drag', 'Location', 'northwest');
+grid on;
 
 % --- Summary ---
 fprintf('\n=== Vehicle Summary ===\n');
