@@ -9,21 +9,29 @@ classdef (Abstract) AeroComponent
         name        = 'AeroComponent'  % Descriptive name
         xPosition   = 0    % Longitudinal position from CG [m], positive = forward
         zPosition   = 0    % Nominal height above ground [m]
+        ClA         = 1.0  % Downforce coefficient * area [m^2]
+        CdA         = 0.5  % Drag coefficient * area [m^2]
+        pitchSensitivityClA = 0  % ClA change per radian of pitch [1/rad]
     end
     
     methods (Abstract)
-        % Downforce [N] computed from full vehicle state
         %   state.speed, state.pitchAngle, state.rideHeight used
         F_downforce = computeDownforce(obj, vehicleState)
         
-        % Drag [N] computed from full vehicle state
+        % Drag [N] computed from vehicle state
         F_drag = computeDrag(obj, vehicleState)
-        
-        % Air density [kg/m^3]
-        rho = getAirDensity(obj)
     end
     
     methods
+        function obj = AeroComponent(name, xPos, zPos, ClA, CdA, pitchSensitivityClA)
+            obj.name = name;
+            obj.xPosition = xPos;
+            obj.zPosition = zPos;
+            obj.ClA = ClA;
+            obj.CdA = CdA;
+            obj.pitchSensitivityClA = pitchSensitivityClA;
+        end
+
         function pos = getLongitudinalPosition(obj)
             % Distance from CG [m], positive = forward of CG
             pos = obj.xPosition;

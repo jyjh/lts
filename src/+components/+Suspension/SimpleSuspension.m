@@ -1,4 +1,4 @@
-classdef SimpleSuspension < components.SuspensionComponent
+classdef SimpleSuspension < components.Suspension.SuspensionComponent
     % SIMPLESUSPENSION Simple suspension model with fixed geometry
     % Computes load transfer using track width, CG height, and wheelbase
     
@@ -11,15 +11,14 @@ classdef SimpleSuspension < components.SuspensionComponent
     end
     
     methods
-        function obj = SimpleSuspension(varargin)
-            % SIMPLESUSPENSION Construct with optional name-value pairs
-            if nargin > 0
-                for i = 1:2:nargin
-                    if isprop(obj, varargin{i})
-                        obj.(varargin{i}) = varargin{i+1};
-                    end
-                end
-            end
+        function obj = SimpleSuspension(trackWidth, wheelbase, cgHeight, rollStiffDist, staticFrontWeight)
+            % SIMPLESUSPENSION Construct with fixed parameters
+            %   SimpleSuspension(trackWidth, wheelbase, cgHeight, rollStiffDist, staticFrontWeight)
+            obj.trackWidth = trackWidth;
+            obj.wheelbase = wheelbase;
+            obj.cgHeight = cgHeight;
+            obj.rollStiffDist = rollStiffDist;
+            obj.staticFrontWeight = staticFrontWeight;
         end
         
         function latTransfer = computeLatLoadTransfer(obj, ay, totalMass)

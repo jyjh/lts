@@ -1,4 +1,4 @@
-classdef SimplePowertrain < components.PowertrainComponent
+classdef SimplePowertrain < components.Powertrain.PowertrainComponent
     % SIMPLEPOWERTRAIN Single-gear powertrain with basic torque curve
     % Uses a lookup table for engine torque and fixed gear ratio
     
@@ -14,21 +14,17 @@ classdef SimplePowertrain < components.PowertrainComponent
     end
     
     methods
-        function obj = SimplePowertrain(varargin)
-            % SIMPLEPOWERTRAIN Construct with optional name-value pairs
-            if nargin > 0
-                for i = 1:2:nargin
-                    if isprop(obj, varargin{i})
-                        obj.(varargin{i}) = varargin{i+1};
-                    end
-                end
-            end
+        function obj = SimplePowertrain(maxEngineTorque, totalGearRatio, wheelRadius, drivetrainEfficiency)
+            % SIMPLEPOWERTRAIN Construct with fixed parameters
+            %   SimplePowertrain(maxEngineTorque, totalGearRatio, wheelRadius, drivetrainEfficiency)
+            obj.maxEngineTorque = maxEngineTorque;
+            obj.totalGearRatio = totalGearRatio;
+            obj.wheelRadius = wheelRadius;
+            obj.drivetrainEfficiency = drivetrainEfficiency;
             
-            % Default torque curve if not specified (flat-ish with peak around 8000 rpm)
-            if isempty(obj.torqueCurveRPM)
-                obj.torqueCurveRPM = [0 2000 4000 6000 8000 10000 12000];
-                obj.torqueCurveNm  = [0  35   45   52   55    50     40] * (obj.maxEngineTorque / 55);
-            end
+            % Default torque curve (flat-ish with peak around 8000 rpm)
+            obj.torqueCurveRPM = [0 2000 4000 6000 8000 10000 12000];
+            obj.torqueCurveNm  = [0  35   45   52   55    50     40] * (obj.maxEngineTorque / 55);
         end
         
         function F_drive = computeDriveForce(obj, speed, throttle)

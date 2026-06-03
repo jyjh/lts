@@ -1,4 +1,4 @@
-classdef SimpleTire < components.TireModel
+classdef SimpleTire < components.Tire.TireModel
     % SIMPLETIRE Linear tire model with saturation
     % Uses a linear region up to a peak slip, then saturates
     % Includes basic load sensitivity (friction decreases with load)
@@ -14,15 +14,13 @@ classdef SimpleTire < components.TireModel
     end
     
     methods
-        function obj = SimpleTire(varargin)
-            % SIMPLETIRE Construct with optional name-value pairs
-            if nargin > 0
-                for i = 1:2:nargin
-                    if isprop(obj, varargin{i})
-                        obj.(varargin{i}) = varargin{i+1};
-                    end
-                end
-            end
+        function obj = SimpleTire(corneringStiffness, longitudinalStiffness, peakMuLat, loadSensitivityExp)
+            % SIMPLETIRE Construct with fixed parameters
+            %   SimpleTire(corneringStiffness, longitudinalStiffness, peakMuLat, loadSensitivityExp)
+            obj.corneringStiffness = corneringStiffness;
+            obj.longitudinalStiffness = longitudinalStiffness;
+            obj.peakMuLat = peakMuLat;
+            obj.loadSensitivityExp = loadSensitivityExp;
         end
         
         function Fy = computeLateralForce(obj, normalLoad, slipAngle, mu)

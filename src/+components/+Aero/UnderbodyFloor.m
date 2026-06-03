@@ -1,4 +1,4 @@
-classdef UnderbodyFloor < components.AeroComponent
+classdef UnderbodyFloor < components.Aero.AeroComponent
     % UNDERBODYFLOOR Floor / diffuser / underbody aerodynamic model
     % Positioned near the CG. VERY highly sensitive to ride height (ground effect).
     % The floor is the most ride-height-dependent aero device on an FSAE car.
@@ -14,24 +14,17 @@ classdef UnderbodyFloor < components.AeroComponent
     %   Modeled as an exponential relationship.
 
     properties
-        ClA              = 0.8    % Downforce coefficient * area [m^2]
-        CdA              = 0.10   % Drag coefficient * area [m^2] (floor is low-drag)
-        rho              = 1.225  % Air density [kg/m^3]
-        pitchSensitivityClA = -8.0 % Very sensitive to pitch (ground effect)
-        referenceHeight      = 0.035 % Design ride height [m] for floor
         stallHeight          = 0.015 % Below this height, floor stalls [m]
         heightExponent       = 0.6   % Controls ground-effect sensitivity curve
     end
     
     methods
-        function obj = UnderbodyFloor(varargin)
-            if nargin > 0
-                for i = 1:2:nargin
-                    if isprop(obj, varargin{i})
-                        obj.(varargin{i}) = varargin{i+1};
-                    end
-                end
-            end
+        function obj = UnderbodyFloor(xPosition, zPosition, ClA, CdA, pitchSensitivityClA, stallHeight, heightExponent)
+            % UNDERBODYFLOOR Construct a floor/diffuser model
+            %   UnderbodyFloor(name, xPosition, zPosition, ClA, CdA, pitchSensitivityClA, stallHeight, heightExponent)
+            obj@components.Aero.AeroComponent("Underbody Floor", xPosition, zPosition, ClA, CdA, pitchSensitivityClA);
+            obj.stallHeight = stallHeight;
+            obj.heightExponent = heightExponent;
         end
         
         function F_downforce = computeDownforce(obj, vehicleState)
@@ -39,7 +32,7 @@ classdef UnderbodyFloor < components.AeroComponent
             pitchFactor = 1 + obj.pitchSensitivityClA * vehicleState.pitchAngle;
             
             % Height effect: exponential ground-effect model
-            % Downforce scales as (referenceHeight / effectiveHeight)^exponent
+            % Downforce scales as (zPosition / effectiveHeight)^exponent
             % Below stall height, downforce drops sharply
             effectiveZ = obj.computeEffectiveHeight(vehicleState);
             effectiveZ = max(effectiveZ, 0.005);  % Prevent division by zero
@@ -52,14 +45,15 @@ classdef UnderbodyFloor < components.AeroComponent
                 stallFactor = 1.0;
             end
             
-            heightFactor = stallFactor * (obj.referenceHeight / effectiveZ)^obj.heightExponent;
+            heightFactor = stallFactor * (obj.zPosition / effectiveZ)^obj.heightExponent;
             
             % Clamp height factor to reasonable range
             heightFactor = max(0, min(heightFactor, 3.0));
             
             effectiveClA = obj.ClA * pitchFactor * heightFactor;
             effectiveClA = max(0, effectiveClA);
-            F_downforce = 0.5 * obj.rho * effectiveClA * vehicleState.speed^2;
+            rho = vehicleState.vehicleManager.airDensity;
+            F_downforce = 0.5 * rho * effectiveClA * vehicleState.speed^2;
         end
         
         function F_drag = computeDrag(obj, vehicleState)
@@ -68,11 +62,8 @@ classdef UnderbodyFloor < components.AeroComponent
             pitchFactor = 1 + 0.2 * abs(obj.pitchSensitivityClA) * abs(vehicleState.pitchAngle);
             effectiveCdA = obj.CdA * pitchFactor;
             effectiveCdA = max(0, effectiveCdA);
-            F_drag = 0.5 * obj.rho * effectiveCdA * vehicleState.speed^2;
-        end
-        
-        function rho = getAirDensity(obj)
-            rho = obj.rho;
+            rho = vehicleState.vehicleManager.airDensity;
+            F_drag = 0.5 * rho * effectiveCdA * vehicleState.speed^2;
         end
     end
 end

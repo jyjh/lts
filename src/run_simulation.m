@@ -4,7 +4,9 @@
 % Architecture:
 %   - Components (aero, suspension, powertrain, tire) are swappable objects
 %   - AeroManager aggregates multiple positioned AeroComponents (FW, RW, Floor)
-%   - VehicleManager composes them and runs the simulation loop
+%   - VehicleManager holds component references and vehicle parameters
+%   - DriverModel decides throttle/brake inputs based on track lookahead
+%   - Simulator runs the physics loop: state + inputs → next state
 %   - Track provides geometry and surface properties
 
 clear; clc; close all;
@@ -13,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross'
 %  ====================================================================
-trackType = 'oval';
+trackType = 'autocross';
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -24,54 +26,48 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 %  ====================================================================
 
 % Front Wing: ahead of front axle, very pitch/height sensitive
-frontWing = components.FrontWing( ...
-    'name',       'Front Wing', ...
-    'xPosition',  0.9, ...     % 0.9m forward of CG (ahead of front axle)
-    'zPosition',  0.08, ...    % 8cm above reference plane
-    'ClA',        0.9, ...     % Downforce coefficient * area
-    'CdA',        0.35, ...    % Drag coefficient * area
-    'pitchSensitivityClA', -5.0, ...   % Loses DF when nose pitches up
-    'heightSensitivity',    0.3, ...   % Sensitive to ride height
-    'referenceHeight',      0.04 ...   % Design ride height 4cm
+frontWing = components.Aero.FrontWing( ...
+    0.9, ...                   % xPosition: 0.9m forward of CG (ahead of front axle)
+    0.08, ...                  % zPosition: 8cm above reference plane
+    0.9, ...                   % ClA: Downforce coefficient * area
+    0.35, ...                  % CdA: Drag coefficient * area
+    -5.0, ...                  % pitchSensitivityClA: Loses DF when nose pitches up
+    0.3 ...                    % heightSensitivity: Sensitive to ride height
 );
 fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
     frontWing.xPosition, frontWing.ClA, frontWing.CdA);
 
 % Rear Wing: behind rear axle, moderate pitch sensitivity
-rearWing = components.RearWing( ...
-    'name',       'Rear Wing', ...
-    'xPosition',  -0.85, ...   % 0.85m behind CG (behind rear axle)
-    'zPosition',  0.45, ...    % 45cm above reference plane (high-mounted)
-    'ClA',        1.1, ...     % Highest DF element
-    'CdA',        0.55, ...    % Highest drag element
-    'pitchSensitivityClA', 3.0, ...    % Gains DF when nose pitches up
-    'heightSensitivity',   0.15, ...   % Moderately sensitive
-    'referenceHeight',     0.30 ...    % Design ride height
+rearWing = components.Aero.RearWing( ...
+    -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
+    0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
+    1.1, ...                   % ClA: Highest DF element
+    0.55, ...                  % CdA: Highest drag element
+    3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
+    0.15 ...                   % heightSensitivity: Moderately sensitive
 );
 fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
     rearWing.xPosition, rearWing.ClA, rearWing.CdA);
 
 % Underbody Floor / Diffuser: near CG, extremely height sensitive
-floor = components.UnderbodyFloor( ...
-    'name',       'Underbody Floor', ...
-    'xPosition',  0.0, ...     % At CG
-    'zPosition',  0.035, ...   % 3.5cm (nominal floor height)
-    'ClA',        0.8, ...     % Moderate DF
-    'CdA',        0.10, ...    % Very low drag
-    'pitchSensitivityClA', -8.0, ...   % Very pitch-sensitive (ground effect)
-    'referenceHeight',      0.035, ... % Design ride height
-    'stallHeight',          0.015 ...  % Stall below 1.5cm
+floor = components.Aero.UnderbodyFloor( ...
+    0.0, ...                   % xPosition: At CG
+    0.035, ...                 % zPosition: 3.5cm (nominal floor height)
+    0.8, ...                   % ClA: Moderate DF
+    0.10, ...                  % CdA: Very low drag
+    -8.0, ...                  % pitchSensitivityClA: Very pitch-sensitive (ground effect)
+    0.015, ...                 % stallHeight: Stall below 1.5cm
+    0.6 ...                    % heightExponent: Ground-effect sensitivity curve
 );
 fprintf('Aero: Floor      | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
     floor.xPosition, floor.ClA, floor.CdA);
 
 % AeroManager: aggregates all aero components
-aero = components.AeroManager(1.55, 0.002);  % wheelbase, pitchStiffness [rad/g]
+aero = components.Aero.AeroManager();
 aero = aero.addComponent(frontWing);
 aero = aero.addComponent(rearWing);
 aero = aero.addComponent(floor);
-fprintf('Aero: AeroManager with %d components (pitch stiffness=%.3f rad/g)\n', ...
-    aero.numComponents(), aero.pitchStiffness);
+fprintf('Aero: AeroManager with %d components\n', aero.numComponents());
 
 % Print aero summary
 totalClA = frontWing.ClA + rearWing.ClA + floor.ClA;
@@ -85,32 +81,32 @@ fprintf('\n');
 %  ====================================================================
 
 % --- Suspension ---
-suspension = components.SimpleSuspension( ...
-    'trackWidth', 1.2, ...       % [m]
-    'wheelbase', 1.55, ...       % [m]
-    'cgHeight', 0.28, ...        % [m]
-    'rollStiffDist', 0.55, ...   % 55% front roll stiffness
-    'staticFrontWeight', 0.48 ...   % 48% front static weight
+suspension = components.Suspension.SimpleSuspension( ...
+    1.2, ...                    % trackWidth [m]
+    1.55, ...                   % wheelbase [m]
+    0.28, ...                   % cgHeight [m]
+    0.55, ...                   % rollStiffDist: 55% front roll stiffness
+    0.48 ...                    % staticFrontWeight: 48% front static weight
 );
 fprintf('Suspension: SimpleSuspension (WB=%.2f m, CG=%.2f m)\n', ...
     suspension.wheelbase, suspension.cgHeight);
 
 % --- Powertrain ---
-powertrain = components.SimplePowertrain( ...
-    'maxEngineTorque', 55, ...     % [Nm]
-    'totalGearRatio', 12.0, ...    % gear * final drive
-    'wheelRadius', 0.2286, ...     % [m]
-    'drivetrainEfficiency', 0.90 ...  % 90% efficient
+powertrain = components.Powertrain.SimplePowertrain( ...
+    55, ...                     % maxEngineTorque [Nm]
+    12.0, ...                   % totalGearRatio: gear * final drive
+    0.2286, ...                 % wheelRadius [m]
+    0.90 ...                    % drivetrainEfficiency: 90% efficient
 );
 fprintf('Powertrain: SimplePowertrain (Tq=%.0f Nm, Ratio=%.1f)\n', ...
     powertrain.maxEngineTorque, powertrain.totalGearRatio);
 
 % --- Tires ---
-tire = components.SimpleTire( ...
-    'corneringStiffness', 800, ...    % [N/deg]
-    'longitudinalStiffness', 10000, ...% [N/unit slip]
-    'peakMuLat', 1.8, ...             % Peak lateral friction
-    'loadSensitivityExp', -0.1 ...        % Slight load sensitivity
+tire = components.Tire.SimpleTire( ...
+    800, ...                    % corneringStiffness [N/deg]
+    10000, ...                  % longitudinalStiffness [N/unit slip]
+    1.8, ...                    % peakMuLat: Peak lateral friction
+    -0.1 ...                    % loadSensitivityExp: Slight load sensitivity
 );
 fprintf('Tires: SimpleTire (Peak mu=%.1f)\n', tire.peakMuLat);
 
@@ -122,25 +118,29 @@ fprintf('Track: TestTrack (''%s'', %.1f m, %d points)\n', ...
 fprintf('\n');
 
 %% ====================================================================
-%  CREATE VEHICLE MANAGER AND RUN SIMULATION
+%  CREATE VEHICLE MANAGER, DRIVER MODEL, AND SIMULATOR
 %  ====================================================================
 vehicle = VehicleManager(aero, suspension, powertrain, tire, track, ...
-    'totalMass', 280, ...     % Car + driver [kg]
-    'dt', 0.001, ...          % Timestep [s]
-    'maxSpeed', 40 ...        % Speed limit [m/s] ~144 km/h
+    280, ...                    % totalMass: Car + driver [kg]
+    0.001, ...                  % dt: Timestep [s]
+    40 ...                      % maxSpeed: Speed limit [m/s] ~144 km/h
 );
 
-[stateLog, lapTime] = vehicle.simulate();
+driver    = DriverModel(vehicle);
+simulator = Simulator(vehicle, driver);
+
+initialState = VehicleState('s', 0, 'speed', 0.1);
+[stateLog, lapTime] = simulator.simulate(initialState, track);
 
 %% ====================================================================
 %  COMPUTE PER-COMPONENT AERO AT FINAL STATE (for reporting)
 %  ====================================================================
-perComp = aero.computePerComponent(vehicle.state);
-fprintf('\n=== Aero Component Breakdown (at final speed) ===\n');
-for i = 1:numel(perComp)
-    fprintf('  %-16s | DF=%7.1f N | Drag=%6.1f N | x=%.2f m\n', ...
-        perComp(i).name, perComp(i).downforce, perComp(i).drag, perComp(i).xPosition);
-end
+% perComp = aero.computePerComponent(vehicle.state);  % vehicle.state has vehicleManager set
+% fprintf('\n=== Aero Component Breakdown (at final speed) ===\n');
+% for i = 1:numel(perComp)
+%     fprintf('  %-16s | DF=%7.1f N | Drag=%6.1f N | x=%.2f m\n', ...
+%         perComp(i).name, perComp(i).downforce, perComp(i).drag, perComp(i).xPosition);
+% end
 
 %% ====================================================================
 %  PLOT RESULTS
@@ -238,17 +238,18 @@ sampleSpeeds = [10, 15, 20, 25, 30, 35];
 sampleDF = zeros(3, numel(sampleSpeeds));  % 3 components
 for j = 1:numel(sampleSpeeds)
     tempState = VehicleState('speed', sampleSpeeds(j), 'ax', 0, 'pitchAngle', 0, 'rideHeight', 0);
+    tempState.vehicleManager = vehicle;  % needed for airDensity access
     pc = aero.computePerComponent(tempState);
     for k = 1:min(3, numel(pc))
         sampleDF(k, j) = pc(k).downforce;
     end
 end
-bar(sampleSpeeds * 3.6, sampleDF', 'stacked');
-xlabel('Speed [km/h]');
-ylabel('Downforce [N]');
-title('Aero Breakdown by Component');
-legend({perComp(1).name, perComp(2).name, perComp(3).name}, 'Location', 'northwest');
-grid on;
+% bar(sampleSpeeds * 3.6, sampleDF', 'stacked');
+% xlabel('Speed [km/h]');
+% ylabel('Downforce [N]');
+% title('Aero Breakdown by Component');
+% legend({perComp(1).name, perComp(2).name, perComp(3).name}, 'Location', 'northwest');
+% grid on;
 
 % --- Summary ---
 fprintf('\n=== Vehicle Summary ===\n');

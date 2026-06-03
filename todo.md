@@ -1,0 +1,2 @@
+- Reimplement the whole contract model
+- LTS implements an "Interface" abstract class.

@@ -1,8 +1,13 @@
 classdef VehicleState
     % VEHICLESTATE Mutable vehicle state container
-    % Holds all dynamic state variables for the simulation
+    % Holds all dynamic state variables for the simulation.
+    % Also carries a handle reference to VehicleManager so that
+    % components can access vehicle-level constants (air density, wheelbase, etc.)
     
     properties
+        % Handle reference to VehicleManager (for access to constants)
+        vehicleManager
+        
         % Position along track [m]
         s           = 0
         
@@ -82,6 +87,9 @@ classdef VehicleState
             obj.heading = heading;
             obj.mu = mu;
             
+            % Compute pitch angle from current dynamics
+            obj.pitchAngle = obj.computePitch();
+            
             % Yaw rate from speed and curvature (bicycle model)
             if obj.speed > 0.1
                 obj.yawRate = obj.speed * curvature;
@@ -92,6 +100,20 @@ classdef VehicleState
             end
             
             obj.time = obj.time + dt;
+        end
+        
+        function pitchAngle = computePitch(obj)
+            % COMPUTEPITCH Compute pitch angle from vehicle dynamics
+            % Temporary simplistic model: pitch proportional to longitudinal accel
+            %   pitchAngle = pitchStiffness * ax_in_g
+            %   positive = nose up (braking)
+            %
+            % TODO: Replace with proper suspension-based pitch computation
+            % considering pitch inertia, damping, and heave coupling
+            
+            pitchStiffness = 0.002;  % [rad/g] temporary constant
+            ax_g = obj.ax / 9.81;
+            pitchAngle = pitchStiffness * ax_g;
         end
         
         function log = toLogStruct(obj)
