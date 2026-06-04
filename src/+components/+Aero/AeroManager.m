@@ -72,7 +72,7 @@ classdef AeroManager
             
             wb = vehicleState.vehicleManager.wheelbase;
             cgHeight = vehicleState.vehicleManager.cgHeight;
-            frontWeightFrac = vehicleState.vehicleManager.suspension.getStaticWeightDistribution();
+            frontWeightFrac = vehicleState.vehicleManager.staticFrontWeight;
             
             a = wb * (1 - frontWeightFrac);  % CG to front axle [m]
             b = wb * frontWeightFrac;         % CG to rear axle [m]

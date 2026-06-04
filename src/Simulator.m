@@ -57,14 +57,14 @@ classdef Simulator
             F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
             F_drag = aeroForces.F_drag;
             
-            % --- WEIGHT AND LOAD TRANSFER ---
+            % --- WEIGHT AND PER-CORNER LOADS ---
             W = vm.totalMass * 9.81;
             
-            frontWeightFrac = vm.suspension.getStaticWeightDistribution();
-            longTransfer = vm.suspension.computeLongLoadTransfer(state.ax, vm.totalMass);
+            cornerLoads = vm.suspension.computeCornerLoads( ...
+                state, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, vm.dt);
             
-            Fz_front = W * frontWeightFrac + aeroForces.Fz_front + longTransfer.front;
-            Fz_rear  = W * (1 - frontWeightFrac) + aeroForces.Fz_rear + longTransfer.rear;
+            Fz_front = cornerLoads.FL + cornerLoads.FR;
+            Fz_rear  = cornerLoads.RL + cornerLoads.RR;
             Fz_front = max(0, Fz_front);
             Fz_rear  = max(0, Fz_rear);
             
@@ -170,7 +170,19 @@ classdef Simulator
                 'F_downforce', zeros(maxSteps, 1), ...
                 'F_drag',      zeros(maxSteps, 1), ...
                 'F_drive',     zeros(maxSteps, 1), ...
-                'pitchAngle',  zeros(maxSteps, 1) ...
+                'pitchAngle',  zeros(maxSteps, 1), ...
+                'Fz_FL',       zeros(maxSteps, 1), ...
+                'Fz_FR',       zeros(maxSteps, 1), ...
+                'Fz_RL',       zeros(maxSteps, 1), ...
+                'Fz_RR',       zeros(maxSteps, 1), ...
+                'damperPos_FL', zeros(maxSteps, 1), ...
+                'damperPos_FR', zeros(maxSteps, 1), ...
+                'damperPos_RL', zeros(maxSteps, 1), ...
+                'damperPos_RR', zeros(maxSteps, 1), ...
+                'damperVel_FL', zeros(maxSteps, 1), ...
+                'damperVel_FR', zeros(maxSteps, 1), ...
+                'damperVel_RL', zeros(maxSteps, 1), ...
+                'damperVel_RR', zeros(maxSteps, 1) ...
             );
             
             % Working state (will be updated each step)
@@ -219,6 +231,21 @@ classdef Simulator
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
                     stateLog.pitchAngle(step)  = newState.pitchAngle;
+                    
+                    % Per-corner suspension telemetry
+                    susp = vm.suspension;
+                    stateLog.Fz_FL(step)       = susp.frontLeft.state.tireNormalForce;
+                    stateLog.Fz_FR(step)       = susp.frontRight.state.tireNormalForce;
+                    stateLog.Fz_RL(step)       = susp.rearLeft.state.tireNormalForce;
+                    stateLog.Fz_RR(step)       = susp.rearRight.state.tireNormalForce;
+                    stateLog.damperPos_FL(step) = susp.frontLeft.state.damperPosition;
+                    stateLog.damperPos_FR(step) = susp.frontRight.state.damperPosition;
+                    stateLog.damperPos_RL(step) = susp.rearLeft.state.damperPosition;
+                    stateLog.damperPos_RR(step) = susp.rearRight.state.damperPosition;
+                    stateLog.damperVel_FL(step) = susp.frontLeft.state.damperVelocity;
+                    stateLog.damperVel_FR(step) = susp.frontRight.state.damperVelocity;
+                    stateLog.damperVel_RL(step) = susp.rearLeft.state.damperVelocity;
+                    stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
                 end
                 
                 % Advance state

@@ -80,17 +80,6 @@ fprintf('\n');
 %  CREATE REMAINING COMPONENTS
 %  ====================================================================
 
-% --- Suspension ---
-suspension = components.Suspension.SimpleSuspension( ...
-    1.2, ...                    % trackWidth [m]
-    1.55, ...                   % wheelbase [m]
-    0.28, ...                   % cgHeight [m]
-    0.55, ...                   % rollStiffDist: 55% front roll stiffness
-    0.48 ...                    % staticFrontWeight: 48% front static weight
-);
-fprintf('Suspension: SimpleSuspension (WB=%.2f m, CG=%.2f m)\n', ...
-    suspension.wheelbase, suspension.cgHeight);
-
 % --- Powertrain ---
 powertrain = components.Powertrain.SimplePowertrain( ...
     55, ...                     % maxEngineTorque [Nm]
@@ -120,11 +109,27 @@ fprintf('\n');
 %% ====================================================================
 %  CREATE VEHICLE MANAGER, DRIVER MODEL, AND SIMULATOR
 %  ====================================================================
-vehicle = VehicleManager(aero, suspension, powertrain, tire, track, ...
+% VehicleManager is created first so SuspensionManager can reference it
+vehicle = VehicleManager(aero, [], powertrain, tire, track, ...
     280, ...                    % totalMass: Car + driver [kg]
     0.001, ...                  % dt: Timestep [s]
     40 ...                      % maxSpeed: Speed limit [m/s] ~144 km/h
 );
+
+% --- Suspension (needs vehicleManager for geometry) ---
+suspension = components.Suspension.SuspensionManager( ...
+    vehicle, ...                    % vehicleManager handle
+    0.55, ...                       % frontRollStiffDist: 55% front
+    25000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
+    22000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
+    0.95, ...                       % motionRatio
+    0.025, ...                      % bumpStopLength [m]
+    200000, ...                     % bumpStopRate [N/m]
+    200000, ...                     % tireSpringRate [N/m]
+    25 ...                          % unsprungMass per corner [kg]
+);
+vehicle.suspension = suspension;
+fprintf('Suspension: SuspensionManager (4-corner transient, FL/FR front, RL/RR rear)\n');
 
 driver    = DriverModel(vehicle);
 simulator = Simulator(vehicle, driver);

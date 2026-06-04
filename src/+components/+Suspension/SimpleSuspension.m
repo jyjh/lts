@@ -1,55 +1,152 @@
-classdef SimpleSuspension < components.Suspension.SuspensionComponent
-    % SIMPLESUSPENSION Simple suspension model with fixed geometry
-    % Computes load transfer using track width, CG height, and wheelbase
+classdef SimpleSuspension
+    % SIMPLESUSPENSION Per-corner spring-damper suspension model
+    % Models each corner independently with:
+    %   - Heave spring: F_spring = K * x  (supports vehicle weight + aero)
+    %   - Damper:       F_damp  = C * v   (asymmetric compression/rebound)
+    %   - Tire spring:  F_tire  = K_tire * x_tire
+    %
+    % Vehicle-level geometry (trackWidth, wheelbase, cgHeight)
+    % is retrieved from VehicleManager at construction time.
+    %
+    % This is one suspension unit for a SINGLE corner. The SuspensionManager
+    % creates four instances (FL, FR, RL, RR), where front corners share
+    % parameters and rear corners share parameters.
+    %
+    % Transient state is stored in a SuspensionState object that persists
+    % across timesteps and is mutated in-place.
     
     properties
+        % --- Vehicle geometry (from VehicleManager, stored at construction) ---
         trackWidth         = 1.2    % Track width [m]
         wheelbase          = 1.55   % Wheelbase [m]
         cgHeight           = 0.28   % Center of gravity height [m]
-        rollStiffDist      = 0.55   % Front roll stiffness distribution [0-1]
-        staticFrontWeight  = 0.48   % Static front weight distribution [0-1]
+        
+        % --- Suspension tuning ---
+        rollStiffDist      = 0.55   % Roll stiffness distribution for this end [0-1]
+        
+        % --- Per-corner spring-damper ---
+        springRate         = 25000  % Heave spring rate [N/m]
+        dampingCoeff       = 3000   % Compression damping coefficient [N·s/m]
+        reboundCoeff       = 4500   % Rebound damping coefficient [N·s/m]
+        motionRatio        = 0.95   % Installation motion ratio [dimensionless]
+        bumpStopLength     = 0.025  % Bump stop engagement length [m]
+        bumpStopRate       = 200000 % Bump stop stiffness [N/m]
+        
+        % --- Tire spring ---
+        tireSpringRate     = 200000 % Vertical tire stiffness [N/m]
+        
+        % --- Unsprung mass ---
+        unsprungMass       = 25     % Per-corner unsprung mass [kg]
+        
+        % --- Transient state ---
+        state                       % SuspensionState handle object
     end
     
     methods
-        function obj = SimpleSuspension(trackWidth, wheelbase, cgHeight, rollStiffDist, staticFrontWeight)
-            % SIMPLESUSPENSION Construct with fixed parameters
-            %   SimpleSuspension(trackWidth, wheelbase, cgHeight, rollStiffDist, staticFrontWeight)
-            obj.trackWidth = trackWidth;
-            obj.wheelbase = wheelbase;
-            obj.cgHeight = cgHeight;
-            obj.rollStiffDist = rollStiffDist;
-            obj.staticFrontWeight = staticFrontWeight;
-        end
-        
-        function latTransfer = computeLatLoadTransfer(obj, ay, totalMass)
-            % Total lateral load transfer = m * ay * cgHeight / trackWidth
-            % Split between front and rear by roll stiffness distribution
-            totalLatTransfer = totalMass * abs(ay) * obj.cgHeight / obj.trackWidth;
+        function obj = SimpleSuspension(vehicleManager, rollStiffDist, ...
+                springRate, dampingCoeff, reboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass)
+            % SIMPLESUSPENSION Construct a per-corner suspension unit
+            %   SimpleSuspension(vehicleManager, rollStiffDist, ...
+            %       springRate, dampingCoeff, reboundCoeff, ...
+            %       motionRatio, bumpStopLength, bumpStopRate, ...
+            %       tireSpringRate, unsprungMass)
+            %
+            %   vehicleManager  - VehicleManager handle (geometry pulled at construction)
+            %   rollStiffDist   - Roll stiffness distribution for this end [0-1]
+            %   springRate      - Heave spring rate [N/m]
+            %   dampingCoeff    - Compression damping [N·s/m]
+            %   reboundCoeff    - Rebound damping [N·s/m]
+            %   motionRatio     - Installation motion ratio
+            %   bumpStopLength  - Bump stop travel before engagement [m]
+            %   bumpStopRate    - Bump stop stiffness [N/m]
+            %   tireSpringRate  - Vertical tire stiffness [N/m]
+            %   unsprungMass    - Per-corner unsprung mass [kg]
             
-            latTransfer.front = totalLatTransfer * obj.rollStiffDist;
-            latTransfer.rear  = totalLatTransfer * (1 - obj.rollStiffDist);
+            % Pull vehicle-level geometry from VehicleManager
+            obj.trackWidth   = vehicleManager.trackWidth;
+            obj.wheelbase    = vehicleManager.wheelbase;
+            obj.cgHeight     = vehicleManager.cgHeight;
             
-            % Sign convention: positive ay means load transfers to outside
-            % Front and rear transfer are always positive magnitudes
-            % The calling code handles which side gains/loses load
-        end
-        
-        function longTransfer = computeLongLoadTransfer(obj, ax, totalMass)
-            % Longitudinal load transfer = m * ax * cgHeight / wheelbase
-            % Positive ax (acceleration) transfers load to rear
-            totalLongTransfer = totalMass * ax * obj.cgHeight / obj.wheelbase;
+            % Store suspension-specific parameters
+            obj.rollStiffDist     = rollStiffDist;
+            obj.springRate        = springRate;
+            obj.dampingCoeff      = dampingCoeff;
+            obj.reboundCoeff      = reboundCoeff;
+            obj.motionRatio       = motionRatio;
+            obj.bumpStopLength    = bumpStopLength;
+            obj.bumpStopRate      = bumpStopRate;
+            obj.tireSpringRate    = tireSpringRate;
+            obj.unsprungMass      = unsprungMass;
             
-            % Positive totalLongTransfer = load goes to rear
-            longTransfer.front = -totalLongTransfer;  % Front loses load
-            longTransfer.rear  =  totalLongTransfer;  % Rear gains load
+            % Initialize transient state
+            obj.state = components.Suspension.SuspensionState();
         end
         
-        function dist = getRollStiffnessDistribution(obj)
-            dist = obj.rollStiffDist;
-        end
-        
-        function dist = getStaticWeightDistribution(obj)
-            dist = obj.staticFrontWeight;
+        function updateCorner(obj, cornerState, demandedLoad, dt)
+            % UPDATECORNER Update one corner's transient state
+            %   updateCorner(cornerState, demandedLoad, dt)
+            %
+            %   cornerState  - SuspensionState handle for this corner
+            %   demandedLoad - Total static + aero + load-transfer force [N]
+            %   dt           - Timestep [s]
+            %
+            %   Mutates cornerState in-place, updating:
+            %     .damperPosition, .damperVelocity, .tireDeflection,
+            %     .tireNormalForce, .suspensionForce, .demandedLoad
+            
+            cornerState.demandedLoad = demandedLoad;
+            
+            % Previous state
+            x_prev = cornerState.damperPosition;
+            v_prev = cornerState.damperVelocity;
+            
+            % Effective spring and damping (through motion ratio)
+            K_eff = obj.springRate * obj.motionRatio^2;
+            K_tire = obj.tireSpringRate;
+            
+            % Asymmetric damping: compression vs rebound
+            if v_prev >= 0
+                C_eff = obj.dampingCoeff * obj.motionRatio^2;
+            else
+                C_eff = obj.reboundCoeff * obj.motionRatio^2;
+            end
+            
+            % --- Forces on the sprung mass ---
+            % Spring restoring force (positive = resists compression)
+            F_spring = K_eff * x_prev;
+            
+            % Damper force
+            F_damper = C_eff * v_prev;
+            
+            % Bump stop force (engages when compression > bumpStopLength)
+            F_bumpstop = 0;
+            if x_prev > obj.bumpStopLength
+                F_bumpstop = obj.bumpStopRate * (x_prev - obj.bumpStopLength);
+            end
+            
+            % --- Unsprung mass equation of motion ---
+            % F_net = demandedLoad - spring - damper - bumpstop
+            F_net = demandedLoad - F_spring - F_damper - F_bumpstop;
+            
+            % Acceleration of unsprung mass
+            x_ddot = F_net / obj.unsprungMass;
+            
+            % Semi-implicit Euler integration
+            v_new = v_prev + x_ddot * dt;
+            x_new = x_prev + v_new * dt;
+            
+            % --- Update state ---
+            cornerState.damperPosition = x_new;
+            cornerState.damperVelocity = v_new;
+            
+            % Tire spring force = tire normal force
+            cornerState.tireDeflection = x_new;
+            cornerState.tireNormalForce = K_tire * max(x_new, 0);
+            
+            % Store total suspension force for logging
+            cornerState.suspensionForce = F_spring + F_damper + F_bumpstop;
         end
     end
 end

@@ -1,0 +1,166 @@
+classdef SuspensionManager < components.Suspension.SuspensionComponent
+    % SUSPENSIONMANAGER Manages four corner suspension units
+    % Creates and coordinates per-corner SimpleSuspension instances with
+    % associated SuspensionState objects.
+    %
+    % Front corners (FL, FR) share identical suspension parameters.
+    % Rear corners (RL, RR) share identical suspension parameters.
+    % Each corner has its own independent SuspensionState for transient tracking.
+    %
+    % Usage:
+    %   mgr = SuspensionManager(vehicleManager, ...)
+    %   loads = mgr.computeCornerLoads(state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
+    %     loads.FL, loads.FR, loads.RL, loads.RR  - per-corner tire normal force [N]
+    
+    properties
+        % Per-corner suspension units
+        frontLeft      % SimpleSuspension (front params)
+        frontRight     % SimpleSuspension (front params)
+        rearLeft       % SimpleSuspension (rear params)
+        rearRight      % SimpleSuspension (rear params)
+        
+        % Static front weight distribution (from VehicleManager)
+        staticFrontWeight = 0.48  % [0-1]
+    end
+    
+    methods
+        function obj = SuspensionManager(vehicleManager, ...
+                frontRollStiffDist, ...
+                frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
+                rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass)
+            % SUSPENSIONMANAGER Construct with front/rear suspension parameters
+            %   SuspensionManager(vehicleManager, ...
+            %       frontRollStiffDist, ...
+            %       frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
+            %       rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
+            %       motionRatio, bumpStopLength, bumpStopRate, ...
+            %       tireSpringRate, unsprungMass)
+            %
+            %   vehicleManager      - VehicleManager handle (geometry pulled by SimpleSuspension)
+            %   frontRollStiffDist  - Front roll stiffness distribution [0-1]
+            %   frontSpringRate     - Front heave spring rate [N/m]
+            %   frontDampingCoeff   - Front compression damping [N·s/m]
+            %   frontReboundCoeff   - Front rebound damping [N·s/m]
+            %   rearSpringRate      - Rear heave spring rate [N/m]
+            %   rearDampingCoeff    - Rear compression damping [N·s/m]
+            %   rearReboundCoeff    - Rear rebound damping [N·s/m]
+            %   motionRatio         - Installation motion ratio (shared)
+            %   bumpStopLength      - Bump stop travel [m] (shared)
+            %   bumpStopRate        - Bump stop stiffness [N/m] (shared)
+            %   tireSpringRate      - Tire vertical stiffness [N/m] (shared)
+            %   unsprungMass        - Per-corner unsprung mass [kg] (shared)
+            
+            % Pull static weight distribution from VehicleManager
+            obj.staticFrontWeight = vehicleManager.staticFrontWeight;
+            
+            % Create front corners (share front parameters, each has own state)
+            obj.frontLeft = components.Suspension.SimpleSuspension( ...
+                vehicleManager, frontRollStiffDist, ...
+                frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass);
+            
+            obj.frontRight = components.Suspension.SimpleSuspension( ...
+                vehicleManager, frontRollStiffDist, ...
+                frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass);
+            
+            % Create rear corners (share rear parameters, each has own state)
+            % Rear roll stiffness distribution = 1 - front
+            rearRollStiffDist = 1 - frontRollStiffDist;
+            obj.rearLeft = components.Suspension.SimpleSuspension( ...
+                vehicleManager, rearRollStiffDist, ...
+                rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass);
+            
+            obj.rearRight = components.Suspension.SimpleSuspension( ...
+                vehicleManager, rearRollStiffDist, ...
+                rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
+                motionRatio, bumpStopLength, bumpStopRate, ...
+                tireSpringRate, unsprungMass);
+        end
+        
+        %% ---- Per-corner transient computation ----
+        
+        function loads = computeCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
+            % COMPUTECORNERLOADS Compute demanded loads and update all four corners
+            %   loads = computeCornerLoads(state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
+            %
+            %   state          - VehicleState with ax, ay, speed, etc.
+            %   Fz_aero_front  - Aero downforce on front axle [N]
+            %   Fz_aero_rear   - Aero downforce on rear axle [N]
+            %   totalMass      - Total vehicle mass [kg]
+            %   dt             - Timestep [s]
+            %
+            %   Returns struct with per-corner tire normal forces:
+            %     loads.FL, loads.FR, loads.RL, loads.RR  [N]
+            
+            W = totalMass * 9.81;
+            ax = state.ax;
+            ay = state.ay;
+            
+            % Geometry (stored in corners from VehicleManager)
+            tw = obj.frontLeft.trackWidth;
+            wb = obj.frontLeft.wheelbase;
+            cgH = obj.frontLeft.cgHeight;
+            frontWeightFrac = obj.staticFrontWeight;
+            rollStiffDist = obj.frontLeft.rollStiffDist;
+            
+            % --- Static weight per corner ---
+            Fz_static_front = W * frontWeightFrac;
+            Fz_static_rear  = W * (1 - frontWeightFrac);
+            Fz_static_FL = Fz_static_front / 2;
+            Fz_static_FR = Fz_static_front / 2;
+            Fz_static_RL = Fz_static_rear  / 2;
+            Fz_static_RR = Fz_static_rear  / 2;
+            
+            % --- Aero downforce per corner (split evenly per axle) ---
+            Fz_aero_FL = Fz_aero_front / 2;
+            Fz_aero_FR = Fz_aero_front / 2;
+            Fz_aero_RL = Fz_aero_rear  / 2;
+            Fz_aero_RR = Fz_aero_rear  / 2;
+            
+            % --- Lateral load transfer ---
+            % positive ay = left turn → load transfers to right side
+            totalLatTransfer = totalMass * abs(ay) * cgH / tw;
+            frontLatTransfer = totalLatTransfer * rollStiffDist;
+            rearLatTransfer  = totalLatTransfer * (1 - rollStiffDist);
+            
+            sign_ay = sign(ay);
+            Fz_lat_FL = -sign_ay * frontLatTransfer;
+            Fz_lat_FR =  sign_ay * frontLatTransfer;
+            Fz_lat_RL = -sign_ay * rearLatTransfer;
+            Fz_lat_RR =  sign_ay * rearLatTransfer;
+            
+            % --- Longitudinal load transfer ---
+            % positive ax (acceleration) → load transfers to rear
+            totalLongTransfer = totalMass * ax * cgH / wb;
+            Fz_long_FL = -totalLongTransfer / 2;
+            Fz_long_FR = -totalLongTransfer / 2;
+            Fz_long_RL =  totalLongTransfer / 2;
+            Fz_long_RR =  totalLongTransfer / 2;
+            
+            % --- Total demanded load per corner ---
+            demanded_FL = Fz_static_FL + Fz_aero_FL + Fz_lat_FL + Fz_long_FL;
+            demanded_FR = Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR;
+            demanded_RL = Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL;
+            demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
+            
+            % --- Update each corner's transient state ---
+            obj.frontLeft.updateCorner( obj.frontLeft.state,  demanded_FL, dt);
+            obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
+            obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
+            obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
+            
+            % --- Return per-corner tire normal forces ---
+            loads.FL = obj.frontLeft.state.tireNormalForce;
+            loads.FR = obj.frontRight.state.tireNormalForce;
+            loads.RL = obj.rearLeft.state.tireNormalForce;
+            loads.RR = obj.rearRight.state.tireNormalForce;
+        end
+    end
+end

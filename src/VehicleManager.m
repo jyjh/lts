@@ -8,7 +8,7 @@ classdef VehicleManager
     properties
         % Swappable component objects
         aero        % components.Aero.AeroManager
-        suspension  % components.SuspensionComponent
+        suspension  % components.Suspension.SuspensionManager
         powertrain  % components.PowertrainComponent
         tire        % components.TireModel
         track       % components.Track
@@ -19,6 +19,7 @@ classdef VehicleManager
         trackWidth    = 1.2      % Track width [m]
         cgHeight      = 0.28     % CG height [m]
         airDensity    = 1.225    % Air density [kg/m^3]
+        staticFrontWeight = 0.48 % Static front weight distribution [0-1]
         
         % Simulation parameters
         dt            = 0.001    % Timestep [s]
