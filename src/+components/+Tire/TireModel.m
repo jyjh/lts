@@ -1,18 +1,18 @@
 classdef (Abstract) TireModel
-    % TIREMODEL Abstract interface for tire models
-    % Provides tire force computation based on load, slip, and friction
+    % TIREMODEL Abstract interface for tire force models
+    %
+    % Defines the contract that any tire model must implement:
+    %   - computeLateralForce(normalLoad, slipAngle, mu) → Fy [N]
+    %   - computeLongitudinalForce(normalLoad, slipRatio, mu) → Fx [N]
+    %   - getPeakFriction(normalLoad) → peakMu [-]
+    %
+    % Concrete implementations:
+    %   - SimpleTire  — linear tire with constant friction
+    %   - PacejkaTire — Pacejka Magic Formula via MFeval (.tir file)
     
     methods (Abstract)
-        % Lateral tire force [N] given normal load, slip angle, and surface friction
         Fy = computeLateralForce(obj, normalLoad, slipAngle, mu)
-        
-        % Longitudinal tire force [N] given normal load, slip ratio, and surface friction
         Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
-        
-        % Peak friction coefficient for given load
         peakMu = getPeakFriction(obj, normalLoad)
-        
-        % Combined slip force (optional for simple models)
-        % Default implementation uses friction ellipse
     end
 end

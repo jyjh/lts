@@ -103,17 +103,20 @@ classdef VehicleState
         end
         
         function pitchAngle = computePitch(obj)
-            % COMPUTEPITCH Compute pitch angle from vehicle dynamics
-            % Temporary simplistic model: pitch proportional to longitudinal accel
-            %   pitchAngle = pitchStiffness * ax_in_g
-            %   positive = nose up (braking)
+            % COMPUTEPITCH Compute pitch angle from suspension compression
+            %   positive = nose up (e.g. acceleration squat)
+            %   negative = nose down (e.g. braking dive)
             %
-            % TODO: Replace with proper suspension-based pitch computation
-            % considering pitch inertia, damping, and heave coupling
+            % Delegates to SuspensionManager which uses the differential
+            % front/rear damper positions and a trivialized geometry:
+            %   pitchAngle = atan2(avgRearCompress - avgFrontCompress, wheelbase)
             
-            pitchStiffness = 0.002;  % [rad/g] temporary constant
-            ax_g = obj.ax / 9.81;
-            pitchAngle = pitchStiffness * ax_g;
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.suspension)
+                pitchAngle = 0;
+                return;
+            end
+            
+            pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
         end
         
         function log = toLogStruct(obj)

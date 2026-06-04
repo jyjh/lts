@@ -10,7 +10,7 @@ classdef VehicleManager
         aero        % components.Aero.AeroManager
         suspension  % components.Suspension.SuspensionManager
         powertrain  % components.PowertrainComponent
-        tire        % components.TireModel
+        tire        % components.Tire.TireModel
         track       % components.Track
         
         % Vehicle parameters
@@ -19,17 +19,16 @@ classdef VehicleManager
         trackWidth    = 1.2      % Track width [m]
         cgHeight      = 0.28     % CG height [m]
         airDensity    = 1.225    % Air density [kg/m^3]
-        staticFrontWeight = 0.48 % Static front weight distribution [0-1]
+        staticFrontWeight = 0.45 % Static front weight distribution [0-1]
         
         % Simulation parameters
-        dt            = 0.001    % Timestep [s]
         maxSpeed      = 40       % Speed limiter [m/s] (~144 km/h)
     end
     
     methods
-        function obj = VehicleManager(aero, suspension, powertrain, tire, track, totalMass, dt, maxSpeed)
+        function obj = VehicleManager(aero, suspension, powertrain, tire, track, totalMass, maxSpeed)
             % VEHICLEMANAGER Construct with all component objects
-            %   VehicleManager(aero, suspension, powertrain, tire, track, totalMass, dt, maxSpeed)
+            %   VehicleManager(aero, suspension, powertrain, tire, track, totalMass, maxSpeed)
             
             obj.aero = aero;
             obj.suspension = suspension;
@@ -37,7 +36,6 @@ classdef VehicleManager
             obj.tire = tire;
             obj.track = track;
             obj.totalMass = totalMass;
-            obj.dt = dt;
             obj.maxSpeed = maxSpeed;
         end
     end

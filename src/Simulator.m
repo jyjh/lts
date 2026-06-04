@@ -17,14 +17,22 @@ classdef Simulator
         
         % Reference to DriverModel (computes throttle/brake inputs)
         driverModel
+        
+        % Simulation timestep [s]
+        dt = 0.001
     end
     
     methods
-        function obj = Simulator(vehicleManager, driverModel)
+        function obj = Simulator(vehicleManager, driverModel, dt)
             % SIMULATOR Construct with a VehicleManager and DriverModel
-            %   Simulator(vehicleManager, driverModel)
+            %   Simulator(vehicleManager, driverModel, dt)
+            %   Simulator(vehicleManager, driverModel)  % uses default dt = 0.001
+            
             obj.vehicleManager = vehicleManager;
             obj.driverModel = driverModel;
+            if nargin >= 3
+                obj.dt = dt;
+            end
         end
         
         function [newState, forces] = step(obj, state, throttle, brake, curKappa, curMu, curHeading)
@@ -61,7 +69,7 @@ classdef Simulator
             W = vm.totalMass * 9.81;
             
             cornerLoads = vm.suspension.computeCornerLoads( ...
-                state, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, vm.dt);
+                state, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
             
             Fz_front = cornerLoads.FL + cornerLoads.FR;
             Fz_rear  = cornerLoads.RL + cornerLoads.RR;
@@ -98,7 +106,7 @@ classdef Simulator
             % --- SPEED LIMITERS ---
             if v > vMaxCorner && abs(curKappa) > 1e-6
                 excessSpeed = v - vMaxCorner;
-                brakingAccel = -min(excessSpeed / vm.dt * 0.5, maxAx);
+                brakingAccel = -min(excessSpeed / obj.dt * 0.5, maxAx);
                 ax = min(ax, brakingAccel);
             end
             
@@ -115,11 +123,11 @@ classdef Simulator
             ay = max(-maxLateralAccel, min(ay, maxLateralAccel));
             
             % --- INTEGRATE STATE ---
-            ds = max(0, v * vm.dt + 0.5 * ax * vm.dt^2);
+            ds = max(0, v * obj.dt + 0.5 * ax * obj.dt^2);
             
             newState.throttle = throttle;
             newState.brake = brake;
-            newState = newState.updateFromDynamics(ax, ay, ds, vm.dt, curKappa, curHeading, curMu);
+            newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
             
             % --- RETURN FORCES ---
             forces.F_downforce = F_downforce;
@@ -154,7 +162,7 @@ classdef Simulator
             arcLen = [0; cumsum(segLen)];
             
             % Pre-allocate telemetry log
-            maxSteps = round(trackLen / (initialState.speed * vm.dt) * 5);
+            maxSteps = round(trackLen / (initialState.speed * obj.dt) * 5);
             maxSteps = max(maxSteps, 100000);
             stateLog = struct( ...
                 'time',        zeros(maxSteps, 1), ...

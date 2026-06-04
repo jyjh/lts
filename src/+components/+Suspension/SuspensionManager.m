@@ -86,9 +86,9 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         
         %% ---- Warmup: settle suspension to static equilibrium ----
         
-        function warmup(obj, totalMass)
+        function warmup(obj, totalMass, dt)
             % WARMUP Settle suspension state to static equilibrium
-            %   warmup(totalMass)
+            %   warmup(totalMass, dt)
             %
             %   Iterates the per-corner suspension model with static weight
             %   (no aero, no load transfer) until the transient response
@@ -96,6 +96,11 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   causing a large force spike at simulation start.
             %
             %   totalMass - Total vehicle mass [kg]
+            %   dt        - Timestep [s] (default: 0.001)
+            
+            if nargin < 3
+                dt = 0.001;
+            end
 
             W = totalMass * 9.81;
             
@@ -107,8 +112,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             demanded_RL = Fz_static_rear  / 2;
             demanded_RR = Fz_static_rear  / 2;
             
-            % Use a representative dt for convergence
-            dt = 0.001;
+            % Use dt for convergence iterations
             
             maxIter = 10000;
             velTolerance = 1e-6;  % [m/s]
@@ -214,6 +218,29 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             loads.FR = obj.frontRight.state.tireNormalForce;
             loads.RL = obj.rearLeft.state.tireNormalForce;
             loads.RR = obj.rearRight.state.tireNormalForce;
+        end
+        
+        function pitchAngle = computePitchAngle(obj)
+            % COMPUTEPITCHANGLE Compute pitch angle from suspension compression
+            %   pitchAngle = computePitchAngle()
+            %
+            %   Uses the average front and rear damper positions (compression
+            %   from static equilibrium) to determine the body pitch angle.
+            %
+            %   Positive pitch = nose up (e.g. rear compresses more under
+            %   acceleration squat).
+            %   Negative pitch = nose down (e.g. front compresses more under
+            %   braking dive).
+            %
+            %   Geometry is trivialized to:
+            %     pitchAngle = atan2(avgRearCompress - avgFrontCompress, wheelbase)
+            
+            avgFrontCompress = (obj.frontLeft.state.damperPosition + ...
+                                obj.frontRight.state.damperPosition) / 2;
+            avgRearCompress  = (obj.rearLeft.state.damperPosition + ...
+                                obj.rearRight.state.damperPosition) / 2;
+            
+            pitchAngle = atan2(avgRearCompress - avgFrontCompress, obj.frontLeft.wheelbase);
         end
     end
 end

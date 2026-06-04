@@ -21,6 +21,7 @@ run_simulation
 ## Requirements
 
 - MATLAB R2019b or later
+- [MFeval](https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval) — Pacejka Magic Formula tire model evaluation (install as MATLAB toolbox)
 
 ## License
 

@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross'
 %  ====================================================================
-trackType = 'straight';
+trackType = 'autocross';
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -90,14 +90,9 @@ powertrain = components.Powertrain.SimplePowertrain( ...
 fprintf('Powertrain: SimplePowertrain (Tq=%.0f Nm, Ratio=%.1f)\n', ...
     powertrain.maxEngineTorque, powertrain.totalGearRatio);
 
-% --- Tires ---
-tire = components.Tire.SimpleTire( ...
-    800, ...                    % corneringStiffness [N/deg]
-    10000, ...                  % longitudinalStiffness [N/unit slip]
-    1.8, ...                    % peakMuLat: Peak lateral friction
-    -0.1 ...                    % loadSensitivityExp: Slight load sensitivity
-);
-fprintf('Tires: SimpleTire (Peak mu=%.1f)\n', tire.peakMuLat);
+% --- Tires (Pacejka Magic Formula via MFeval) ---
+% Requires MFeval toolbox: https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval
+tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 
 % --- Track ---
 track = components.TestTrack(trackType);
@@ -109,10 +104,13 @@ fprintf('\n');
 %% ====================================================================
 %  CREATE VEHICLE MANAGER, DRIVER MODEL, AND SIMULATOR
 %  ====================================================================
+
+% Simulation timestep [s]
+dt = 0.001;
+
 % VehicleManager is created first so SuspensionManager can reference it
 vehicle = VehicleManager(aero, [], powertrain, tire, track, ...
     280, ...                    % totalMass: Car + driver [kg]
-    0.001, ...                  % dt: Timestep [s]
     40 ...                      % maxSpeed: Speed limit [m/s] ~144 km/h
 );
 
@@ -120,8 +118,8 @@ vehicle = VehicleManager(aero, [], powertrain, tire, track, ...
 suspension = components.Suspension.SuspensionManager( ...
     vehicle, ...                    % vehicleManager handle
     0.55, ...                       % frontRollStiffDist: 55% front
-    25000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
-    22000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
+    45000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
+    42000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
     0.95, ...                       % motionRatio
     0.025, ...                      % bumpStopLength [m]
     200000, ...                     % bumpStopRate [N/m]
@@ -132,10 +130,10 @@ vehicle.suspension = suspension;
 fprintf('Suspension: SuspensionManager (4-corner transient, FL/FR front, RL/RR rear)\n');
 
 % Warmup suspension to static equilibrium (prevents zero-state startup transient)
-suspension.warmup(vehicle.totalMass);
+suspension.warmup(vehicle.totalMass, dt);
 
 driver    = DriverModel(vehicle);
-simulator = Simulator(vehicle, driver);
+simulator = Simulator(vehicle, driver, dt);
 
 initialState = VehicleState('s', 0, 'speed', 0.1);
 [stateLog, lapTime] = simulator.simulate(initialState, track);
