@@ -84,6 +84,59 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 tireSpringRate, unsprungMass);
         end
         
+        %% ---- Warmup: settle suspension to static equilibrium ----
+        
+        function warmup(obj, totalMass)
+            % WARMUP Settle suspension state to static equilibrium
+            %   warmup(totalMass)
+            %
+            %   Iterates the per-corner suspension model with static weight
+            %   (no aero, no load transfer) until the transient response
+            %   converges. This prevents the "all-zeros" initial state from
+            %   causing a large force spike at simulation start.
+            %
+            %   totalMass - Total vehicle mass [kg]
+
+            W = totalMass * 9.81;
+            
+            % Static weight per corner (no aero, no load transfer)
+            Fz_static_front = W * obj.staticFrontWeight;
+            Fz_static_rear  = W * (1 - obj.staticFrontWeight);
+            demanded_FL = Fz_static_front / 2;
+            demanded_FR = Fz_static_front / 2;
+            demanded_RL = Fz_static_rear  / 2;
+            demanded_RR = Fz_static_rear  / 2;
+            
+            % Use a representative dt for convergence
+            dt = 0.001;
+            
+            maxIter = 10000;
+            velTolerance = 1e-6;  % [m/s]
+            
+            for iter = 1:maxIter
+                obj.frontLeft.updateCorner( obj.frontLeft.state,  demanded_FL, dt);
+                obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
+                obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
+                obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
+                
+                % Check convergence: max absolute damper velocity across corners
+                maxVel = max(abs([
+                    obj.frontLeft.state.damperVelocity
+                    obj.frontRight.state.damperVelocity
+                    obj.rearLeft.state.damperVelocity
+                    obj.rearRight.state.damperVelocity
+                ]));
+                
+                if maxVel < velTolerance
+                    fprintf('Suspension warmup: converged in %d iterations\n', iter);
+                    return;
+                end
+            end
+            
+            warning('Suspension warmup: did not converge after %d iterations (maxVel=%.2e m/s)', ...
+                maxIter, maxVel);
+        end
+        
         %% ---- Per-corner transient computation ----
         
         function loads = computeCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
