@@ -24,6 +24,9 @@ classdef (Abstract) AeroComponent
     
     methods
         function obj = AeroComponent(name, xPos, zPos, ClA, CdA, pitchSensitivityClA)
+            if nargin == 0
+                return;
+            end
             obj.name = name;
             obj.xPosition = xPos;
             obj.zPosition = zPos;
@@ -60,6 +63,38 @@ classdef (Abstract) AeroComponent
             effectiveZ = obj.zPosition ...
                    + obj.computeHeightChange(vehicleState) ...
                    + vehicleState.rideHeight;
+        end
+
+        function forces = computeForces(obj, vehicleState)
+            % COMPUTEFORCES Resolve this aero model to simulator force outputs
+            %   forces.Fz_front, .Fz_rear, .F_drag, .dragHeight
+            %
+            % A single component is split between front and rear axles by
+            % moment balance. AeroManager overrides this for multiple
+            % components, but exposes the same simulator-facing contract.
+
+            wb = vehicleState.vehicleManager.wheelbase;
+            cgHeight = vehicleState.vehicleManager.cgHeight;
+            frontWeightFrac = vehicleState.vehicleManager.staticFrontWeight;
+
+            b = wb * frontWeightFrac;  % CG to rear axle [m]
+
+            F_downforce = obj.computeDownforce(vehicleState);
+            F_drag = obj.computeDrag(vehicleState);
+            xi = obj.getLongitudinalPosition();
+            zi = obj.getNominalHeight();
+
+            frontFrac = (b + xi) / wb;
+            frontFrac = max(0, min(1, frontFrac));
+
+            forces.Fz_front = F_downforce * frontFrac;
+            forces.Fz_rear = F_downforce * (1 - frontFrac);
+            forces.F_drag = F_drag;
+            if F_drag > 0
+                forces.dragHeight = zi - cgHeight;
+            else
+                forces.dragHeight = 0;
+            end
         end
     end
 end

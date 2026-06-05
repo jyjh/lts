@@ -1,4 +1,4 @@
-classdef AeroManager
+classdef AeroManager < components.Aero.AeroComponent
     % AEROMANAGER Aggregates multiple AeroComponent objects
     % Resolves each component's downforce to front/rear axle loads via
     % moment balance, and computes total drag with its effective height
@@ -21,6 +21,23 @@ classdef AeroManager
     methods
         function obj = AeroManager()
             % AEROMANAGER Construct with no arguments
+            obj@components.Aero.AeroComponent('AeroManager', 0, 0, 0, 0, 0);
+        end
+
+        function F_downforce = computeDownforce(obj, vehicleState)
+            % COMPUTEDOWNFORCE Total downforce from all managed components [N]
+            F_downforce = 0;
+            for i = 1:numel(obj.components)
+                F_downforce = F_downforce + obj.components{i}.computeDownforce(vehicleState);
+            end
+        end
+
+        function F_drag = computeDrag(obj, vehicleState)
+            % COMPUTEDRAG Total drag from all managed components [N]
+            F_drag = 0;
+            for i = 1:numel(obj.components)
+                F_drag = F_drag + obj.components{i}.computeDrag(vehicleState);
+            end
         end
         
         function obj = addComponent(obj, aeroComp)

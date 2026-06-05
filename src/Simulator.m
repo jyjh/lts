@@ -80,13 +80,8 @@ classdef Simulator
             Fz_rear  = max(0, Fz_rear);
             
             % --- POWERTRAIN STATE & DRIVE FORCE ---
-            if ismethod(vm.powertrain, 'updateStateFromDrivenWheels') && ...
-                    isa(vm.tire, 'components.Tire.PacejkaTire')
-                vm.powertrain.updateStateFromDrivenWheels( ...
-                    [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
-            elseif ismethod(vm.powertrain, 'updateStateFromVehicleSpeed')
-                vm.powertrain.updateStateFromVehicleSpeed(v);
-            end
+            vm.powertrain.updateStateFromDrivenWheels( ...
+                [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
             F_drive = vm.powertrain.computeDriveForce(v, throttle);
             
             % --- BRAKE FORCE ---
@@ -100,37 +95,31 @@ classdef Simulator
             % RWD assumption: drive torque only on rear wheels.
             % Brake distribution: equal front/rear (50/50).
             % Drive force is split equally between the two driven wheels.
-            if isa(vm.tire, 'components.Tire.PacejkaTire')
-                R = vm.tire.RL.wheelRadius;  % all corners share same radius
-                
-                % Per-corner drive torque (RWD: rear only, split equally)
-                T_drive_front = 0;
-                T_drive_rear  = F_drive * R / 2;
-                
-                % Per-corner brake torque (equal distribution, split 4 ways)
-                T_brake_corner = abs(F_brake) * R / 4;
-                
-                % Update wheel rotational state (uses previous-timestep Fx)
-                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_corner, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_corner, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_corner, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_corner, obj.dt);
-                
-                if ismethod(vm.powertrain, 'limitDrivenWheelAngularVelocity')
-                    limitedRearOmega = vm.powertrain.limitDrivenWheelAngularVelocity( ...
-                        [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
-                    vm.tire.RL.angularVelocity = limitedRearOmega(1);
-                    vm.tire.RR.angularVelocity = limitedRearOmega(2);
-                end
-                
-                if ismethod(vm.powertrain, 'updateStateFromDrivenWheels')
-                    vm.powertrain.updateStateFromDrivenWheels( ...
-                        [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
-                end
-                
-                % Evaluate tire forces with computed per-corner slip ratios
-                vm.tire.updateAllFromState(state, vm, cornerLoads, state.mu);
-            end
+            R = vm.tire.RL.wheelRadius;  % all corners share same radius
+
+            % Per-corner drive torque (RWD: rear only, split equally)
+            T_drive_front = 0;
+            T_drive_rear  = F_drive * R / 2;
+
+            % Per-corner brake torque (equal distribution, split 4 ways)
+            T_brake_corner = abs(F_brake) * R / 4;
+
+            % Update wheel rotational state (uses previous-timestep Fx)
+            vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_corner, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_corner, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_corner, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_corner, obj.dt);
+
+            limitedRearOmega = vm.powertrain.limitDrivenWheelAngularVelocity( ...
+                [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
+            vm.tire.RL.angularVelocity = limitedRearOmega(1);
+            vm.tire.RR.angularVelocity = limitedRearOmega(2);
+
+            vm.powertrain.updateStateFromDrivenWheels( ...
+                [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
+
+            % Evaluate tire forces with computed per-corner slip ratios
+            vm.tire.updateAllFromState(state, vm, cornerLoads, state.mu);
             
             % --- MAX CORNERING SPEED ---
             totalNormalLoad = W + F_downforce;
@@ -191,7 +180,7 @@ classdef Simulator
             forces.wheelTorque = 0;
             forces.drivenWheelRPM = 0;
             forces.rpmLimitActive = false;
-            if isprop(vm.powertrain, 'state') && ~isempty(vm.powertrain.state)
+            if ~isempty(vm.powertrain.state)
                 forces.motorRPM = vm.powertrain.state.motorRPM;
                 forces.motorTorque = vm.powertrain.state.motorTorque;
                 forces.wheelTorque = vm.powertrain.state.wheelTorque;
@@ -353,24 +342,22 @@ classdef Simulator
                     stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
                     
                     % Per-corner tire telemetry (slip, wheel speed, forces)
-                    if isa(vm.tire, 'components.Tire.PacejkaTire')
-                        stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
-                        stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
-                        stateLog.slipRatio_RL(step) = vm.tire.RL.slipRatio;
-                        stateLog.slipRatio_RR(step) = vm.tire.RR.slipRatio;
-                        stateLog.omega_FL(step)     = vm.tire.FL.angularVelocity;
-                        stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
-                        stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
-                        stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
-                        stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
-                        stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
-                        stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
-                        stateLog.tireFx_RR(step)    = vm.tire.RR.Fx;
-                        stateLog.tireFy_FL(step)    = vm.tire.FL.Fy;
-                        stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
-                        stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
-                        stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
-                    end
+                    stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
+                    stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
+                    stateLog.slipRatio_RL(step) = vm.tire.RL.slipRatio;
+                    stateLog.slipRatio_RR(step) = vm.tire.RR.slipRatio;
+                    stateLog.omega_FL(step)     = vm.tire.FL.angularVelocity;
+                    stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
+                    stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
+                    stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
+                    stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
+                    stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
+                    stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
+                    stateLog.tireFx_RR(step)    = vm.tire.RR.Fx;
+                    stateLog.tireFy_FL(step)    = vm.tire.FL.Fy;
+                    stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
+                    stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
+                    stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
                 end
                 
                 % Advance state
