@@ -1,32 +1,38 @@
 graph TD
-    subgraph "Aero Department"
-        CFD[CFD Simulations] --> AeroMap[Aero Data Maps]
-        AeroMap --> ImplAero[Implement Subclasses: FrontWing, UnderbodyFloor]
-    end
-    
-    subgraph "Suspension Department"
-        Kinematics[Kinematics Software] --> KineMap[Roll Center / Camber Gain Maps]
-        KineMap --> ImplSusp[Implement Subclass: KinematicSuspension]
-    end
-    
-    subgraph "Powertrain Department"
-        Dyno[Engine Dyno / Motor Rig] --> TorqueMap[Torque/Power LUT]
-        TorqueMap --> ImplPT[Implement Subclass: MappedPowertrain]
+    subgraph "Aero"
+        AeroInputs[ClA/CdA and component placement] --> AeroClasses[FrontWing / RearWing / UnderbodyFloor]
+        AeroClasses --> AeroManager[AeroManager]
     end
 
-    subgraph "Vehicle Dynamics / LTS Application"
-        ImplAero --> Build[Instantiate Objects]
-        ImplSusp --> Build
-        ImplPT --> Build
-        TrackData[GPS Track Coordinates CSV] --> Build
-        Build --> VehManager(VehicleManager)
-        VehManager --> SimRun
+    subgraph "Suspension"
+        SuspSetup[Spring, damper, bump stop, tire stiffness] --> SuspManager[SuspensionManager]
+        SuspManager --> SuspState[SuspensionState per corner]
     end
-    
-    SimRun --> Telemetry[Export stateLog as MoTeC CSV]
-    Telemetry --> Compare[Compare Sim vs. Real MoTeC Data]
-    Compare --> Iter{Analyze Deltas & Iterate Setup}
-    
-    Iter -.-> CFD
-    Iter -.-> Kinematics
-    Iter -.-> Dyno
+
+    subgraph "Powertrain"
+        EMRAXMap[EMRAX228CC Single_4.5.mat] --> EMRAX[EMRAX228Powertrain]
+        EMRAX --> PTState[PowertrainState motor RPM and torque]
+    end
+
+    subgraph "Tires"
+        TireFile[43105_18x7.5_10_R25B_7.tir] --> Pacejka[PacejkaTire]
+        Pacejka --> TireState[TireState per corner]
+    end
+
+    subgraph "Track"
+        TestLayouts[TestTrack layouts] --> TrackObj[Track geometry, curvature, mu]
+    end
+
+    AeroManager --> Vehicle[VehicleManager]
+    SuspManager --> Vehicle
+    EMRAX --> Vehicle
+    Pacejka --> Vehicle
+    TrackObj --> Vehicle
+    Vehicle --> Simulator[Simulator]
+    Driver[DriverModel] --> Simulator
+    Simulator --> Log[stateLog and lapTime]
+    Log --> Plots[GraphPlotter dashboards]
+    Plots --> Review[Review loads, slip, RPM, forces]
+    Review -.-> AeroInputs
+    Review -.-> SuspSetup
+    Review -.-> EMRAXMap

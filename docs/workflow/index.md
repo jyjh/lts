@@ -6,9 +6,9 @@ permalink: /workflow/
 
 ## Department Workflow
 
-The following diagram shows how data flows from each engineering department through to simulation and back for iterative improvement:
+The following diagram shows how subsystem data is assembled into a simulation and reviewed through telemetry:
 
-> **Maintainer note:** The diagram below is generated from [`workflow.mmd`](workflow.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.
+> Maintainer note: The diagram below is generated from [`workflow.mmd`](workflow.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.
 
 ![Department Workflow Diagram](workflow.svg)
 
@@ -16,9 +16,10 @@ The following diagram shows how data flows from each engineering department thro
 
 ### How it works
 
-1. **Aero Department** — CFD simulations produce aero coefficient maps, which are implemented as `AeroComponent` subclasses (e.g., `FrontWing`, `UnderbodyFloor`).
-2. **Suspension Department** — Kinematics analysis produces roll center and camber gain data, implemented as `SuspensionComponent` subclasses.
-3. **Powertrain Department** — Dyno testing produces torque/power lookup tables, implemented as `PowertrainComponent` subclasses.
-4. **Vehicle Dynamics** — All component objects are instantiated and assembled in `VehicleManager`. GPS track data is loaded into a `Track` subclass.
-5. **Simulation** — `VehicleManager.simulate()` runs the lap and exports telemetry as MoTeC-compatible CSV.
-6. **Validation** — Simulated telemetry is compared against real MoTeC data. Discrepancies drive iterative improvements back to each department.
+1. **Aero** - Component coefficients and positions are implemented as `FrontWing`, `RearWing`, `UnderbodyFloor`, or other `AeroComponent` subclasses. `AeroManager` resolves their forces and aero balance.
+2. **Suspension** - Spring, damper, bump stop, tire stiffness, roll stiffness split, and vehicle geometry are assembled by `SuspensionManager`, with one `SuspensionState` per corner.
+3. **Powertrain** - The current EMRAX 228 model loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM from driven wheel speed, applies torque falloff, and logs motor/wheel torque.
+4. **Tires** - `PacejkaTire` loads the provided `.tir` file and manages four `TireState` objects for slip, wheel speed, and force telemetry.
+5. **Track** - `TestTrack` supplies built-in layouts and curvature/surface-friction arrays.
+6. **Simulation** - `Simulator` combines the selected components with `DriverModel` and returns `stateLog` plus `lapTime`.
+7. **Review** - `GraphPlotter` dashboards expose speed, acceleration, aero forces, normal loads, damper travel, tire slip/forces, drive force, motor RPM, and RPM limiter state.

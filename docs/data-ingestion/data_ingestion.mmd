@@ -1,28 +1,68 @@
 classDiagram
-    class ExternalDataLoader {
-        <<interface>>
-        +loadCSV(filepath) double[][]
-        +loadJSON(filepath) struct
+    class EMRAXMatFile {
+        <<data file>>
+        FDR
+        Speed
+        Torque
+        Tractive_force
+        Gearing_Map
     }
 
-    class AeroMapLoader {
-        +parseAeroCoefficients(filepath)
-        +interpolateDownforce(frontRideHeight, rearRideHeight) double
+    class TireTIRFile {
+        <<data file>>
+        Pacejka coefficients
+        nominal load
+        nominal pressure
+    }
+
+    class EMRAX228Powertrain {
+        +load(matFilePath)
+        +computeDriveForce(speed, throttle)
+        +getMaxTorque(engineSpeed)
+    }
+
+    class PowertrainState {
+        +motorRPM
+        +motorTorque
+        +wheelTorque
+        +rpmLimitActive
+    }
+
+    class TireConstants {
+        +params
+        +nomLoad
+        +nomPressure
+        +refVelocity
+    }
+
+    class PacejkaTire {
+        +updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
+        +updateAllFromState(state, vehicleManager, cornerLoads, mu)
+    }
+
+    class TestTrack {
+        +buildStraight()
+        +buildOval()
+        +buildSkidpad()
+        +buildAutocross()
+        +buildBusstop()
     }
 
     class TrackDataLoader {
+        <<planned>>
         +parseGPSCSV(filepath)
         +smoothCurvature()
         +generateRacingLine()
     }
 
     class TelemetryExporter {
+        <<planned>>
         +writeToMoTeCFormat(stateLog, filepath)
     }
 
-    ExternalDataLoader <|.. AeroMapLoader
-    ExternalDataLoader <|.. TrackDataLoader
-    
-    AeroMapLoader --> SimpleAero : populates maps
-    TrackDataLoader --> TestTrack : builds track points
-    VehicleManager --> TelemetryExporter : sends final stateLog
+    EMRAXMatFile --> EMRAX228Powertrain : loaded by constructor
+    EMRAX228Powertrain *-- PowertrainState : state
+    TireTIRFile --> TireConstants : parsed by constructor
+    TireConstants --> PacejkaTire : used by
+    TrackDataLoader --> TestTrack : future external track input
+    TelemetryExporter <-- Simulator : future stateLog export

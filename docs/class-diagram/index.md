@@ -6,20 +6,25 @@ permalink: /class-diagram/
 
 ## Architecture Overview
 
-This MATLAB project simulates a lap-time simulation for an FSAE-style vehicle. It uses the **Strategy Pattern** for swappable component models and the **Composite Pattern** for aggregating aerodynamic elements.
+The simulation separates vehicle configuration from simulation execution:
 
-### Design Patterns
+- `VehicleManager` stores component references and vehicle-level constants.
+- `Simulator` runs each timestep, asks `DriverModel` for inputs, computes forces, updates subsystem state, integrates `VehicleState`, and logs telemetry.
+- Component classes live under the MATLAB `components` package and can be swapped when they satisfy the relevant interface.
+
+## Design Patterns
 
 | Pattern | Where | Purpose |
 |---------|-------|---------|
-| **Strategy** | `VehicleManager` accepts abstract component interfaces | Swap aero, suspension, powertrain, tire, or track models without changing simulation logic |
-| **Composite** | `AeroManager` extends `AeroComponent` and aggregates multiple `AeroComponent` objects | Treat a single aero element or a collection uniformly |
+| Strategy | `VehicleManager` accepts powertrain, tire, aero, suspension, and track component objects | Swap subsystem models without changing the simulation loop |
+| Composite | `AeroManager` aggregates multiple `AeroComponent` objects | Resolve several positioned aero elements as one aero system |
+| State object | `VehicleState`, `SuspensionState`, `TireState`, `PowertrainState` | Persist transient quantities across timesteps |
 
 ---
 
 ## UML Class Diagram
 
-> **Maintainer note:** The diagram below is generated from [`class_diagram.mmd`](class_diagram.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.
+> Maintainer note: The diagram below is generated from [`class_diagram.mmd`](class_diagram.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.
 
 ![UML Class Diagram](class_diagram.svg)
 
@@ -27,41 +32,42 @@ This MATLAB project simulates a lap-time simulation for an FSAE-style vehicle. I
 
 ## Relationship Summary
 
-### Inheritance (`extends`)
+### Inheritance
 
-| Abstract Base | Concrete Implementation |
-|--------------|------------------------|
-| `components.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor`, `SimpleAero` |
-| `components.SuspensionComponent` | `SimpleSuspension` |
-| `components.PowertrainComponent` | `SimplePowertrain` |
-| `components.TireModel` | `SimpleTire` |
+| Abstract Base | Concrete Implementations |
+|---------------|--------------------------|
+| `components.Aero.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor`, `SimpleAero` |
+| `components.Suspension.SuspensionComponent` | `SuspensionManager` |
+| `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain`, `SimplePowertrain` |
+| `components.Tire.TireModel` | `PacejkaTire`, `SimpleTire` |
 | `components.Track` | `TestTrack` |
 
-### Composition (`owns`)
+### Composition
 
-| Owner | Property | Type | Cardinality |
-|-------|----------|------|-------------|
-| `VehicleManager` | `aero` | `AeroComponent` | 1 |
-| `VehicleManager` | `suspension` | `SuspensionComponent` | 1 |
-| `VehicleManager` | `powertrain` | `PowertrainComponent` | 1 |
-| `VehicleManager` | `tire` | `TireModel` | 1 |
-| `VehicleManager` | `track` | `Track` | 1 |
-| `VehicleManager` | `state` | `VehicleState` | 1 |
-
-### Aggregation (`manages`)
-
-| Owner | Property | Type | Cardinality |
-|-------|----------|------|-------------|
-| `AeroManager` | `components` | `AeroComponent` | 0..* |
+| Owner | Property | Type |
+|-------|----------|------|
+| `Simulator` | `vehicleManager` | `VehicleManager` |
+| `Simulator` | `driverModel` | `DriverModel` |
+| `VehicleManager` | `aero` | `AeroManager` |
+| `VehicleManager` | `suspension` | `SuspensionManager` |
+| `VehicleManager` | `powertrain` | `PowertrainComponent` |
+| `VehicleManager` | `tire` | `TireModel` |
+| `VehicleManager` | `track` | `Track` |
+| `SuspensionManager` | corner suspensions | `SimpleSuspension` |
+| `SimpleSuspension` | `state` | `SuspensionState` |
+| `PacejkaTire` | corner states | `TireState` |
+| `EMRAX228Powertrain` / `SimplePowertrain` | `state` | `PowertrainState` |
 
 ### Data Flow
 
-`VehicleManager.simulate()` orchestrates the simulation loop:
+`Simulator.simulate()` orchestrates the loop:
 
-1. **Track** → curvature, friction, heading at current position
-2. **Driver Model** → throttle/brake decision based on look-ahead
-3. **AeroComponent** → downforce, drag (uses `VehicleState` for pitch/ride height)
-4. **SuspensionComponent** → load transfer, weight distribution
-5. **PowertrainComponent** → drive force from speed & throttle
-6. **TireModel** → peak friction from normal load
-7. **VehicleState** → integrate dynamics forward one timestep
+1. Read current `VehicleState` and track curvature/friction/heading.
+2. Ask `DriverModel` for throttle and brake.
+3. Compute aero downforce and drag through `AeroManager`.
+4. Compute static, aero, lateral, and longitudinal corner loads through `SuspensionManager`.
+5. Update `PowertrainState` from driven-wheel angular velocity and compute drive force from motor RPM.
+6. Update wheel rotational state and tire forces through `PacejkaTire`.
+7. Resolve longitudinal and lateral acceleration limits.
+8. Integrate `VehicleState`.
+9. Append telemetry to `stateLog`.

@@ -3,78 +3,44 @@ layout: home
 title: Home
 ---
 
-An object-oriented MATLAB simulation for transient-state Lap Time Simulation (LTS) for FSAE vehicles.
+An object-oriented MATLAB lap-time simulation framework for FSAE vehicles.
 
 ## Architecture
 
-> 📊 **[View the UML Class Diagram](class-diagram)** — Full Mermaid.js class diagram showing inheritance, composition, and aggregation relationships.
+The project uses a composition-based vehicle model. `VehicleManager` stores the selected vehicle components and parameters, while `Simulator` owns the timestep loop. Components remain swappable through abstract interfaces where practical.
 
-The simulation uses a **composition pattern** where swappable component objects are assembled by a `VehicleManager` orchestrator:
-
-```
+```text
 VehicleManager
-├── AeroManager              ← Aggregates multiple positioned aero components
-│   ├── FrontWing            ← Pitch & height sensitive (ground effect)
-│   │     (AeroComponent)      x=+0.9m from CG
-│   ├── RearWing             ← Pitch sensitive (AoA changes)
-│   │     (AeroComponent)      x=-0.85m from CG
-│   └── UnderbodyFloor       ← Extreme height sensitivity + stall model
-│         (AeroComponent)      x=0m (at CG)
-├── SuspensionComponent      ← Abstract interface
-│   └── SimpleSuspension     ← Fixed geometry, roll stiffness split
-├── PowertrainComponent      ← Abstract interface
-│   └── SimplePowertrain     ← Single-gear with torque curve
-├── TireModel                ← Abstract interface
-│   └── SimpleTire           ← Linear with saturation + load sensitivity
-└── Track                    ← Abstract interface
-    └── TestTrack            ← straight / oval / skidpad / autocross
+|-- components.Aero.AeroManager
+|   |-- FrontWing
+|   |-- RearWing
+|   `-- UnderbodyFloor
+|-- components.Suspension.SuspensionManager
+|   |-- SimpleSuspension + SuspensionState (FL)
+|   |-- SimpleSuspension + SuspensionState (FR)
+|   |-- SimpleSuspension + SuspensionState (RL)
+|   `-- SimpleSuspension + SuspensionState (RR)
+|-- components.Powertrain.EMRAX228Powertrain
+|   `-- PowertrainState
+|-- components.Tire.PacejkaTire
+|   |-- TireState (FL)
+|   |-- TireState (FR)
+|   |-- TireState (RL)
+|   `-- TireState (RR)
+`-- components.TestTrack
 ```
 
-### Multi-Component Aero System
+See the [class diagram](class-diagram/) for a fuller relationship map.
 
-Each aero component is an independent `AeroComponent` with:
-- **Position** (`xPosition`, `zPosition`) — where it sits on the car
-- **Vehicle state awareness** — receives full `VehicleState` including:
-  - `pitchAngle` — from longitudinal acceleration (braking = nose up)
-  - `rideHeight` — deviation from nominal (for future: track elevation)
-- **Pitch & height sensitivity** — each component responds differently:
-  - **FrontWing**: loses downforce under braking (nose rises), height-sensitive ground effect
-  - **RearWing**: gains downforce under braking (rear squats), moderate sensitivity
-  - **UnderbodyFloor**: exponential ground effect model with stall at very low ride heights
+## Simulation Model
 
-The `AeroManager` aggregates all components and computes:
-- Total downforce and drag (sum of all components)
-- Aero balance via moment calculation from positioned forces
-- Pitch angle from longitudinal acceleration (`pitchStiffness × ax`)
-
-### Swapping Components
-
-Each component inherits from an abstract class. To use a different model, create a new class that inherits the same interface:
-
-```matlab
-classdef MyCustomFloor < components.AeroComponent
-    methods
-        function F = computeDownforce(obj, vehicleState)
-            % Your pitch/height-aware implementation
-            pitchFactor = 1 + mySensitivity * vehicleState.pitchAngle;
-            F = 0.5 * obj.rho * obj.ClA * pitchFactor * vehicleState.speed^2;
-        end
-        function F = computeDrag(obj, vehicleState)
-            F = 0.5 * obj.rho * obj.CdA * vehicleState.speed^2;
-        end
-        function r = getAirDensity(obj)
-            r = obj.rho;
-        end
-    end
-end
-```
-
-Then register it with AeroManager:
-
-```matlab
-aero = components.AeroManager(1.55);  % wheelbase
-aero = aero.addComponent(MyCustomFloor('xPosition', 0, 'zPosition', 0.035));
-```
+- `DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
+- `AeroManager` resolves positioned aero elements into front/rear downforce and total drag.
+- `SuspensionManager` combines static load, aero load, lateral load transfer, and longitudinal load transfer, then updates each corner's transient suspension state.
+- `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
+- `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
+- `PacejkaTire` computes per-corner tire forces from slip ratio, slip angle, normal load, and surface friction.
+- `VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
 ## Usage
 
@@ -84,57 +50,39 @@ Run the main script in MATLAB:
 run_simulation
 ```
 
-Change the track type by editing the `trackType` variable in `run_simulation.m`:
-- `'straight'` — 200m straight for top speed validation
-- `'oval'` — Oval with 60m straights and 15m radius turns
-- `'skidpad'` — FSAE skidpad (8.125m radius circle)
-- `'autocross'` — Mixed corner track with hairpins and chicanes
+Change the track type by editing `trackType` in `src/run_simulation.m`:
 
-## File Structure
+- `straight` - 200 m straight for acceleration and top-speed validation
+- `oval` - oval with straights and constant-radius turns
+- `skidpad` - FSAE skidpad circle
+- `autocross` - mixed low-speed course
+- `busstop` - open chicane layout
 
-```
-+components/               % MATLAB package namespace
-  AeroComponent.m          % Abstract aero interface (positioned, state-aware)
-  AeroManager.m            % Aggregates multiple aero components
-  FrontWing.m              % Front wing
-  RearWing.m               % Rear wing
-  UnderbodyFloor.m         % Floor/diffuser with stall model
-  SimpleAero.m             % Generic constant-coefficient aero (legacy)
-  SuspensionComponent.m    % Abstract suspension interface
-  SimpleSuspension.m       % Fixed geometry suspension
-  PowertrainComponent.m    % Abstract powertrain interface
-  SimplePowertrain.m       % Single-gear with torque curve
-  TireModel.m              % Abstract tire interface
-  SimpleTire.m             % Linear tire with saturation
-  Track.m                  % Abstract track interface
-  TestTrack.m              % Test track implementations
-VehicleState.m             % Vehicle state (speed, pitch, ride height, etc.)
-VehicleManager.m           % Simulation orchestrator
-run_simulation.m           % Entry-point script with plotting
+Tune the EMRAX powertrain after construction if needed:
+
+```matlab
+powertrain = components.Powertrain.EMRAX228Powertrain();
+powertrain.rpmFalloffFactor = 2.0;  % steeper torque falloff above the map endpoint
 ```
 
-## Simulation Model
+## Key Files
 
-- **Bicycle model** with transient load transfer
-- **Euler integration** at 1ms timestep
-- **Multi-element aero** with positioned components responding to pitch and ride height
-- **Pitch model**: angle derived from longitudinal acceleration via pitch stiffness
-- **Driver model** with look-ahead braking based on upcoming curvature
-- **Force balance**: drive force, brake force, aerodynamic drag, rolling resistance
-- **Tire grip limit** determines maximum cornering speed for each curvature
-- **Aero-enhanced grip**: downforce increases tire loads, raising cornering capability
-
-## Extending
-
-| To add | Do this |
-|--------|---------|
-| Pacejka tires | Create a new `TireModel` with Pacejka formula |
-| Dynamic aero map | Create a new `AeroComponent` with ride height lookup table |
-| Real track data | Create a new `Track` from GPS/cone waypoints |
-| 4-wheel model | Upgrade `VehicleManager` with individual wheel loads |
-| Track elevation | Add elevation profile to `Track` and feed into `VehicleState.rideHeight` |
-| RK4 integration | Add integration method option to `VehicleManager` |
+```text
+src/run_simulation.m                         Entry-point script
+src/Simulator.m                              Simulation loop and telemetry logging
+src/DriverModel.m                            Look-ahead driver inputs
+src/VehicleManager.m                         Component and vehicle-parameter container
+src/VehicleState.m                           Vehicle dynamic state
+src/+components/+Aero/                       Aero components and manager
+src/+components/+Suspension/                 Four-corner transient suspension
+src/+components/+Powertrain/                 Simple and EMRAX powertrains
+src/+components/+Tire/                       Simple and Pacejka tire models
+src/+components/TestTrack.m                  Built-in test tracks
+src/GraphPlotter.m                           Simulation dashboards
+```
 
 ## Requirements
 
 - MATLAB R2019b or later
+- MFeval for Pacejka tire evaluation
+- Provided EMRAX `.mat` and tire `.tir` files

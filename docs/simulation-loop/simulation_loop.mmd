@@ -1,36 +1,40 @@
 sequenceDiagram
-    participant App as Main / UI
+    participant App as run_simulation.m
+    participant Sim as Simulator
     participant VM as VehicleManager
     participant DM as DriverModel
     participant State as VehicleState
     participant Aero as AeroManager
-    participant Susp as SuspensionComponent
+    participant Susp as SuspensionManager
+    participant PT as PowertrainComponent
     participant Tire as TireModel
 
-    App->>VM: simulate()
-    
-    loop While vehicle is on track
-        VM->>State: read current state
-        State-->>VM: [speed, ax, ay, pitch, position]
-        
-        VM->>DM: computeInputs(State, Track look-ahead)
-        DM-->>VM: [throttle, brake, steering angle]
-        
-        VM->>Aero: computePerComponent(State)
-        Aero-->>VM: [Total Downforce, Total Drag, Aero Balance]
-        
-        VM->>Susp: computeLatLoadTransfer(ay)
-        VM->>Susp: computeLongLoadTransfer(ax)
-        Susp-->>VM: [Delta Normal Loads on all 4 corners]
-        
-        VM->>Tire: computeLateralForce(NormalLoads, slipAngles)
-        VM->>Tire: computeLongitudinalForce(NormalLoads, slipRatios)
-        Tire-->>VM: [Combined Tire Forces]
-        
-        VM->>VM: Resolve Sum of Forces & Yaw Moments
-        
-        VM->>State: updateFromDynamics(new_ax, new_ay, new_heading)
-        VM->>State: toLogStruct() (Append to history list)
+    App->>Sim: simulate(initialState, track)
+
+    loop while state.s < track length
+        Sim->>State: set current curvature and surface mu
+        Sim->>DM: computeInputs(currentState)
+        DM-->>Sim: throttle, brake
+
+        Sim->>Aero: computeForces(currentState)
+        Aero-->>Sim: downforce, drag, front/rear aero load
+
+        Sim->>Susp: computeCornerLoads(state, aero loads, mass, dt)
+        Susp-->>Sim: FL, FR, RL, RR normal loads
+
+        Sim->>PT: updateStateFromDrivenWheels(RL omega, RR omega)
+        Sim->>PT: computeDriveForce(speed, throttle)
+        PT-->>Sim: drive force, motor RPM, torque, limiter state
+
+        Sim->>Tire: updateWheelDynamics(each corner)
+        Sim->>PT: limitDrivenWheelAngularVelocity(RL/RR omega)
+        Sim->>PT: updateStateFromDrivenWheels(limited RL/RR omega)
+        Sim->>Tire: updateAllFromState(state, vehicle, corner loads, mu)
+        Tire-->>Sim: slip ratios, Fx, Fy
+
+        Sim->>Sim: compute ax, ay, speed/corner limits
+        Sim->>State: updateFromDynamics(ax, ay, ds, dt, heading, mu)
+        Sim->>Sim: append stateLog telemetry
     end
-    
-    VM-->>App: return stateLog, lapTime
+
+    Sim-->>App: stateLog, lapTime

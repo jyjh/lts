@@ -1,197 +1,257 @@
 classDiagram
     direction TB
 
+    class Simulator {
+        +vehicleManager
+        +driverModel
+        +dt
+        +step(state, throttle, brake, curKappa, curMu, curHeading)
+        +simulate(initialState, track)
+    }
+
     class VehicleManager {
-        +aero: components.AeroComponent
-        +suspension: components.SuspensionComponent
-        +powertrain: components.PowertrainComponent
-        +tire: components.TireModel
-        +track: components.Track
-        +state: VehicleState
-        +totalMass: double
-        +wheelbase: double
-        +dt: double
-        +simulate() stateLog, lapTime
-        -driverModel() throttle, brake
+        +aero
+        +suspension
+        +powertrain
+        +tire
+        +track
+        +totalMass
+        +wheelbase
+        +trackWidth
+        +cgHeight
+        +staticFrontWeight
+        +maxSpeed
+    }
+
+    class DriverModel {
+        +vehicleManager
+        +lookaheadTime
+        +brakingLookahead
+        +computeInputs(state)
     }
 
     class VehicleState {
-        +s: double
-        +speed: double
-        +ax: double
-        +ay: double
-        +heading: double
-        +pitchAngle: double
-        +rideHeight: double
-        +throttle: double
-        +brake: double
-        +time: double
-        +onTrack: logical
+        +vehicleManager
+        +s
+        +speed
+        +ax
+        +ay
+        +heading
+        +yawRate
+        +pitchAngle
+        +throttle
+        +brake
+        +time
         +updateFromDynamics(ax, ay, ds, dt, curvature, heading, mu)
-        +toLogStruct() log
+        +toLogStruct()
     }
 
     class AeroComponent {
         <<abstract>>
-        +name: string
-        +xPosition: double
-        +zPosition: double
-        +computeDownforce(vehicleState)* double
-        +computeDrag(vehicleState)* double
-        +getAirDensity()* double
-        +getLongitudinalPosition() double
-        +computeEffectiveHeight(vehicleState) double
+        +name
+        +xPosition
+        +zPosition
+        +ClA
+        +CdA
+        +pitchSensitivityClA
+        +computeDownforce(vehicleState)*
+        +computeDrag(vehicleState)*
+        +computeEffectiveHeight(vehicleState)
     }
 
     class AeroManager {
-        +components: cell~AeroComponent~
-        +wheelbase: double
-        +pitchStiffness: double
+        +components
         +addComponent(aeroComp)
         +removeComponent(name)
-        +computeAeroBalance(vehicleState) double
-        +computePerComponent(vehicleState) results
-        -applyPitchToState(vehicleState) stateOut
+        +computeForces(vehicleState)
+        +computePerComponent(vehicleState)
     }
 
     class FrontWing {
-        +ClA: double
-        +CdA: double
-        +rho: double
-        +pitchSensitivityClA: double
-        +heightSensitivity: double
-        +referenceHeight: double
-        +computeDownforce(vehicleState) double
-        +computeDrag(vehicleState) double
+        +heightSensitivity
+        +computeDownforce(vehicleState)
+        +computeDrag(vehicleState)
     }
 
     class RearWing {
-        +ClA: double
-        +CdA: double
-        +rho: double
-        +pitchSensitivityClA: double
-        +heightSensitivity: double
-        +referenceHeight: double
-        +computeDownforce(vehicleState) double
-        +computeDrag(vehicleState) double
+        +heightSensitivity
+        +computeDownforce(vehicleState)
+        +computeDrag(vehicleState)
     }
 
     class UnderbodyFloor {
-        +ClA: double
-        +CdA: double
-        +rho: double
-        +pitchSensitivityClA: double
-        +referenceHeight: double
-        +stallHeight: double
-        +heightExponent: double
-        +computeDownforce(vehicleState) double
-        +computeDrag(vehicleState) double
+        +stallHeight
+        +heightExponent
+        +computeDownforce(vehicleState)
+        +computeDrag(vehicleState)
     }
 
     class SimpleAero {
-        +ClA: double
-        +CdA: double
-        +rho: double
-        +pitchSensitivityClA: double
-        +pitchSensitivityCdA: double
-        +computeDownforce(vehicleState) double
-        +computeDrag(vehicleState) double
+        +computeDownforce(vehicleState)
+        +computeDrag(vehicleState)
     }
 
     class SuspensionComponent {
         <<abstract>>
-        +computeLatLoadTransfer(ay, totalMass)* latTransfer
-        +computeLongLoadTransfer(ax, totalMass)* longTransfer
-        +getRollStiffnessDistribution()* double
-        +getStaticWeightDistribution()* double
+        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)*
+    }
+
+    class SuspensionManager {
+        +frontLeft
+        +frontRight
+        +rearLeft
+        +rearRight
+        +staticFrontWeight
+        +warmup(totalMass, dt)
+        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)
+        +computePitchAngle()
     }
 
     class SimpleSuspension {
-        +trackWidth: double
-        +wheelbase: double
-        +cgHeight: double
-        +rollStiffDist: double
-        +staticFrontWeight: double
-        +computeLatLoadTransfer(ay, totalMass) latTransfer
-        +computeLongLoadTransfer(ax, totalMass) longTransfer
+        +springRate
+        +dampingCoeff
+        +reboundCoeff
+        +motionRatio
+        +bumpStopLength
+        +tireSpringRate
+        +unsprungMass
+        +state
+        +updateCorner(cornerState, demandedLoad, dt)
+    }
+
+    class SuspensionState {
+        +damperPosition
+        +damperVelocity
+        +tireDeflection
+        +tireNormalForce
+        +demandedLoad
+        +reset()
     }
 
     class PowertrainComponent {
         <<abstract>>
-        +computeDriveForce(speed, throttle)* double
-        +getMaxTorque(engineSpeed)* double
-        +getTotalGearRatio()* double
-        +getDrivetrainEfficiency()* double
+        +computeDriveForce(speed, throttle)*
+        +getMaxTorque(engineSpeed)*
+        +getTotalGearRatio()*
+        +getDrivetrainEfficiency()*
     }
 
-    class SimplePowertrain {
-        +maxEngineTorque: double
-        +totalGearRatio: double
-        +wheelRadius: double
-        +drivetrainEfficiency: double
-        +torqueCurveRPM: double[]
-        +torqueCurveNm: double[]
-        +computeDriveForce(speed, throttle) double
+    class EMRAX228Powertrain {
+        +state
+        +motorRPMCurve
+        +tractiveForceCurveN
+        +rpmFalloffStartRPM
+        +rpmFalloffFactor
+        +rpmLimitRPM
+        +computeDriveForce(speed, throttle)
+        +updateStateFromDrivenWheels(omega)
+        +limitDrivenWheelAngularVelocity(omega)
+    }
+
+    class PowertrainState {
+        +drivenWheelAngularVelocity
+        +drivenWheelRPM
+        +motorAngularVelocity
+        +motorRPM
+        +motorTorque
+        +wheelTorque
+        +driveForce
+        +rpmLimitActive
+        +updateFromDrivenWheels(omega, gearRatio)
+        +updateOutputs(throttle, motorTorque, wheelTorque, driveForce, efficiency, rpmLimitActive)
+        +reset()
     }
 
     class TireModel {
         <<abstract>>
-        +computeLateralForce(normalLoad, slipAngle, mu)* double
-        +computeLongitudinalForce(normalLoad, slipRatio, mu)* double
-        +getPeakFriction(normalLoad)* double
+        +computeLateralForce(normalLoad, slipAngle, mu)*
+        +computeLongitudinalForce(normalLoad, slipRatio, mu)*
+        +getPeakFriction(normalLoad)*
     }
 
-    class SimpleTire {
-        +corneringStiffness: double
-        +longitudinalStiffness: double
-        +peakMuLat: double
-        +peakMuLong: double
-        +loadSensitivityExp: double
-        +computeLateralForce(normalLoad, slipAngle, mu) double
-        +getPeakFriction(normalLoad) double
+    class PacejkaTire {
+        +tireConstants
+        +FL
+        +FR
+        +RL
+        +RR
+        +computeSlipRatio(cornerState, vehicleSpeed)
+        +updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
+        +updateAllFromState(state, vehicleManager, cornerLoads, mu)
+    }
+
+    class TireState {
+        +normalForce
+        +slipAngle
+        +slipRatio
+        +angularVelocity
+        +wheelRadius
+        +Fx
+        +Fy
+        +reset()
+    }
+
+    class TireConstants {
+        +params
+        +nomLoad
+        +nomPressure
+        +refVelocity
     }
 
     class Track {
         <<abstract>>
-        +getTrackPoints()* double[][]
-        +getCurvature()* double[]
-        +getSurfaceFriction()* double[]
-        +getTotalLength()* double
-        +getHeading()* double[]
-        +resampleTrack(points, ds)$ double[][]
-        +computeCurvature(points)$ double[][]
-        +computeHeading(points)$ double[]
+        +getTrackPoints()*
+        +getCurvature()*
+        +getSurfaceFriction()*
+        +getTotalLength()*
+        +getHeading()*
+        +computeCurvature(points)$
+        +computeHeading(points)$
     }
 
     class TestTrack {
-        +trackPoints: double[][]
-        +trackCurvature: double[]
-        +trackHeading: double[]
-        +trackLength: double
-        +getTrackPoints() double[][]
-        +getCurvature() double[]
-        +getTotalLength() double
+        +trackPoints
+        +trackCurvature
+        +trackHeading
+        +trackMu
+        +trackLength
+        +getTrackPoints()
+        +getCurvature()
+        +getSurfaceFriction()
+        +getTotalLength()
     }
 
-    %% ── Inheritance ──────────────────────────────────────
+    class GraphPlotter {
+        +plotAll(stateLog, lapTime, track, vehicle, aero)$
+        +plotAero(stateLog, vehicle, aero)$
+        +plotSuspension(stateLog, vehicle)$
+        +plotTire(stateLog, vehicle)$
+        +plotPowertrain(stateLog, vehicle)$
+    }
+
     AeroComponent <|-- AeroManager
     AeroComponent <|-- FrontWing
     AeroComponent <|-- RearWing
     AeroComponent <|-- UnderbodyFloor
     AeroComponent <|-- SimpleAero
 
-    SuspensionComponent <|-- SimpleSuspension
-    PowertrainComponent <|-- SimplePowertrain
-    TireModel <|-- SimpleTire
+    SuspensionComponent <|-- SuspensionManager
+    PowertrainComponent <|-- EMRAX228Powertrain
+    TireModel <|-- PacejkaTire
     Track <|-- TestTrack
 
-    %% ── Composition ─────────────────────────────────────
-    VehicleManager *-- AeroComponent : aero
-    VehicleManager *-- SuspensionComponent : suspension
+    Simulator *-- VehicleManager : vehicleManager
+    Simulator *-- DriverModel : driverModel
+    VehicleManager *-- AeroManager : aero
+    VehicleManager *-- SuspensionManager : suspension
     VehicleManager *-- PowertrainComponent : powertrain
     VehicleManager *-- TireModel : tire
     VehicleManager *-- Track : track
-    VehicleManager *-- VehicleState : state
+    VehicleState --> VehicleManager : vehicleManager
 
-    %% ── Aggregation (Composite pattern) ─────────────────
     AeroManager o-- AeroComponent : components
+    SuspensionManager *-- SimpleSuspension : corners
+    SimpleSuspension *-- SuspensionState : state
+    EMRAX228Powertrain *-- PowertrainState : state
+    PacejkaTire *-- TireState : corners
+    PacejkaTire *-- TireConstants : tireConstants
