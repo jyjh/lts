@@ -13,9 +13,15 @@ clear; clc; close all;
 
 %% ====================================================================
 %  SELECT TRACK TYPE
-%  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
+%  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
 %  ====================================================================
-trackType = 'busstop';
+trackType = '90turn';
+
+%% ====================================================================
+%  DISPLAY OPTIONS
+%  Set to true to show all graphs in a single window
+%  ====================================================================
+singleWindow = true;
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -145,7 +151,7 @@ initialState = VehicleState('s', 0, 'speed', 0.1);
 %% ====================================================================
 %  PLOT RESULTS
 %  ====================================================================
-GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero);
+GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero, singleWindow);
 
 % --- Summary ---
 speedKmh = stateLog.speedKmh;

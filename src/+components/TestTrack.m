@@ -31,6 +31,8 @@ classdef TestTrack < components.Track
                     obj = buildAutocross(obj);
                 case 'busstop'
                     obj = buildBusstop(obj);
+                case '90turn'
+                    obj = buildNinetyTurn(obj);
                 otherwise
                     error('Unknown track type: %s', trackType);
             end
@@ -215,6 +217,51 @@ classdef TestTrack < components.Track
                 x_leftArc(2:end),  y_leftArc(2:end);
                 x_short(2:end),    y_short(2:end);
                 x_rightArc(2:end), y_rightArc(2:end);
+                x_exit(2:end),     y_exit(2:end)
+            ];
+            
+            obj = finalizeTrack(obj, 1.2);
+        end
+
+        function obj = buildNinetyTurn(obj)
+            % Ninety degree turn, straight before and after.
+            %
+            % Layout (open track, not a closed loop):
+            %   1. Entry straight  — 80 m, heading East
+            %   2. Left turn       — 90° CCW arc, R = 20 m
+            %   5. Exit straight   — 80 m, heading East
+            
+            ds = 0.5;            % point spacing [m]
+            turnRadius = 20;     % chicane turn radius [m]
+            
+            % ---- Segment 1: Entry straight (East along y=0) ----
+            entryLen = 150;
+            nEntry = round(entryLen / ds) + 1;
+            x_entry = linspace(0, entryLen, nEntry)';
+            y_entry = zeros(nEntry, 1);
+            
+            % ---- Segment 2: Left turn (90° CCW arc, R=20) ----
+            % Center at (entryLen, turnRadius) = (80, 20)
+            % Arc from θ = -π/2 (bottom, at (80,0)) to θ = 0 (right, at (100,20))
+            arcLen = pi/2 * turnRadius;
+            nArc = max(round(arcLen / ds) + 1, 10);
+            theta_left = linspace(-pi/2, 0, nArc)';
+            cx_left = entryLen;
+            cy_left = turnRadius;
+            x_leftArc = cx_left + turnRadius * cos(theta_left);
+            y_leftArc = cy_left + turnRadius * sin(theta_left);
+            
+            % ---- Segment 53: Exit straight (East) ----
+            exitLen = 80;
+            nExit = round(exitLen / ds) + 1;
+            % Starts where right arc ends: (cx_right, cy_right + turnRadius) = (120, 55)
+            x_exit = (entryLen + turnRadius) * ones(nExit, 1);
+            y_exit = linspace(turnRadius, turnRadius + exitLen, nExit)';
+            
+            % ---- Combine segments (remove duplicate junction points) ----
+            obj.trackPoints = [
+                x_entry,    y_entry;
+                x_leftArc(2:end),  y_leftArc(2:end);
                 x_exit(2:end),     y_exit(2:end)
             ];
             
