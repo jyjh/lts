@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
 %  ====================================================================
-trackType = 'straight';
+trackType = 'busstop';
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -81,14 +81,11 @@ fprintf('\n');
 %  ====================================================================
 
 % --- Powertrain ---
-powertrain = components.Powertrain.SimplePowertrain( ...
-    55, ...                     % maxEngineTorque [Nm]
-    12.0, ...                   % totalGearRatio: gear * final drive
-    0.2286, ...                 % wheelRadius [m]
-    0.90 ...                    % drivetrainEfficiency: 90% efficient
-);
-fprintf('Powertrain: SimplePowertrain (Tq=%.0f Nm, Ratio=%.1f)\n', ...
-    powertrain.maxEngineTorque, powertrain.totalGearRatio);
+powertrain = components.Powertrain.EMRAX228Powertrain();
+fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
+    powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
+    powertrain.rpmFalloffStartRPM, powertrain.rpmLimitRPM, ...
+    powertrain.rpmFalloffFactor);
 
 % --- Tires (Pacejka Magic Formula via MFeval) ---
 % Requires MFeval toolbox: https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval
@@ -166,4 +163,10 @@ fprintf('Peak ay:    %.2f g\n', max(abs(ayG)));
 fprintf('Peak Downforce: %.0f N (%.1f kg)\n', ...
     max(stateLog.F_downforce), max(stateLog.F_downforce)/9.81);
 fprintf('Peak Drag:      %.0f N\n', max(stateLog.F_drag));
+if isfield(stateLog, 'motorRPM')
+    fprintf('Peak Motor RPM: %.0f rpm\n', max(stateLog.motorRPM));
+end
+if isfield(stateLog, 'rpmLimitActive')
+    fprintf('RPM Limiter Hits: %d\n', nnz(stateLog.rpmLimitActive));
+end
 fprintf('Peak Pitch:     %.3f deg\n', max(abs(pitchDeg)));

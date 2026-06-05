@@ -11,6 +11,7 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
         drivetrainEfficiency = 0.90  % Drivetrain efficiency [0-1]
         maxEngineRPM      = 12000    % Redline [rpm]
         idleRPM           = 2000     % Idle speed [rpm]
+        state                       % components.Powertrain.PowertrainState
     end
     
     methods
@@ -21,6 +22,7 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             obj.totalGearRatio = totalGearRatio;
             obj.wheelRadius = wheelRadius;
             obj.drivetrainEfficiency = drivetrainEfficiency;
+            obj.state = components.Powertrain.PowertrainState();
             
             % Default torque curve (flat-ish with peak around 8000 rpm)
             obj.torqueCurveRPM = [0 2000 4000 6000 8000 10000 12000];
@@ -31,13 +33,16 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             % Compute drive force at wheels
             throttle = max(0, min(1, throttle));  % Clamp [0,1]
             
-            % Compute engine RPM from vehicle speed
-            wheelRPM = speed / (2 * pi * obj.wheelRadius) * 60;
-            engineRPM = wheelRPM * obj.totalGearRatio;
+            if ~obj.state.motorSpeedInitialized
+                obj.state.updateFromVehicleSpeed( ...
+                    speed, obj.wheelRadius, obj.totalGearRatio);
+            end
+            engineRPM = obj.state.motorRPM;
             
             % Engine braking if below idle (no drive force)
             if engineRPM < obj.idleRPM && throttle == 0
                 F_drive = 0;
+                obj.state.updateOutputs(throttle, 0, 0, F_drive, obj.drivetrainEfficiency);
                 return;
             end
             
@@ -49,6 +54,29 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             
             % Drive force at wheels
             F_drive = torque * obj.totalGearRatio * obj.drivetrainEfficiency * throttle / obj.wheelRadius;
+            wheelTorque = F_drive * obj.wheelRadius;
+            motorTorque = torque * throttle;
+            obj.state.updateOutputs( ...
+                throttle, motorTorque, wheelTorque, F_drive, obj.drivetrainEfficiency);
+        end
+        
+        function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
+            obj.state.updateFromDrivenWheels( ...
+                drivenWheelAngularVelocity, obj.totalGearRatio);
+        end
+        
+        function updateStateFromVehicleSpeed(obj, vehicleSpeed)
+            obj.state.updateFromVehicleSpeed( ...
+                vehicleSpeed, obj.wheelRadius, obj.totalGearRatio);
+        end
+        
+        function maxOmega = getMaxDrivenWheelAngularVelocity(obj)
+            maxOmega = obj.maxEngineRPM / obj.totalGearRatio * 2 * pi / 60;
+        end
+        
+        function drivenWheelAngularVelocity = limitDrivenWheelAngularVelocity(obj, drivenWheelAngularVelocity)
+            maxOmega = obj.getMaxDrivenWheelAngularVelocity();
+            drivenWheelAngularVelocity = min(max(0, drivenWheelAngularVelocity), maxOmega);
         end
         
         function torque = getMaxTorque(obj, engineSpeed)

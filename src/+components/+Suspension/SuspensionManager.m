@@ -188,10 +188,10 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             rearLatTransfer  = totalLatTransfer * (1 - rollStiffDist);
             
             sign_ay = sign(ay);
-            Fz_lat_FL = -sign_ay * frontLatTransfer;
-            Fz_lat_FR =  sign_ay * frontLatTransfer;
-            Fz_lat_RL = -sign_ay * rearLatTransfer;
-            Fz_lat_RR =  sign_ay * rearLatTransfer;
+            Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
+            Fz_lat_FR =  sign_ay * frontLatTransfer / 2;
+            Fz_lat_RL = -sign_ay * rearLatTransfer / 2;
+            Fz_lat_RR =  sign_ay * rearLatTransfer / 2;
             
             % --- Longitudinal load transfer ---
             % positive ax (acceleration) → load transfers to rear

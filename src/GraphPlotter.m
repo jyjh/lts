@@ -425,11 +425,24 @@ classdef GraphPlotter
             
             % --- Drive Force vs Time ---
             subplot(2,2,2);
+            yyaxis left;
             plot(time, stateLog.F_drive, 'g-', 'LineWidth', 1.5);
             xlabel('Time [s]');
             ylabel('Drive Force [N]');
-            title('Drive Force');
+            title('Drive Force & Motor Speed');
             grid on;
+            
+            if isfield(stateLog, 'motorRPM')
+                yyaxis right;
+                plot(time, stateLog.motorRPM, 'm-', 'LineWidth', 1);
+                ylabel('Motor Speed [rpm]');
+                if isprop(vehicle.powertrain, 'rpmFalloffStartRPM') && vehicle.powertrain.rpmFalloffStartRPM > 0
+                    yline(vehicle.powertrain.rpmFalloffStartRPM, 'm:', 'Falloff start');
+                end
+                if isprop(vehicle.powertrain, 'rpmLimitRPM') && vehicle.powertrain.rpmLimitRPM > 0
+                    yline(vehicle.powertrain.rpmLimitRPM, 'm--', 'RPM cap');
+                end
+            end
             
             % --- Speed vs Distance with throttle/brake color overlay ---
             subplot(2,2,3);

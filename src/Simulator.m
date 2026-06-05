@@ -79,7 +79,14 @@ classdef Simulator
             Fz_front = max(0, Fz_front);
             Fz_rear  = max(0, Fz_rear);
             
-            % --- DRIVE FORCE ---
+            % --- POWERTRAIN STATE & DRIVE FORCE ---
+            if ismethod(vm.powertrain, 'updateStateFromDrivenWheels') && ...
+                    isa(vm.tire, 'components.Tire.PacejkaTire')
+                vm.powertrain.updateStateFromDrivenWheels( ...
+                    [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
+            elseif ismethod(vm.powertrain, 'updateStateFromVehicleSpeed')
+                vm.powertrain.updateStateFromVehicleSpeed(v);
+            end
             F_drive = vm.powertrain.computeDriveForce(v, throttle);
             
             % --- BRAKE FORCE ---
@@ -108,6 +115,18 @@ classdef Simulator
                 vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_corner, obj.dt);
                 vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_corner, obj.dt);
                 vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_corner, obj.dt);
+                
+                if ismethod(vm.powertrain, 'limitDrivenWheelAngularVelocity')
+                    limitedRearOmega = vm.powertrain.limitDrivenWheelAngularVelocity( ...
+                        [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
+                    vm.tire.RL.angularVelocity = limitedRearOmega(1);
+                    vm.tire.RR.angularVelocity = limitedRearOmega(2);
+                end
+                
+                if ismethod(vm.powertrain, 'updateStateFromDrivenWheels')
+                    vm.powertrain.updateStateFromDrivenWheels( ...
+                        [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
+                end
                 
                 % Evaluate tire forces with computed per-corner slip ratios
                 vm.tire.updateAllFromState(state, vm, cornerLoads, state.mu);
@@ -167,6 +186,18 @@ classdef Simulator
             forces.F_downforce = F_downforce;
             forces.F_drag = F_drag;
             forces.F_drive = F_drive;
+            forces.motorRPM = 0;
+            forces.motorTorque = 0;
+            forces.wheelTorque = 0;
+            forces.drivenWheelRPM = 0;
+            forces.rpmLimitActive = false;
+            if isprop(vm.powertrain, 'state') && ~isempty(vm.powertrain.state)
+                forces.motorRPM = vm.powertrain.state.motorRPM;
+                forces.motorTorque = vm.powertrain.state.motorTorque;
+                forces.wheelTorque = vm.powertrain.state.wheelTorque;
+                forces.drivenWheelRPM = vm.powertrain.state.drivenWheelRPM;
+                forces.rpmLimitActive = vm.powertrain.state.rpmLimitActive;
+            end
             forces.aeroFz_front = aeroForces.Fz_front;
             forces.aeroFz_rear  = aeroForces.Fz_rear;
         end
@@ -214,6 +245,11 @@ classdef Simulator
                 'F_downforce', zeros(maxSteps, 1), ...
                 'F_drag',      zeros(maxSteps, 1), ...
                 'F_drive',     zeros(maxSteps, 1), ...
+                'motorRPM',    zeros(maxSteps, 1), ...
+                'motorTorque', zeros(maxSteps, 1), ...
+                'wheelTorque', zeros(maxSteps, 1), ...
+                'drivenWheelRPM', zeros(maxSteps, 1), ...
+                'rpmLimitActive', false(maxSteps, 1), ...
                 'pitchAngle',  zeros(maxSteps, 1), ...
                 'Fz_FL',       zeros(maxSteps, 1), ...
                 'Fz_FR',       zeros(maxSteps, 1), ...
@@ -292,6 +328,11 @@ classdef Simulator
                     stateLog.F_downforce(step) = forces.F_downforce;
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
+                    stateLog.motorRPM(step)    = forces.motorRPM;
+                    stateLog.motorTorque(step) = forces.motorTorque;
+                    stateLog.wheelTorque(step) = forces.wheelTorque;
+                    stateLog.drivenWheelRPM(step) = forces.drivenWheelRPM;
+                    stateLog.rpmLimitActive(step) = forces.rpmLimitActive;
                     stateLog.pitchAngle(step)  = newState.pitchAngle;
                     stateLog.aeroFz_front(step) = forces.aeroFz_front;
                     stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
