@@ -20,6 +20,9 @@ classdef Simulator
         
         % Simulation timestep [s]
         dt = 0.001
+        
+        % Internal: track whether maxSpeed warning was issued (warn once)
+        warnedMaxSpeed = false
     end
     
     methods
@@ -130,15 +133,11 @@ classdef Simulator
             ax = F_net_long / vm.totalMass;
             ax = max(-maxAx, min(ax, maxAx));
             
-            % --- SPEED LIMITERS ---
+            % --- CORNERING SPEED LIMITER ---
             if v > vMaxCorner && abs(curKappa) > 1e-6
                 excessSpeed = v - vMaxCorner;
                 brakingAccel = -min(excessSpeed / obj.dt * 0.5, maxAx);
                 ax = min(ax, brakingAccel);
-            end
-            
-            if v >= vm.maxSpeed
-                ax = min(ax, 0);
             end
             
             % --- LATERAL DYNAMICS ---
@@ -156,10 +155,20 @@ classdef Simulator
             newState.brake = brake;
             newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
             
+            % Sanity check: warn once if speed exceeds maxSpeed
+            if newState.speed > vm.maxSpeed && ~obj.warnedMaxSpeed
+                obj.warnedMaxSpeed = true;
+                warning('Simulator:SpeedExceeded', ...
+                    'Speed (%.1f m/s / %.1f km/h) exceeded maxSpeed (%.1f m/s). Check simulation.', ...
+                    newState.speed, newState.speed * 3.6, vm.maxSpeed);
+            end
+            
             % --- RETURN FORCES ---
             forces.F_downforce = F_downforce;
             forces.F_drag = F_drag;
             forces.F_drive = F_drive;
+            forces.aeroFz_front = aeroForces.Fz_front;
+            forces.aeroFz_rear  = aeroForces.Fz_rear;
         end
         
         function [stateLog, lapTime] = simulate(obj, initialState, track)
@@ -225,7 +234,17 @@ classdef Simulator
                 'omega_FL',     zeros(maxSteps, 1), ...
                 'omega_FR',     zeros(maxSteps, 1), ...
                 'omega_RL',     zeros(maxSteps, 1), ...
-                'omega_RR',     zeros(maxSteps, 1) ...
+                'omega_RR',     zeros(maxSteps, 1), ...
+                'tireFx_FL',    zeros(maxSteps, 1), ...
+                'tireFx_FR',    zeros(maxSteps, 1), ...
+                'tireFx_RL',    zeros(maxSteps, 1), ...
+                'tireFx_RR',    zeros(maxSteps, 1), ...
+                'tireFy_FL',    zeros(maxSteps, 1), ...
+                'tireFy_FR',    zeros(maxSteps, 1), ...
+                'tireFy_RL',    zeros(maxSteps, 1), ...
+                'tireFy_RR',    zeros(maxSteps, 1), ...
+                'aeroFz_front', zeros(maxSteps, 1), ...
+                'aeroFz_rear',  zeros(maxSteps, 1) ...
             );
             
             % Working state (will be updated each step)
@@ -274,6 +293,8 @@ classdef Simulator
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
                     stateLog.pitchAngle(step)  = newState.pitchAngle;
+                    stateLog.aeroFz_front(step) = forces.aeroFz_front;
+                    stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
                     
                     % Per-corner suspension telemetry
                     susp = vm.suspension;
@@ -290,7 +311,7 @@ classdef Simulator
                     stateLog.damperVel_RL(step) = susp.rearLeft.state.damperVelocity;
                     stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
                     
-                    % Per-corner tire slip ratio and wheel speed telemetry
+                    % Per-corner tire telemetry (slip, wheel speed, forces)
                     if isa(vm.tire, 'components.Tire.PacejkaTire')
                         stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
                         stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
@@ -300,6 +321,14 @@ classdef Simulator
                         stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
                         stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
                         stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
+                        stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
+                        stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
+                        stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
+                        stateLog.tireFx_RR(step)    = vm.tire.RR.Fx;
+                        stateLog.tireFy_FL(step)    = vm.tire.FL.Fy;
+                        stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
+                        stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
+                        stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
                     end
                 end
                 

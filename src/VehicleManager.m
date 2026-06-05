@@ -22,21 +22,19 @@ classdef VehicleManager
         staticFrontWeight = 0.45 % Static front weight distribution [0-1]
         
         % Simulation parameters
-        maxSpeed      = 40       % Speed limiter [m/s] (~144 km/h)
+        maxSpeed      = 80       % Speed limiter [m/s] (~288 km/h)
     end
     
     methods
-        function obj = VehicleManager(aero, suspension, powertrain, tire, track, totalMass, maxSpeed)
+        function obj = VehicleManager(aero, suspension, powertrain, tire, track)
             % VEHICLEMANAGER Construct with all component objects
-            %   VehicleManager(aero, suspension, powertrain, tire, track, totalMass, maxSpeed)
+            %   VehicleManager(aero, suspension, powertrain, tire, track)
             
             obj.aero = aero;
             obj.suspension = suspension;
             obj.powertrain = powertrain;
             obj.tire = tire;
             obj.track = track;
-            obj.totalMass = totalMass;
-            obj.maxSpeed = maxSpeed;
         end
     end
 end

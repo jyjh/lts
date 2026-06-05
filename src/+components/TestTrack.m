@@ -13,7 +13,7 @@ classdef TestTrack < components.Track
     methods
         function obj = TestTrack(trackType)
             % TESTTRACK Create a test track
-            %   trackType: 'straight', 'oval', 'skidpad', 'autocross'
+            %   trackType: 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
             %   Default is 'oval'
             
             if nargin < 1
@@ -29,6 +29,8 @@ classdef TestTrack < components.Track
                     obj = buildSkidpad(obj);
                 case 'autocross'
                     obj = buildAutocross(obj);
+                case 'busstop'
+                    obj = buildBusstop(obj);
                 otherwise
                     error('Unknown track type: %s', trackType);
             end
@@ -150,6 +152,72 @@ classdef TestTrack < components.Track
             y_fine = spline(t_ctrl, controlPts(:,2), t_fine);
             
             obj.trackPoints = [x_fine(:), y_fine(:)];
+            obj = finalizeTrack(obj, 1.2);
+        end
+        
+        function obj = buildBusstop(obj)
+            % BUSSTOP chicane
+            % straight before and after.
+            %
+            % Layout (open track, not a closed loop):
+            %   1. Entry straight  — 80 m, heading East
+            %   2. Left turn       — 90° CCW arc, R = 20 m
+            %   3. Short straight  — 15 m, heading North
+            %   4. Right turn      — 90° CW arc, R = 20 m
+            %   5. Exit straight   — 80 m, heading East
+            
+            ds = 0.5;            % point spacing [m]
+            turnRadius = 20;     % chicane turn radius [m]
+            
+            % ---- Segment 1: Entry straight (East along y=0) ----
+            entryLen = 150;
+            nEntry = round(entryLen / ds) + 1;
+            x_entry = linspace(0, entryLen, nEntry)';
+            y_entry = zeros(nEntry, 1);
+            
+            % ---- Segment 2: Left turn (90° CCW arc, R=20) ----
+            % Center at (entryLen, turnRadius) = (80, 20)
+            % Arc from θ = -π/2 (bottom, at (80,0)) to θ = 0 (right, at (100,20))
+            arcLen = pi/2 * turnRadius;
+            nArc = max(round(arcLen / ds) + 1, 10);
+            theta_left = linspace(-pi/2, 0, nArc)';
+            cx_left = entryLen;
+            cy_left = turnRadius;
+            x_leftArc = cx_left + turnRadius * cos(theta_left);
+            y_leftArc = cy_left + turnRadius * sin(theta_left);
+            
+            % ---- Segment 3: Short straight (North) ----
+            shortLen = 6;
+            nShort = round(shortLen / ds) + 1;
+            % Starts where left arc ends: (entryLen + turnRadius, turnRadius) = (100, 20)
+            x_short = (entryLen + turnRadius) * ones(nShort, 1);
+            y_short = linspace(turnRadius, turnRadius + shortLen, nShort)';
+            
+            % ---- Segment 4: Right turn (90° CW arc, R=20) ----
+            % Center at (entryLen + 2*turnRadius, turnRadius + shortLen) = (120, 35)
+            % Arc from θ = π (left, at (100,35)) to θ = π/2 (top, at (120,55))
+            cx_right = entryLen + 2 * turnRadius;
+            cy_right = turnRadius + shortLen;
+            theta_right = linspace(pi, pi/2, nArc)';
+            x_rightArc = cx_right + turnRadius * cos(theta_right);
+            y_rightArc = cy_right + turnRadius * sin(theta_right);
+            
+            % ---- Segment 5: Exit straight (East) ----
+            exitLen = 80;
+            nExit = round(exitLen / ds) + 1;
+            % Starts where right arc ends: (cx_right, cy_right + turnRadius) = (120, 55)
+            x_exit = linspace(cx_right, cx_right + exitLen, nExit)';
+            y_exit = (cy_right + turnRadius) * ones(nExit, 1);
+            
+            % ---- Combine segments (remove duplicate junction points) ----
+            obj.trackPoints = [
+                x_entry,    y_entry;
+                x_leftArc(2:end),  y_leftArc(2:end);
+                x_short(2:end),    y_short(2:end);
+                x_rightArc(2:end), y_rightArc(2:end);
+                x_exit(2:end),     y_exit(2:end)
+            ];
+            
             obj = finalizeTrack(obj, 1.2);
         end
         

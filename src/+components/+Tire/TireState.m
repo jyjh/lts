@@ -29,7 +29,7 @@ classdef TireState < handle
         angularVelocity = 0
         
         % Effective tire rolling radius [m]
-        wheelRadius     = 0.2286
+        wheelRadius     = 0.241935
         
         % --- Outputs (computed each timestep) ---
         

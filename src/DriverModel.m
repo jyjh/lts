@@ -15,7 +15,6 @@ classdef DriverModel
         lookaheadTime    = 2.0   % Seconds ahead to look
         minLookaheadDist = 10    % Minimum lookahead distance [m]
         hysteresis       = 0.02  % 2% speed hysteresis band
-        maintainThrottle = 0.5   % Partial throttle when maintaining speed
     end
     
     methods
@@ -96,12 +95,11 @@ classdef DriverModel
                 vMaxAhead = vm.maxSpeed;
             end
             
-            % Decision logic
-            vTarget = min(vMaxCurrent, min(vMaxAhead, vm.maxSpeed));
+            % Decision logic: target speed based only on cornering limits
+            vTarget = min(vMaxCurrent, vMaxAhead);
             
-            % Compute required deceleration to reach vTarget
             if speed > vTarget * (1 + obj.hysteresis)
-                % Need to brake
+                % Over cornering limit → brake
                 if lookAheadDist > 0
                     reqDecel = (speed^2 - vTarget^2) / (2 * lookAheadDist);
                 else
@@ -113,13 +111,9 @@ classdef DriverModel
                 brake = reqDecel / maxLateralAccel;
                 brake = max(0, min(1, brake));
                 throttle = 0;
-            elseif speed < vTarget * (1 - obj.hysteresis)
-                % Can accelerate
-                throttle = 1.0;
-                brake = 0;
             else
-                % Maintain speed - partial throttle to overcome drag
-                throttle = obj.maintainThrottle;
+                % Full throttle — let drag naturally limit top speed
+                throttle = 1.0;
                 brake = 0;
             end
         end

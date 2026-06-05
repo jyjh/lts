@@ -13,9 +13,9 @@ clear; clc; close all;
 
 %% ====================================================================
 %  SELECT TRACK TYPE
-%  Options: 'straight', 'oval', 'skidpad', 'autocross'
+%  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
 %  ====================================================================
-trackType = 'autocross';
+trackType = 'straight';
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -42,7 +42,7 @@ rearWing = components.Aero.RearWing( ...
     -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
     0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
     1.1, ...                   % ClA: Highest DF element
-    0.55, ...                  % CdA: Highest drag element
+    0.8, ...                  % CdA: Highest drag element
     3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
     0.15 ...                   % heightSensitivity: Moderately sensitive
 );
@@ -109,10 +109,7 @@ fprintf('\n');
 dt = 0.001;
 
 % VehicleManager is created first so SuspensionManager can reference it
-vehicle = VehicleManager(aero, [], powertrain, tire, track, ...
-    280, ...                    % totalMass: Car + driver [kg]
-    40 ...                      % maxSpeed: Speed limit [m/s] ~144 km/h
-);
+vehicle = VehicleManager(aero, [], powertrain, tire, track);
 
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...
