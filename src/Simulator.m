@@ -83,6 +83,33 @@ classdef Simulator
             maxBrakeForce = 0.7 * W + F_downforce * 0.7;
             F_brake = -brake * maxBrakeForce;
             
+            % --- WHEEL DYNAMICS & SLIP RATIO ---
+            % Compute per-corner torques and update wheel angular velocities,
+            % then evaluate tire forces with computed slip ratios.
+            %
+            % RWD assumption: drive torque only on rear wheels.
+            % Brake distribution: equal front/rear (50/50).
+            % Drive force is split equally between the two driven wheels.
+            if isa(vm.tire, 'components.Tire.PacejkaTire')
+                R = vm.tire.RL.wheelRadius;  % all corners share same radius
+                
+                % Per-corner drive torque (RWD: rear only, split equally)
+                T_drive_front = 0;
+                T_drive_rear  = F_drive * R / 2;
+                
+                % Per-corner brake torque (equal distribution, split 4 ways)
+                T_brake_corner = abs(F_brake) * R / 4;
+                
+                % Update wheel rotational state (uses previous-timestep Fx)
+                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_corner, obj.dt);
+                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_corner, obj.dt);
+                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_corner, obj.dt);
+                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_corner, obj.dt);
+                
+                % Evaluate tire forces with computed per-corner slip ratios
+                vm.tire.updateAllFromState(state, vm, cornerLoads, state.mu);
+            end
+            
             % --- MAX CORNERING SPEED ---
             totalNormalLoad = W + F_downforce;
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
@@ -190,7 +217,15 @@ classdef Simulator
                 'damperVel_FL', zeros(maxSteps, 1), ...
                 'damperVel_FR', zeros(maxSteps, 1), ...
                 'damperVel_RL', zeros(maxSteps, 1), ...
-                'damperVel_RR', zeros(maxSteps, 1) ...
+                'damperVel_RR', zeros(maxSteps, 1), ...
+                'slipRatio_FL', zeros(maxSteps, 1), ...
+                'slipRatio_FR', zeros(maxSteps, 1), ...
+                'slipRatio_RL', zeros(maxSteps, 1), ...
+                'slipRatio_RR', zeros(maxSteps, 1), ...
+                'omega_FL',     zeros(maxSteps, 1), ...
+                'omega_FR',     zeros(maxSteps, 1), ...
+                'omega_RL',     zeros(maxSteps, 1), ...
+                'omega_RR',     zeros(maxSteps, 1) ...
             );
             
             % Working state (will be updated each step)
@@ -254,6 +289,18 @@ classdef Simulator
                     stateLog.damperVel_FR(step) = susp.frontRight.state.damperVelocity;
                     stateLog.damperVel_RL(step) = susp.rearLeft.state.damperVelocity;
                     stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
+                    
+                    % Per-corner tire slip ratio and wheel speed telemetry
+                    if isa(vm.tire, 'components.Tire.PacejkaTire')
+                        stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
+                        stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
+                        stateLog.slipRatio_RL(step) = vm.tire.RL.slipRatio;
+                        stateLog.slipRatio_RR(step) = vm.tire.RR.slipRatio;
+                        stateLog.omega_FL(step)     = vm.tire.FL.angularVelocity;
+                        stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
+                        stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
+                        stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
+                    end
                 end
                 
                 % Advance state

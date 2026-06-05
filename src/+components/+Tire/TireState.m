@@ -23,6 +23,14 @@ classdef TireState < handle
         % Inclination (camber) angle [rad] (positive = top tilted outward)
         camberAngle     = 0
         
+        % --- Wheel rotational state ---
+        
+        % Wheel angular velocity [rad/s] (positive = rolling forward)
+        angularVelocity = 0
+        
+        % Effective tire rolling radius [m]
+        wheelRadius     = 0.2286
+        
         % --- Outputs (computed each timestep) ---
         
         % Lateral force Fy [N] (positive = left)
@@ -47,30 +55,33 @@ classdef TireState < handle
     methods
         function obj = TireState()
             % TIRESTATE Construct with zero initial conditions
-            obj.normalForce = 0;
-            obj.slipAngle   = 0;
-            obj.slipRatio   = 0;
-            obj.camberAngle = 0;
-            obj.Fy          = 0;
-            obj.Fx          = 0;
-            obj.Mx          = 0;
-            obj.My          = 0;
-            obj.Mz          = 0;
-            obj.peakMu      = 0;
+            obj.normalForce     = 0;
+            obj.slipAngle       = 0;
+            obj.slipRatio       = 0;
+            obj.camberAngle     = 0;
+            obj.angularVelocity = 0;
+            % wheelRadius keeps its default (0.2286 m)
+            obj.Fy              = 0;
+            obj.Fx              = 0;
+            obj.Mx              = 0;
+            obj.My              = 0;
+            obj.Mz              = 0;
+            obj.peakMu          = 0;
         end
         
         function reset(obj)
-            % RESET Reset all state to zero
-            obj.normalForce = 0;
-            obj.slipAngle   = 0;
-            obj.slipRatio   = 0;
-            obj.camberAngle = 0;
-            obj.Fy          = 0;
-            obj.Fx          = 0;
-            obj.Mx          = 0;
-            obj.My          = 0;
-            obj.Mz          = 0;
-            obj.peakMu      = 0;
+            % RESET Reset all dynamic state to zero
+            obj.normalForce     = 0;
+            obj.slipAngle       = 0;
+            obj.slipRatio       = 0;
+            obj.camberAngle     = 0;
+            obj.angularVelocity = 0;
+            obj.Fy              = 0;
+            obj.Fx              = 0;
+            obj.Mx              = 0;
+            obj.My              = 0;
+            obj.Mz              = 0;
+            obj.peakMu          = 0;
         end
     end
 end
