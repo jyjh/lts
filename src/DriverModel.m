@@ -1,121 +1,233 @@
 classdef DriverModel
-    % DRIVERMODEL Decides throttle and brake inputs based on vehicle state
-    % Extracted from VehicleManager to be a swappable, testable component.
+    % DRIVERMODEL Decides throttle and brake inputs from a racing speed profile
     %
-    % Usage:
-    %   driver = DriverModel(vehicleManager);
-    %   [throttle, brake] = driver.computeInputs(state);
-    
+    % The driver builds a local backward speed envelope from upcoming
+    % curvature and available braking. It stays at full throttle until the
+    % latest feasible braking point, then uses a high brake command. The
+    % only intentional coast state is near a detected corner apex.
+
     properties
         % Reference to VehicleManager for component access
         vehicleManager
-        
+
         % Tuneable driver parameters
-        brakingLookahead = 1.0   % Lookahead factor for braking distance
-        lookaheadTime    = 2.0   % Seconds ahead to look
-        minLookaheadDist = 10    % Minimum lookahead distance [m]
-        hysteresis       = 0.02  % 2% speed hysteresis band
+        brakingLookahead = 1.0    % Multiplier on calculated braking distance
+        lookaheadTime    = 2.0    % Minimum seconds ahead to inspect
+        minLookaheadDist = 15     % Minimum lookahead distance [m]
+        hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
+        corneringUsage   = 0.99   % Fraction of lateral grip used for speed targets
+        brakingUsage     = 0.98   % Fraction of braking capability used in planning
+        minBrakeCommand  = 0.85   % Minimum brake command once braking is required
+        brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
+        throttleBand     = 0.15   % Speed band [m/s] around target before switching
+        apexDistanceTol  = 0.75   % Distance around an apex allowed to coast [m]
+        curvatureTol     = 1e-6   % Curvature below this is treated as straight
+
+        % Cached track geometry
+        trackArcLen      = []
+        trackCurvature   = []
     end
-    
+
     methods
         function obj = DriverModel(vehicleManager)
             % DRIVERMODEL Construct with a VehicleManager reference
-            %   DriverModel(vehicleManager)
             obj.vehicleManager = vehicleManager;
+            obj = obj.cacheTrackGeometry();
         end
-        
+
         function [throttle, brake] = computeInputs(obj, state)
-            % COMPUTEINPUTS Decide throttle and brake for the current situation
-            %   [throttle, brake] = computeInputs(state)
+            % COMPUTEINPUTS Decide throttle and brake for the current state
             %
-            %   state - VehicleState object with current vehicle state.
-            %           Expects the following properties to be set:
-            %             speed     - current vehicle speed [m/s]
-            %             s         - current distance along track [m]
-            %             curvature - current track curvature [1/m]
-            %             mu        - current surface friction
-            %           The state must have vehicleManager set for access
-            %           to components and track data.
-            
+            % The command policy is deliberately close to bang-bang:
+            %   - brake hard if the car is above the latest-braking envelope
+            %   - coast only at the local apex
+            %   - otherwise use full throttle
+
+            speed = max(state.speed, 0);
+            s = state.s;
+            [arcLen, curvature] = obj.getTrackGeometry();
+            nPts = numel(curvature);
+
+            idx = find(arcLen <= s, 1, 'last');
+            if isempty(idx)
+                idx = 1;
+            end
+            idx = max(1, min(idx, nPts));
+
+            [maxLateralAccel, maxBrakeAccel] = obj.estimateAvailableAcceleration(state);
+            lookAheadDist = obj.computeLookaheadDistance(speed, maxBrakeAccel);
+            idxEnd = find(arcLen <= s + lookAheadDist, 1, 'last');
+            if isempty(idxEnd)
+                idxEnd = idx;
+            end
+            if idx < nPts
+                idxEnd = max(idx + 1, min(idxEnd, nPts));
+            else
+                idxEnd = nPts;
+            end
+
+            profileIdx = idx:idxEnd;
+            profileS = arcLen(profileIdx);
+            profileS(1) = s;
+            profileSpeed = obj.computeBackwardSpeedProfile( ...
+                profileS, curvature(profileIdx), maxLateralAccel, maxBrakeAccel);
+
+            targetSpeed = profileSpeed(1);
+            nextTargetSpeed = profileSpeed(min(2, numel(profileSpeed)));
+            speedTolerance = max(obj.throttleBand, obj.hysteresis * max(targetSpeed, 1));
+            speedError = speed - targetSpeed;
+
+            [apexDistance, atApex] = obj.distanceToRelevantApex(idx, s);
+
             throttle = 0;
             brake = 0;
-            
-            vm = obj.vehicleManager;
-            
-            speed    = state.speed;
-            s        = state.s;
-            curKappa = state.curvature;
-            
-            % Get track arrays from VehicleManager's track
-            track     = vm.track;
-            curvature = track.getCurvature();
-            trackPts  = track.getTrackPoints();
-            
-            % Compute arc-length parameterization
+
+            if speedError > speedTolerance
+                brake = obj.computeBrakeCommand(speedError);
+            elseif atApex && abs(speedError) <= speedTolerance
+                throttle = 0;
+                brake = 0;
+            elseif nextTargetSpeed < targetSpeed - speedTolerance && ...
+                    speed >= targetSpeed - speedTolerance
+                brake = obj.minBrakeCommand;
+            else
+                throttle = 1.0;
+            end
+
+            % Do not coast just because the speed error is tiny; outside the
+            % apex zone, choose either throttle or brake.
+            if throttle == 0 && brake == 0 && abs(apexDistance) > obj.apexDistanceTol
+                throttle = 1.0;
+            end
+        end
+    end
+
+    methods (Access = private)
+        function obj = cacheTrackGeometry(obj)
+            track = obj.vehicleManager.track;
+            trackPts = track.getTrackPoints();
+
+            dx = diff(trackPts(:,1));
+            dy = diff(trackPts(:,2));
+            obj.trackArcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
+            obj.trackCurvature = track.getCurvature();
+            obj.trackCurvature = obj.trackCurvature(:);
+        end
+
+        function [arcLen, curvature] = getTrackGeometry(obj)
+            if ~isempty(obj.trackArcLen) && ~isempty(obj.trackCurvature)
+                arcLen = obj.trackArcLen;
+                curvature = obj.trackCurvature;
+                return;
+            end
+
+            track = obj.vehicleManager.track;
+            trackPts = track.getTrackPoints();
             dx = diff(trackPts(:,1));
             dy = diff(trackPts(:,2));
             arcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
-            
-            % Compute max lateral accel from tire grip
+            curvature = track.getCurvature();
+            curvature = curvature(:);
+        end
+
+        function [maxLateralAccel, maxBrakeAccel] = estimateAvailableAcceleration(obj, state)
+            vm = obj.vehicleManager;
             aeroForces = vm.aero.computeForces(state);
             F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
             W = vm.totalMass * 9.81;
             totalNormalLoad = W + F_downforce;
+
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            maxLateralAccel = peakMu * 9.81;
-            
-            % Current max cornering speed
-            if abs(curKappa) > 1e-6
-                vMaxCurrent = sqrt(maxLateralAccel / abs(curKappa));
-            else
-                vMaxCurrent = vm.maxSpeed;
+            maxLateralAccel = max(0.1, peakMu * 9.81 * obj.corneringUsage);
+
+            maxBrakeForce = 0.7 * totalNormalLoad;
+            rollingResistance = 0.015 * totalNormalLoad;
+            brakeLimitedAccel = ...
+                (maxBrakeForce + aeroForces.F_drag + rollingResistance) / vm.totalMass;
+
+            maxBrakeAccel = min(peakMu * 9.81, brakeLimitedAccel) * obj.brakingUsage;
+            maxBrakeAccel = max(maxBrakeAccel, 0.1);
+        end
+
+        function lookAheadDist = computeLookaheadDistance(obj, speed, maxBrakeAccel)
+            brakeDistance = speed^2 / (2 * maxBrakeAccel);
+            lookAheadDist = max([ ...
+                obj.minLookaheadDist, ...
+                speed * obj.lookaheadTime, ...
+                brakeDistance * obj.brakingLookahead + obj.minLookaheadDist]);
+        end
+
+        function profileSpeed = computeBackwardSpeedProfile(obj, profileS, curvature, maxLateralAccel, maxBrakeAccel)
+            vm = obj.vehicleManager;
+            profileSpeed = obj.computeCornerSpeedLimit(curvature, maxLateralAccel);
+            profileSpeed = min(profileSpeed, vm.maxSpeed);
+
+            for i = numel(profileSpeed)-1:-1:1
+                ds = max(profileS(i+1) - profileS(i), 0.001);
+                reachableSpeed = sqrt(profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds);
+                profileSpeed(i) = min(profileSpeed(i), reachableSpeed);
             end
-            
-            % Look ahead for upcoming curvature
-            lookAheadDist = speed * obj.lookaheadTime * obj.brakingLookahead;
-            lookAheadDist = max(lookAheadDist, obj.minLookaheadDist);
-            
-            % Find look-ahead region
-            idx = find(arcLen <= s, 1, 'last');
-            idxEnd = find(arcLen <= s + lookAheadDist, 1, 'last');
-            if isempty(idxEnd)
-                idxEnd = numel(curvature);
+        end
+
+        function speedLimit = computeCornerSpeedLimit(obj, curvature, maxLateralAccel)
+            vm = obj.vehicleManager;
+            absKappa = abs(curvature(:));
+            speedLimit = vm.maxSpeed * ones(size(absKappa));
+
+            cornerIdx = absKappa > obj.curvatureTol;
+            speedLimit(cornerIdx) = sqrt(maxLateralAccel ./ absKappa(cornerIdx));
+            speedLimit = min(speedLimit, vm.maxSpeed);
+        end
+
+        function brake = computeBrakeCommand(obj, speedError)
+            brake = speedError / max(obj.brakeBlendSpeed, eps);
+            brake = max(obj.minBrakeCommand, brake);
+            brake = max(0, min(1, brake));
+        end
+
+        function [apexDistance, atApex] = distanceToRelevantApex(obj, idx, s)
+            [arcLen, curvature] = obj.getTrackGeometry();
+            absKappa = abs(curvature);
+            nPts = numel(curvature);
+            apexDistance = inf;
+            atApex = false;
+
+            if idx > nPts || all(absKappa <= obj.curvatureTol)
+                return;
             end
-            
-            % Compute max speed in look-ahead window
-            upcomingKappa = curvature(idx:min(idxEnd, numel(curvature)));
-            if ~isempty(upcomingKappa)
-                maxUpcomingKappa = max(abs(upcomingKappa));
-                if maxUpcomingKappa > 1e-6
-                    vMaxAhead = sqrt(maxLateralAccel / maxUpcomingKappa);
-                else
-                    vMaxAhead = vm.maxSpeed;
+
+            if absKappa(idx) > obj.curvatureTol
+                segmentStart = idx;
+                turnSign = sign(curvature(idx));
+                while segmentStart > 1 && ...
+                        absKappa(segmentStart - 1) > obj.curvatureTol && ...
+                        sign(curvature(segmentStart - 1)) == turnSign
+                    segmentStart = segmentStart - 1;
                 end
             else
-                vMaxAhead = vm.maxSpeed;
-            end
-            
-            % Decision logic: target speed based only on cornering limits
-            vTarget = min(vMaxCurrent, vMaxAhead);
-            
-            if speed > vTarget * (1 + obj.hysteresis)
-                % Over cornering limit → brake
-                if lookAheadDist > 0
-                    reqDecel = (speed^2 - vTarget^2) / (2 * lookAheadDist);
-                else
-                    reqDecel = maxLateralAccel;
+                nextCornerOffset = find(absKappa(idx:end) > obj.curvatureTol, 1, 'first');
+                if isempty(nextCornerOffset)
+                    return;
                 end
-                reqDecel = max(0, reqDecel);
-                
-                % Brake intensity [0-1]
-                brake = reqDecel / maxLateralAccel;
-                brake = max(0, min(1, brake));
-                throttle = 0;
-            else
-                % Full throttle — let drag naturally limit top speed
-                throttle = 1.0;
-                brake = 0;
+                segmentStart = idx + nextCornerOffset - 1;
+                turnSign = sign(curvature(segmentStart));
             end
+
+            segmentEnd = segmentStart;
+            while segmentEnd < nPts && ...
+                    absKappa(segmentEnd + 1) > obj.curvatureTol && ...
+                    sign(curvature(segmentEnd + 1)) == turnSign
+                segmentEnd = segmentEnd + 1;
+            end
+
+            segmentIdx = segmentStart:segmentEnd;
+            maxKappa = max(absKappa(segmentIdx));
+            apexCandidates = segmentIdx(absKappa(segmentIdx) >= maxKappa * 0.999);
+            apexIdx = round(mean(apexCandidates));
+
+            apexDistance = arcLen(apexIdx) - s;
+            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
+                absKappa(idx) > obj.curvatureTol;
         end
     end
 end
