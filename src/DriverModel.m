@@ -4,7 +4,8 @@ classdef DriverModel
     % The driver builds a local backward speed envelope from upcoming
     % curvature and available braking. It stays at full throttle until the
     % latest feasible braking point, then uses a high brake command. The
-    % only intentional coast state is near a detected corner apex.
+    % only intentional coast state is near a detected corner apex. Steering
+    % is shaped by the active corner segment, peaking at the corner midpoint.
 
     properties
         % Reference to VehicleManager for component access
@@ -22,6 +23,9 @@ classdef DriverModel
         throttleBand     = 0.15   % Speed band [m/s] around target before switching
         apexDistanceTol  = 0.75   % Distance around an apex allowed to coast [m]
         curvatureTol     = 1e-6   % Curvature below this is treated as straight
+        steeringUsage    = 1.0    % Fraction of path curvature converted to steer
+        maxSteeringAngle = 0.6    % Steering angle limit [rad]
+        minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
 
         % Cached track geometry
         trackArcLen      = []
@@ -35,13 +39,15 @@ classdef DriverModel
             obj = obj.cacheTrackGeometry();
         end
 
-        function [throttle, brake] = computeInputs(obj, state)
+        function [throttle, brake, steer] = computeInputs(obj, state)
             % COMPUTEINPUTS Decide throttle and brake for the current state
             %
             % The command policy is deliberately close to bang-bang:
             %   - brake hard if the car is above the latest-braking envelope
             %   - coast only at the local apex
             %   - otherwise use full throttle
+            % Steering is a sine-shaped command through each corner segment,
+            % with peak steering at the segment midpoint/apex.
 
             speed = max(state.speed, 0);
             s = state.s;
@@ -78,6 +84,8 @@ classdef DriverModel
             speedError = speed - targetSpeed;
 
             [apexDistance, atApex] = obj.distanceToRelevantApex(idx, s);
+            [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
+            longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
 
             throttle = 0;
             brake = 0;
@@ -99,6 +107,9 @@ classdef DriverModel
             if throttle == 0 && brake == 0 && abs(apexDistance) > obj.apexDistanceTol
                 throttle = 1.0;
             end
+
+            throttle = throttle * longitudinalCommandScale;
+            brake = brake * longitudinalCommandScale;
         end
     end
 
@@ -138,14 +149,16 @@ classdef DriverModel
             totalNormalLoad = W + F_downforce;
 
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            maxLateralAccel = max(0.1, peakMu * 9.81 * obj.corneringUsage);
+            surfaceMu = max(state.mu, 0);
+            maxTireAccel = peakMu * surfaceMu * 9.81;
+            maxLateralAccel = max(0.1, maxTireAccel * obj.corneringUsage);
 
             maxBrakeForce = 0.7 * totalNormalLoad;
             rollingResistance = 0.015 * totalNormalLoad;
             brakeLimitedAccel = ...
                 (maxBrakeForce + aeroForces.F_drag + rollingResistance) / vm.totalMass;
 
-            maxBrakeAccel = min(peakMu * 9.81, brakeLimitedAccel) * obj.brakingUsage;
+            maxBrakeAccel = min(maxTireAccel, brakeLimitedAccel) * obj.brakingUsage;
             maxBrakeAccel = max(maxBrakeAccel, 0.1);
         end
 
@@ -196,6 +209,62 @@ classdef DriverModel
                 return;
             end
 
+            [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
+            if ~found
+                return;
+            end
+
+            apexS = 0.5 * (arcLen(segmentStart) + arcLen(segmentEnd));
+            apexDistance = apexS - s;
+            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
+                idx >= segmentStart && idx <= segmentEnd && ...
+                absKappa(idx) > obj.curvatureTol;
+        end
+
+        function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
+            [arcLen, curvature] = obj.getTrackGeometry();
+            steer = 0;
+            steeringUsageFrac = 0;
+
+            [segmentStart, segmentEnd, turnSign, found] = obj.findCornerSegment(idx);
+            if ~found
+                return;
+            end
+
+            segmentStartS = arcLen(segmentStart);
+            segmentEndS = arcLen(segmentEnd);
+            segmentLength = max(segmentEndS - segmentStartS, eps);
+            phase = (s - segmentStartS) / segmentLength;
+            phase = max(0, min(1, phase));
+
+            steeringUsageFrac = sin(pi * phase);
+            peakKappa = max(abs(curvature(segmentStart:segmentEnd)));
+            peakSteer = atan(obj.vehicleManager.wheelbase * peakKappa) * obj.steeringUsage;
+            peakSteer = min(obj.maxSteeringAngle, peakSteer);
+
+            steer = turnSign * peakSteer * steeringUsageFrac;
+        end
+
+        function scale = computeLongitudinalCommandScale(obj, steeringUsageFrac)
+            lateralUse = max(0, min(1, abs(steeringUsageFrac)));
+            ellipseScale = sqrt(max(0, 1 - lateralUse^2));
+            reserve = max(0, min(1, obj.minLongitudinalCommandScale));
+            scale = reserve + (1 - reserve) * ellipseScale;
+        end
+
+        function [segmentStart, segmentEnd, turnSign, found] = findCornerSegment(obj, idx)
+            [~, curvature] = obj.getTrackGeometry();
+            absKappa = abs(curvature);
+            nPts = numel(curvature);
+            segmentStart = 1;
+            segmentEnd = 1;
+            turnSign = 0;
+            found = false;
+
+            if idx > nPts || all(absKappa <= obj.curvatureTol)
+                return;
+            end
+
             if absKappa(idx) > obj.curvatureTol
                 segmentStart = idx;
                 turnSign = sign(curvature(idx));
@@ -220,14 +289,7 @@ classdef DriverModel
                 segmentEnd = segmentEnd + 1;
             end
 
-            segmentIdx = segmentStart:segmentEnd;
-            maxKappa = max(absKappa(segmentIdx));
-            apexCandidates = segmentIdx(absKappa(segmentIdx) >= maxKappa * 0.999);
-            apexIdx = round(mean(apexCandidates));
-
-            apexDistance = arcLen(apexIdx) - s;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                absKappa(idx) > obj.curvatureTol;
+            found = true;
         end
     end
 end

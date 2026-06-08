@@ -5,7 +5,7 @@ classdef Simulator
     % state from one timestep to the next (copy-in → copy-out).
     %
     % Two modes of use:
-    %   1. Single step:  [newState, forces] = sim.step(state, throttle, brake, curKappa, curMu, curHeading)
+    %   1. Single step:  [newState, forces] = sim.step(state, throttle, brake, curKappa, curMu, curHeading, steer)
     %   2. Full lap:     [stateLog, lapTime] = sim.simulate(initialState, track)
     %
     % The Simulator composes a VehicleManager (physics components) and a
@@ -38,9 +38,9 @@ classdef Simulator
             end
         end
         
-        function [newState, forces] = step(obj, state, throttle, brake, curKappa, curMu, curHeading)
+        function [newState, forces] = step(obj, state, throttle, brake, curKappa, curMu, curHeading, steer)
             % STEP Progress vehicle state by one timestep
-            %   [newState, forces] = step(state, throttle, brake, curKappa, curMu, curHeading)
+            %   [newState, forces] = step(state, throttle, brake, curKappa, curMu, curHeading, steer)
             %
             %   Given a VehicleState snapshot and driver inputs, compute the
             %   next VehicleState. The input state is NOT mutated.
@@ -52,6 +52,7 @@ classdef Simulator
             %     curKappa    - track curvature at current position [1/m]
             %     curMu       - surface friction at current position
             %     curHeading  - track heading at current position [rad]
+            %     steer       - steering input [rad]
             %
             %   Outputs:
             %     newState    - VehicleState at next timestep
@@ -59,6 +60,9 @@ classdef Simulator
             
             vm = obj.vehicleManager;
             v = state.speed;
+            if nargin < 8
+                steer = state.steer;
+            end
             
             % Copy state (will be mutated by updateFromDynamics)
             newState = state;
@@ -119,48 +123,53 @@ classdef Simulator
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
 
             % Evaluate tire forces with computed per-corner slip ratios
-            vm.tire.updateAllFromState(state, vm, cornerLoads, state.mu);
+            tireInputState = state;
+            tireInputState.steer = steer;
+            tireInputState.curvature = curKappa;
+            tireInputState.mu = curMu;
+            vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu);
             
-            % --- MAX CORNERING SPEED ---
+            % --- COMBINED TIRE GRIP LIMIT ---
             totalNormalLoad = W + F_downforce;
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            maxLateralAccel = peakMu * 9.81;
-            maxAx = peakMu * 9.81;
-            
-            if abs(curKappa) > 1e-6
-                vMaxCorner = sqrt(maxLateralAccel / abs(curKappa));
-            else
-                vMaxCorner = vm.maxSpeed;
-            end
+            maxTireAccel = max(0.1, peakMu * max(curMu, 0) * 9.81);
             
             % --- LONGITUDINAL FORCE BALANCE ---
             F_net_long = F_drive + F_brake - F_drag;
             F_rollResist = 0.015 * (W + F_downforce);
             F_net_long = F_net_long - sign(v) * F_rollResist;
             
-            ax = F_net_long / vm.totalMass;
-            ax = max(-maxAx, min(ax, maxAx));
-            
-            % --- CORNERING SPEED LIMITER ---
-            if v > vMaxCorner && abs(curKappa) > 1e-6
-                excessSpeed = v - vMaxCorner;
-                brakingAccel = -min(excessSpeed / obj.dt * 0.5, maxAx);
-                ax = min(ax, brakingAccel);
-            end
+            axDemand = F_net_long / vm.totalMass;
             
             % --- LATERAL DYNAMICS ---
             if abs(curKappa) > 1e-6 && v > 0.5
-                ay = v^2 * curKappa;
+                ayDemand = v^2 * curKappa;
             else
-                ay = 0;
+                ayDemand = 0;
             end
-            ay = max(-maxLateralAccel, min(ay, maxLateralAccel));
+
+            ay = max(-maxTireAccel, min(ayDemand, maxTireAccel));
+            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
+                ay = sign(ayDemand) * maxTireAccel * 0.995;
+            end
+
+            lateralUsage = min(abs(ay) / maxTireAccel, 1);
+            availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
+            ax = max(-availableLongAccel, min(axDemand, availableLongAccel));
+
+            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
+                vMaxCorner = sqrt(maxTireAccel / abs(curKappa));
+                excessSpeed = max(v - vMaxCorner, 0);
+                correctiveBrakeAccel = min(excessSpeed / max(obj.dt, eps) * 0.5, availableLongAccel);
+                ax = min(ax, -correctiveBrakeAccel);
+            end
             
             % --- INTEGRATE STATE ---
             ds = max(0, v * obj.dt + 0.5 * ax * obj.dt^2);
             
             newState.throttle = throttle;
             newState.brake = brake;
+            newState.steer = steer;
             newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
             
             % Sanity check: warn once if speed exceeds maxSpeed
@@ -229,6 +238,7 @@ classdef Simulator
                 'ay',          zeros(maxSteps, 1), ...
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
+                'steer',       zeros(maxSteps, 1), ...
                 'curvature',   zeros(maxSteps, 1), ...
                 'heading',     zeros(maxSteps, 1), ...
                 'F_downforce', zeros(maxSteps, 1), ...
@@ -296,11 +306,11 @@ classdef Simulator
                 currentState.mu        = curMu;
                 
                 % --- DRIVER MODEL: Compute throttle and brake ---
-                [throttle, brake] = obj.driverModel.computeInputs(currentState);
+                [throttle, brake, steer] = obj.driverModel.computeInputs(currentState);
                 
                 % --- PHYSICS STEP ---
                 [newState, forces] = obj.step( ...
-                    currentState, throttle, brake, curKappa, curMu, curHeading);
+                    currentState, throttle, brake, curKappa, curMu, curHeading, steer);
                 
                 % --- LOG TELEMETRY ---
                 if step <= maxSteps
@@ -312,6 +322,7 @@ classdef Simulator
                     stateLog.ay(step)          = newState.ay;
                     stateLog.throttle(step)    = throttle;
                     stateLog.brake(step)       = brake;
+                    stateLog.steer(step)       = steer;
                     stateLog.curvature(step)   = curKappa;
                     stateLog.heading(step)     = curHeading;
                     stateLog.F_downforce(step) = forces.F_downforce;
