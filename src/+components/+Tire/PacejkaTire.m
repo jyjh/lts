@@ -68,6 +68,7 @@ classdef PacejkaTire < components.Tire.TireModel
             %   camberAngle  — Inclination angle gamma [rad]
             %   mu           — Surface friction multiplier (1.0 = nominal)
             %
+            %   In this codebase, mu is treated as an absolute surface grip cap.
             %   Mutates cornerState in-place with computed forces and moments.
             
             % Store inputs
@@ -101,15 +102,16 @@ classdef PacejkaTire < components.Tire.TireModel
             % Evaluate Pacejka Magic Formula via MFeval (useMode=1: combined)
             outputs = mfeval(params, inputsMF, 111);
             
-            % Store outputs (apply surface friction multiplier)
-            cornerState.Fy = outputs(:,2) * mu;
-            cornerState.Fx = outputs(:,1) * mu;
-            cornerState.Mx = outputs(:,4) * mu;
-            cornerState.My = outputs(:,5) * mu;
-            cornerState.Mz = outputs(:,6) * mu;
-            
-            % Compute peak mu at this load
-            cornerState.peakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
+            rawPeakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
+            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
+
+            % Store outputs capped by the current surface friction coefficient.
+            cornerState.Fy = outputs(:,2) * surfaceScale;
+            cornerState.Fx = outputs(:,1) * surfaceScale;
+            cornerState.Mx = outputs(:,4) * surfaceScale;
+            cornerState.My = outputs(:,5) * surfaceScale;
+            cornerState.Mz = outputs(:,6) * surfaceScale;
+            cornerState.peakMu = rawPeakMu * surfaceScale;
         end
         
         %% ---- TireModel interface methods ----
@@ -130,7 +132,10 @@ classdef PacejkaTire < components.Tire.TireModel
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
-            Fy = outputs.Fy * mu;
+            rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+                obj.tireConstants.nomPressure, obj.tireConstants.params);
+            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
+            Fy = outputs.Fy * surfaceScale;
         end
         
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -149,7 +154,10 @@ classdef PacejkaTire < components.Tire.TireModel
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 1);
             
-            Fx = outputs.Fx * mu;
+            rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+                obj.tireConstants.nomPressure, obj.tireConstants.params);
+            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
+            Fx = outputs.Fx * surfaceScale;
         end
         
         function peakMu = getPeakFriction(obj, normalLoad)
@@ -332,6 +340,7 @@ classdef PacejkaTire < components.Tire.TireModel
             %     vehicleManager - VehicleManager for geometry (wheelbase, weight dist)
             %     cornerLoads    - struct with .FL, .FR, .RL, .RR normal forces [N]
             %     mu             - Surface friction multiplier
+            %                      Treated as an absolute surface grip cap here.
             
             % Compute per-corner slip angles
             slipAngles = obj.computeSlipAngles( ...
@@ -364,6 +373,16 @@ classdef PacejkaTire < components.Tire.TireModel
             %   Currently trivialized to a direct pass-through.
             
             steeringAngle = steerInput;
+        end
+
+        function surfaceScale = computeSurfaceScale(obj, rawPeakMu, surfaceMu)
+            % COMPUTESURFACESCALE Scale tire forces so surface mu is an absolute cap.
+            surfaceMu = max(surfaceMu, 0);
+            if rawPeakMu <= 0
+                surfaceScale = 0;
+            else
+                surfaceScale = min(1, surfaceMu / rawPeakMu);
+            end
         end
         
         function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params)

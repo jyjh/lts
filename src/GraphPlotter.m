@@ -70,7 +70,7 @@ classdef GraphPlotter
             %
             %   Creates a 4-subplot figure with:
             %     1. Speed vs Distance
-            %     2. Track Map colored by speed (with lap time)
+            %     2. Track Map colored by combined G-load (with lap time)
             %     3. Longitudinal & Lateral Acceleration vs Time
             %     4. g-g Diagram (ax vs ay)
             %
@@ -86,6 +86,7 @@ classdef GraphPlotter
             s = stateLog.s;
             axG = stateLog.ax / 9.81;
             ayG = stateLog.ay / 9.81;
+            combinedG = sqrt(axG.^2 + ayG.^2);
             
             if isempty(startIdx)
                 figure('Name', 'LTS - General Overview', 'Position', [50 50 1400 900]);
@@ -100,18 +101,19 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(s)]);
             
-            % --- Track Map colored by speed ---
+            % --- Track Map colored by G-load ---
             if isempty(startIdx), subplot(2,2,2); else, subplot(6,4,startIdx+1); end
             trackPts = track.getTrackPoints();
             arcLen = [0; cumsum(sqrt(diff(trackPts(:,1)).^2 + diff(trackPts(:,2)).^2))];
             xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
             yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
-            scatter(xFit, yFit, 10, speedKmh, 'filled');
-            colorbar;
+            scatter(xFit, yFit, 10, combinedG, 'filled');
+            cb = colorbar;
+            cb.Label.String = 'Combined G Load [g]';
             colormap('jet');
             xlabel('X [m]');
             ylabel('Y [m]');
-            title(sprintf('Track Map (Lap: %.2f s)', lapTime));
+            title(sprintf('Track Map G-Load (Lap: %.2f s)', lapTime));
             axis equal;
             grid on;
             
@@ -161,9 +163,21 @@ classdef GraphPlotter
 
             time = stateLog.time;
             s = stateLog.s;
+            controlTime = time;
+            controlS = s;
+            if isfield(stateLog, 'controlTime')
+                controlTime = stateLog.controlTime;
+            end
+            if isfield(stateLog, 'controlS')
+                controlS = stateLog.controlS;
+            end
             speedKmh = stateLog.speedKmh;
             throttlePct = stateLog.throttle * 100;
             brakePct = stateLog.brake * 100;
+            brakeRequestedPct = brakePct;
+            if isfield(stateLog, 'brakeRequested')
+                brakeRequestedPct = stateLog.brakeRequested * 100;
+            end
             if isfield(stateLog, 'steer')
                 steerDeg = stateLog.steer * 180 / pi;
             else
@@ -177,23 +191,38 @@ classdef GraphPlotter
             % --- Driver inputs vs time ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             yyaxis left;
-            hThrottle = plot(time, throttlePct, 'g-', 'LineWidth', 1); hold on;
-            hBrake = plot(time, brakePct, 'r-', 'LineWidth', 1);
+            hThrottle = plot(controlTime, throttlePct, 'g-', 'LineWidth', 1); hold on;
+            hBrake = plot(controlTime, brakePct, 'r-', 'LineWidth', 1);
+            hBrakeRequested = [];
+            if any(abs(brakeRequestedPct - brakePct) > 1e-6)
+                hBrakeRequested = plot(controlTime, brakeRequestedPct, '--', ...
+                    'Color', [0.5 0 0], 'LineWidth', 0.75);
+            end
             ylabel('Throttle / Brake [%]');
             ylim([-5 105]);
             yyaxis right;
-            hSteer = plot(time, steerDeg, 'b-', 'LineWidth', 1);
+            hSteer = plot(controlTime, steerDeg, 'b-', 'LineWidth', 1);
             ylabel('Steering [deg]');
             xlabel('Time [s]');
             title('Driver Inputs vs Time');
-            legend([hThrottle hBrake hSteer], 'Throttle', 'Brake', 'Steer', 'Location', 'best');
+            if isempty(hBrakeRequested)
+                legend([hThrottle hBrake hSteer], 'Throttle', 'Brake', 'Steer', 'Location', 'best');
+            else
+                legend([hThrottle hBrake hBrakeRequested hSteer], ...
+                    'Throttle', 'Brake', 'Brake req.', 'Steer', 'Location', 'best');
+            end
             grid on;
 
             % --- Driver inputs vs distance ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             yyaxis left;
-            hThrottle = plot(s, throttlePct, 'g-', 'LineWidth', 1); hold on;
-            hBrake = plot(s, brakePct, 'r-', 'LineWidth', 1);
+            hThrottle = plot(controlS, throttlePct, 'g-', 'LineWidth', 1); hold on;
+            hBrake = plot(controlS, brakePct, 'r-', 'LineWidth', 1);
+            hBrakeRequested = [];
+            if any(abs(brakeRequestedPct - brakePct) > 1e-6)
+                hBrakeRequested = plot(controlS, brakeRequestedPct, '--', ...
+                    'Color', [0.5 0 0], 'LineWidth', 0.75);
+            end
             ylabel('Throttle / Brake [%]');
             ylim([-5 105]);
             yyaxis right;
@@ -201,33 +230,38 @@ classdef GraphPlotter
             ylabel('Steering [deg]');
             xlabel('Distance [m]');
             title('Driver Inputs vs Distance');
-            legend([hThrottle hBrake hSteer], 'Throttle', 'Brake', 'Steer', 'Location', 'best');
+            if isempty(hBrakeRequested)
+                legend([hThrottle hBrake hSteer], 'Throttle', 'Brake', 'Steer', 'Location', 'best');
+            else
+                legend([hThrottle hBrake hBrakeRequested hSteer], ...
+                    'Throttle', 'Brake', 'Brake req.', 'Steer', 'Location', 'best');
+            end
             grid on;
-            xlim([0 max(s)]);
+            xlim([0 max(controlS)]);
 
             % --- Steering and curvature ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             yyaxis left;
-            plot(s, steerDeg, 'b-', 'LineWidth', 1); hold on;
+            plot(controlS, steerDeg, 'b-', 'LineWidth', 1); hold on;
             yline(0, 'k-', 'LineWidth', 0.5);
             ylabel('Steering [deg]');
             yyaxis right;
             if isfield(stateLog, 'curvature')
-                plot(s, stateLog.curvature, 'Color', [0.5 0 0.5], 'LineWidth', 1);
+                plot(controlS, stateLog.curvature, 'Color', [0.5 0 0.5], 'LineWidth', 1);
                 ylabel('Curvature [1/m]');
             else
-                plot(s, zeros(size(s)), 'Color', [0.5 0 0.5], 'LineWidth', 1);
+                plot(controlS, zeros(size(controlS)), 'Color', [0.5 0 0.5], 'LineWidth', 1);
                 ylabel('Curvature [1/m]');
             end
             xlabel('Distance [m]');
             title('Steering & Curvature');
             grid on;
-            xlim([0 max(s)]);
+            xlim([0 max(controlS)]);
 
             % --- Speed vs distance with driver input color ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             inputColor = stateLog.throttle - stateLog.brake;
-            scatter(s, speedKmh, 5, inputColor, 'filled');
+            scatter(controlS, speedKmh, 5, inputColor, 'filled');
             colormap(parula);
             cb = colorbar;
             cb.Label.String = 'Throttle - Brake';
@@ -236,7 +270,7 @@ classdef GraphPlotter
             ylabel('Speed [km/h]');
             title('Speed Colored by Driver Input');
             grid on;
-            xlim([0 max(s)]);
+            xlim([0 max(controlS)]);
         end
         
         function plotAero(stateLog, vehicle, aero, useSingleFigure, startIdx)
@@ -637,16 +671,20 @@ classdef GraphPlotter
             
             % --- Force Balance vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
-            % Reconstruct approximate brake force from logged data
-            W = vehicle.totalMass * 9.81;
-            F_brake_approx = zeros(numel(time), 1);
-            brakeIdx = stateLog.brake > 0.01;
-            if any(brakeIdx)
-                maxBrakeForce = 0.7 * W + stateLog.F_downforce(brakeIdx) * 0.7;
-                F_brake_approx(brakeIdx) = -stateLog.brake(brakeIdx) .* maxBrakeForce;
+            if isfield(stateLog, 'F_brake')
+                F_brake_plot = stateLog.F_brake;
+            else
+                W = vehicle.totalMass * 9.81;
+                F_brake_plot = zeros(numel(time), 1);
+                brakeIdx = stateLog.brake > 0.01;
+                if any(brakeIdx)
+                    maxBrakeForce = vehicle.brakeForceCoefficient * ...
+                        (W + stateLog.F_downforce(brakeIdx));
+                    F_brake_plot(brakeIdx) = -stateLog.brake(brakeIdx) .* maxBrakeForce;
+                end
             end
             
-            area(time, [stateLog.F_drive, -stateLog.F_drag, F_brake_approx], ...
+            area(time, [stateLog.F_drive, -stateLog.F_drag, F_brake_plot], ...
                 'LineStyle', 'none');
             legend('Drive', '-Drag', 'Brake', 'Location', 'best');
             xlabel('Time [s]');

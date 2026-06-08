@@ -35,7 +35,7 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 frontWing = components.Aero.FrontWing( ...
     0.9, ...                   % xPosition: 0.9m forward of CG (ahead of front axle)
     0.08, ...                  % zPosition: 8cm above reference plane
-    0.9, ...                   % ClA: Downforce coefficient * area
+    0.45, ...                   % ClA: Downforce coefficient * area
     0.35, ...                  % CdA: Drag coefficient * area
     -5.0, ...                  % pitchSensitivityClA: Loses DF when nose pitches up
     0.3 ...                    % heightSensitivity: Sensitive to ride height
@@ -47,7 +47,7 @@ fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
 rearWing = components.Aero.RearWing( ...
     -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
     0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
-    1.1, ...                   % ClA: Highest DF element
+    0.55, ...                   % ClA: Highest DF element
     0.8, ...                  % CdA: Highest drag element
     3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
     0.15 ...                   % heightSensitivity: Moderately sensitive
@@ -59,7 +59,7 @@ fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
 floor = components.Aero.UnderbodyFloor( ...
     0.0, ...                   % xPosition: At CG
     0.035, ...                 % zPosition: 3.5cm (nominal floor height)
-    0.8, ...                   % ClA: Moderate DF
+    0.4, ...                   % ClA: Moderate DF
     0.10, ...                  % CdA: Very low drag
     -8.0, ...                  % pitchSensitivityClA: Very pitch-sensitive (ground effect)
     0.015, ...                 % stallHeight: Stall below 1.5cm

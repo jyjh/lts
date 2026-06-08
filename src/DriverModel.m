@@ -5,7 +5,8 @@ classdef DriverModel
     % curvature and available braking. It stays at full throttle until the
     % latest feasible braking point, then uses a high brake command. The
     % only intentional coast state is near a detected corner apex. Steering
-    % is shaped by the active corner segment, peaking at the corner midpoint.
+    % is shaped by the active corner segment, peaking at a configurable
+    % apex phase that defaults to the corner midpoint.
 
     properties
         % Reference to VehicleManager for component access
@@ -26,6 +27,7 @@ classdef DriverModel
         steeringUsage    = 1.0    % Fraction of path curvature converted to steer
         maxSteeringAngle = 0.6    % Steering angle limit [rad]
         minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
+        apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
 
         % Cached track geometry
         trackArcLen      = []
@@ -83,18 +85,20 @@ classdef DriverModel
             speedTolerance = max(obj.throttleBand, obj.hysteresis * max(targetSpeed, 1));
             speedError = speed - targetSpeed;
 
-            [apexDistance, atApex] = obj.distanceToRelevantApex(idx, s);
+            [apexDistance, atApex, inActiveCorner, afterApex] = obj.distanceToRelevantApex(idx, s);
             [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
             longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
 
             throttle = 0;
             brake = 0;
 
-            if speedError > speedTolerance
-                brake = obj.computeBrakeCommand(speedError);
-            elseif atApex && abs(speedError) <= speedTolerance
+            if inActiveCorner && afterApex
+                throttle = 1.0;
+            elseif atApex
                 throttle = 0;
                 brake = 0;
+            elseif speedError > speedTolerance
+                brake = obj.computeBrakeCommand(speedError);
             elseif nextTargetSpeed < targetSpeed - speedTolerance && ...
                     speed >= targetSpeed - speedTolerance
                 brake = obj.minBrakeCommand;
@@ -149,11 +153,25 @@ classdef DriverModel
             totalNormalLoad = W + F_downforce;
 
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            surfaceMu = max(state.mu, 0);
-            maxTireAccel = peakMu * surfaceMu * 9.81;
+            effectiveMu = min(max(peakMu, 0), max(state.mu, 0));
+            maxTireAccel = effectiveMu * totalNormalLoad / vm.totalMass;
             maxLateralAccel = max(0.1, maxTireAccel * obj.corneringUsage);
 
-            maxBrakeForce = 0.7 * totalNormalLoad;
+            frontNormalLoad = max(W * vm.staticFrontWeight + aeroForces.Fz_front, 0);
+            rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
+            frontMu = min(max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0), max(state.mu, 0));
+            rearMu = min(max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0), max(state.mu, 0));
+            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
+            brakeBiasRear = 1 - brakeBiasFront;
+            brakeGripLimit = inf;
+            if brakeBiasFront > eps
+                brakeGripLimit = min(brakeGripLimit, frontMu * frontNormalLoad / brakeBiasFront);
+            end
+            if brakeBiasRear > eps
+                brakeGripLimit = min(brakeGripLimit, rearMu * rearNormalLoad / brakeBiasRear);
+            end
+
+            maxBrakeForce = min(vm.brakeForceCoefficient * totalNormalLoad, brakeGripLimit);
             rollingResistance = 0.015 * totalNormalLoad;
             brakeLimitedAccel = ...
                 (maxBrakeForce + aeroForces.F_drag + rollingResistance) / vm.totalMass;
@@ -198,12 +216,14 @@ classdef DriverModel
             brake = max(0, min(1, brake));
         end
 
-        function [apexDistance, atApex] = distanceToRelevantApex(obj, idx, s)
+        function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
             [arcLen, curvature] = obj.getTrackGeometry();
             absKappa = abs(curvature);
             nPts = numel(curvature);
             apexDistance = inf;
             atApex = false;
+            inActiveCorner = false;
+            afterApex = false;
 
             if idx > nPts || all(absKappa <= obj.curvatureTol)
                 return;
@@ -214,11 +234,13 @@ classdef DriverModel
                 return;
             end
 
-            apexS = 0.5 * (arcLen(segmentStart) + arcLen(segmentEnd));
+            apexS = obj.computeApexS(arcLen, segmentStart, segmentEnd);
             apexDistance = apexS - s;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                idx >= segmentStart && idx <= segmentEnd && ...
+            inActiveCorner = idx >= segmentStart && idx <= segmentEnd && ...
                 absKappa(idx) > obj.curvatureTol;
+            afterApex = inActiveCorner && s >= apexS;
+            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
+                inActiveCorner;
         end
 
         function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
@@ -237,7 +259,12 @@ classdef DriverModel
             phase = (s - segmentStartS) / segmentLength;
             phase = max(0, min(1, phase));
 
-            steeringUsageFrac = sin(pi * phase);
+            apexPhaseClamped = obj.getClampedApexPhase();
+            if phase <= apexPhaseClamped
+                steeringUsageFrac = sin((pi / 2) * phase / apexPhaseClamped);
+            else
+                steeringUsageFrac = sin((pi / 2) * (1 - phase) / (1 - apexPhaseClamped));
+            end
             peakKappa = max(abs(curvature(segmentStart:segmentEnd)));
             peakSteer = atan(obj.vehicleManager.wheelbase * peakKappa) * obj.steeringUsage;
             peakSteer = min(obj.maxSteeringAngle, peakSteer);
@@ -290,6 +317,17 @@ classdef DriverModel
             end
 
             found = true;
+        end
+
+        function apexS = computeApexS(obj, arcLen, segmentStart, segmentEnd)
+            apexPhaseClamped = obj.getClampedApexPhase();
+            segmentStartS = arcLen(segmentStart);
+            segmentEndS = arcLen(segmentEnd);
+            apexS = segmentStartS + apexPhaseClamped * (segmentEndS - segmentStartS);
+        end
+
+        function apexPhaseClamped = getClampedApexPhase(obj)
+            apexPhaseClamped = max(0.05, min(0.95, obj.apexPhase));
         end
     end
 end

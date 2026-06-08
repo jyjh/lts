@@ -87,17 +87,70 @@ classdef Simulator
             vm.powertrain.updateStateFromDrivenWheels( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
             F_drive = vm.powertrain.computeDriveForce(v, throttle);
-            
+
+            % --- COMBINED TIRE GRIP LIMIT ---
+            totalNormalLoad = W + F_downforce;
+            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
+            effectiveMu = min(max(peakMu, 0), max(curMu, 0));
+            maxTireAccel = max(0.1, effectiveMu * totalNormalLoad / vm.totalMass);
+
+            % --- LATERAL DYNAMICS ---
+            if abs(curKappa) > 1e-6 && v > 0.5
+                ayDemand = v^2 * curKappa;
+            else
+                ayDemand = 0;
+            end
+
+            ay = max(-maxTireAccel, min(ayDemand, maxTireAccel));
+            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
+                ay = sign(ayDemand) * maxTireAccel * 0.995;
+            end
+
+            lateralUsage = min(abs(ay) / maxTireAccel, 1);
+            availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
+
             % --- BRAKE FORCE ---
-            maxBrakeForce = 0.7 * W + F_downforce * 0.7;
-            F_brake = -brake * maxBrakeForce;
+            brakeCommand = max(0, min(1, brake));
+            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
+            brakeBiasRear = 1 - brakeBiasFront;
+            brakeForceCapacity = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
+
+            longGripScale = sqrt(max(0, 1 - lateralUsage^2));
+            mu_FL = min(max(vm.tire.getPeakFriction(cornerLoads.FL), 0), max(curMu, 0));
+            mu_FR = min(max(vm.tire.getPeakFriction(cornerLoads.FR), 0), max(curMu, 0));
+            mu_RL = min(max(vm.tire.getPeakFriction(cornerLoads.RL), 0), max(curMu, 0));
+            mu_RR = min(max(vm.tire.getPeakFriction(cornerLoads.RR), 0), max(curMu, 0));
+            longGrip_FL = mu_FL * max(cornerLoads.FL, 0) * longGripScale;
+            longGrip_FR = mu_FR * max(cornerLoads.FR, 0) * longGripScale;
+            longGrip_RL = mu_RL * max(cornerLoads.RL, 0) * longGripScale;
+            longGrip_RR = mu_RR * max(cornerLoads.RR, 0) * longGripScale;
+
+            brakeGripLimit = inf;
+            if brakeBiasFront > eps
+                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_FL / brakeBiasFront);
+                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_FR / brakeBiasFront);
+            end
+            if brakeBiasRear > eps
+                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RL / brakeBiasRear);
+                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RR / brakeBiasRear);
+            end
+
+            maxBrakeForce = min(brakeForceCapacity, brakeGripLimit);
+            brakeForceMag = min(brakeCommand * brakeForceCapacity, maxBrakeForce);
+            F_brake_front = brakeForceMag * brakeBiasFront;
+            F_brake_rear = brakeForceMag * brakeBiasRear;
+            F_brake = -brakeForceMag;
+            effectiveBrakeCommand = 0;
+            if brakeForceCapacity > eps
+                effectiveBrakeCommand = brakeForceMag / brakeForceCapacity;
+            end
             
             % --- WHEEL DYNAMICS & SLIP RATIO ---
             % Compute per-corner torques and update wheel angular velocities,
             % then evaluate tire forces with computed slip ratios.
             %
             % RWD assumption: drive torque only on rear wheels.
-            % Brake distribution: equal front/rear (50/50).
+            % Brake distribution: fixed front/rear bias from VehicleManager.
             % Drive force is split equally between the two driven wheels.
             R = vm.tire.RL.wheelRadius;  % all corners share same radius
 
@@ -105,14 +158,15 @@ classdef Simulator
             T_drive_front = 0;
             T_drive_rear  = F_drive * R / 2;
 
-            % Per-corner brake torque (equal distribution, split 4 ways)
-            T_brake_corner = abs(F_brake) * R / 4;
+            % Per-corner brake torque by axle bias
+            T_brake_front = F_brake_front * R / 2;
+            T_brake_rear = F_brake_rear * R / 2;
 
             % Update wheel rotational state (uses previous-timestep Fx)
-            vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_corner, obj.dt);
-            vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_corner, obj.dt);
-            vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_corner, obj.dt);
-            vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_corner, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_rear,  T_brake_rear, obj.dt);
+            vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_rear,  T_brake_rear, obj.dt);
 
             limitedRearOmega = vm.powertrain.limitDrivenWheelAngularVelocity( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
@@ -128,33 +182,12 @@ classdef Simulator
             tireInputState.curvature = curKappa;
             tireInputState.mu = curMu;
             vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu);
-            
-            % --- COMBINED TIRE GRIP LIMIT ---
-            totalNormalLoad = W + F_downforce;
-            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            maxTireAccel = max(0.1, peakMu * max(curMu, 0) * 9.81);
-            
             % --- LONGITUDINAL FORCE BALANCE ---
             F_net_long = F_drive + F_brake - F_drag;
             F_rollResist = 0.015 * (W + F_downforce);
             F_net_long = F_net_long - sign(v) * F_rollResist;
             
             axDemand = F_net_long / vm.totalMass;
-            
-            % --- LATERAL DYNAMICS ---
-            if abs(curKappa) > 1e-6 && v > 0.5
-                ayDemand = v^2 * curKappa;
-            else
-                ayDemand = 0;
-            end
-
-            ay = max(-maxTireAccel, min(ayDemand, maxTireAccel));
-            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
-                ay = sign(ayDemand) * maxTireAccel * 0.995;
-            end
-
-            lateralUsage = min(abs(ay) / maxTireAccel, 1);
-            availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
             ax = max(-availableLongAccel, min(axDemand, availableLongAccel));
 
             if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
@@ -168,7 +201,7 @@ classdef Simulator
             ds = max(0, v * obj.dt + 0.5 * ax * obj.dt^2);
             
             newState.throttle = throttle;
-            newState.brake = brake;
+            newState.brake = effectiveBrakeCommand;
             newState.steer = steer;
             newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
             
@@ -184,6 +217,21 @@ classdef Simulator
             forces.F_downforce = F_downforce;
             forces.F_drag = F_drag;
             forces.F_drive = F_drive;
+            forces.F_brake = F_brake;
+            forces.F_brake_front = -F_brake_front;
+            forces.F_brake_rear = -F_brake_rear;
+            forces.F_brake_FL = -F_brake_front / 2;
+            forces.F_brake_FR = -F_brake_front / 2;
+            forces.F_brake_RL = -F_brake_rear / 2;
+            forces.F_brake_RR = -F_brake_rear / 2;
+            forces.brakeCommand = brakeCommand;
+            forces.brake = effectiveBrakeCommand;
+            forces.brakeGripLimit = maxBrakeForce;
+            forces.brakeForceCapacity = brakeForceCapacity;
+            forces.brakeGrip_FL = longGrip_FL;
+            forces.brakeGrip_FR = longGrip_FR;
+            forces.brakeGrip_RL = longGrip_RL;
+            forces.brakeGrip_RR = longGrip_RR;
             forces.motorRPM = 0;
             forces.motorTorque = 0;
             forces.wheelTorque = 0;
@@ -232,18 +280,32 @@ classdef Simulator
             stateLog = struct( ...
                 'time',        zeros(maxSteps, 1), ...
                 's',           zeros(maxSteps, 1), ...
+                'controlS',    zeros(maxSteps, 1), ...
                 'speed',       zeros(maxSteps, 1), ...
                 'speedKmh',    zeros(maxSteps, 1), ...
+                'controlTime', zeros(maxSteps, 1), ...
                 'ax',          zeros(maxSteps, 1), ...
                 'ay',          zeros(maxSteps, 1), ...
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
+                'brakeRequested', zeros(maxSteps, 1), ...
                 'steer',       zeros(maxSteps, 1), ...
                 'curvature',   zeros(maxSteps, 1), ...
                 'heading',     zeros(maxSteps, 1), ...
                 'F_downforce', zeros(maxSteps, 1), ...
                 'F_drag',      zeros(maxSteps, 1), ...
                 'F_drive',     zeros(maxSteps, 1), ...
+                'F_brake',     zeros(maxSteps, 1), ...
+                'F_brake_front', zeros(maxSteps, 1), ...
+                'F_brake_rear', zeros(maxSteps, 1), ...
+                'F_brake_FL',  zeros(maxSteps, 1), ...
+                'F_brake_FR',  zeros(maxSteps, 1), ...
+                'F_brake_RL',  zeros(maxSteps, 1), ...
+                'F_brake_RR',  zeros(maxSteps, 1), ...
+                'brakeGrip_FL', zeros(maxSteps, 1), ...
+                'brakeGrip_FR', zeros(maxSteps, 1), ...
+                'brakeGrip_RL', zeros(maxSteps, 1), ...
+                'brakeGrip_RR', zeros(maxSteps, 1), ...
                 'motorRPM',    zeros(maxSteps, 1), ...
                 'motorTorque', zeros(maxSteps, 1), ...
                 'wheelTorque', zeros(maxSteps, 1), ...
@@ -316,18 +378,32 @@ classdef Simulator
                 if step <= maxSteps
                     stateLog.time(step)        = newState.time;
                     stateLog.s(step)           = newState.s;
+                    stateLog.controlS(step)    = currentState.s;
                     stateLog.speed(step)       = newState.speed;
                     stateLog.speedKmh(step)    = newState.speed * 3.6;
+                    stateLog.controlTime(step) = currentState.time;
                     stateLog.ax(step)          = newState.ax;
                     stateLog.ay(step)          = newState.ay;
                     stateLog.throttle(step)    = throttle;
-                    stateLog.brake(step)       = brake;
+                    stateLog.brake(step)       = forces.brake;
+                    stateLog.brakeRequested(step) = forces.brakeCommand;
                     stateLog.steer(step)       = steer;
                     stateLog.curvature(step)   = curKappa;
                     stateLog.heading(step)     = curHeading;
                     stateLog.F_downforce(step) = forces.F_downforce;
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
+                    stateLog.F_brake(step)     = forces.F_brake;
+                    stateLog.F_brake_front(step) = forces.F_brake_front;
+                    stateLog.F_brake_rear(step) = forces.F_brake_rear;
+                    stateLog.F_brake_FL(step)  = forces.F_brake_FL;
+                    stateLog.F_brake_FR(step)  = forces.F_brake_FR;
+                    stateLog.F_brake_RL(step)  = forces.F_brake_RL;
+                    stateLog.F_brake_RR(step)  = forces.F_brake_RR;
+                    stateLog.brakeGrip_FL(step) = forces.brakeGrip_FL;
+                    stateLog.brakeGrip_FR(step) = forces.brakeGrip_FR;
+                    stateLog.brakeGrip_RL(step) = forces.brakeGrip_RL;
+                    stateLog.brakeGrip_RR(step) = forces.brakeGrip_RR;
                     stateLog.motorRPM(step)    = forces.motorRPM;
                     stateLog.motorTorque(step) = forces.motorTorque;
                     stateLog.wheelTorque(step) = forces.wheelTorque;

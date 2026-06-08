@@ -21,6 +21,8 @@ classdef VehicleManager
         cgHeight      = 0.28     % CG height [m]
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight = 0.45 % Static front weight distribution [0-1]
+        brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
+        brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
         
         % Simulation parameters
         maxSpeed      = 80       % Speed limiter [m/s] (~288 km/h)
