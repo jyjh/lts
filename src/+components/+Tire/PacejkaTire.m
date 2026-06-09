@@ -33,6 +33,16 @@ classdef PacejkaTire < components.Tire.TireModel
         % Wheel rotational inertia per corner [kg·m^2]
         % (wheel + tire + brake disc rotating assembly)
         wheelInertia = 0.5
+
+        % Minimum normal load passed into MFeval [N]. Returned forces are
+        % scaled back to the actual normal load for lightly loaded tires.
+        minEvaluationLoad = 100
+
+        % Tire relaxation lengths. These make slip angle/ratio build over
+        % distance instead of appearing instantly at the contact patch.
+        enableRelaxation = true
+        lateralRelaxationLength = 2.5      % [m]
+        longitudinalRelaxationLength = 0.8 % [m]
     end
     
     methods
@@ -84,17 +94,20 @@ classdef PacejkaTire < components.Tire.TireModel
                 cornerState.My = 0;
                 cornerState.Mz = 0;
                 cornerState.peakMu = 0;
+                cornerState.frictionLimit = 0;
+                cornerState.frictionUsage = 0;
                 return;
             end
             
             % Unpack for MFeval call
             kappa = slipRatio;
             alpha = slipAngle;
-            Fz    = normalLoad;
+            Fz    = max(normalLoad, obj.minEvaluationLoad);
             gamma = camberAngle;
             V     = obj.tireConstants.refVelocity;
             P     = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
+            loadScale = normalLoad / Fz;
             
             % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
             inputsMF = [Fz, kappa, alpha, gamma, 0, V, P];
@@ -106,12 +119,28 @@ classdef PacejkaTire < components.Tire.TireModel
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
 
             % Store outputs capped by the current surface friction coefficient.
-            cornerState.Fy = outputs(:,2) * surfaceScale;
-            cornerState.Fx = outputs(:,1) * surfaceScale;
-            cornerState.Mx = outputs(:,4) * surfaceScale;
-            cornerState.My = outputs(:,5) * surfaceScale;
-            cornerState.Mz = outputs(:,6) * surfaceScale;
+            cornerState.Fy = -outputs(:,2) * surfaceScale * loadScale;
+            cornerState.Fx = outputs(:,1) * surfaceScale * loadScale;
+            cornerState.Mx = outputs(:,4) * surfaceScale * loadScale;
+            cornerState.My = outputs(:,5) * surfaceScale * loadScale;
+            cornerState.Mz = outputs(:,6) * surfaceScale * loadScale;
             cornerState.peakMu = rawPeakMu * surfaceScale;
+            cornerState.frictionLimit = cornerState.peakMu * normalLoad;
+            forceMagnitude = hypot(cornerState.Fx, cornerState.Fy);
+            if cornerState.frictionLimit > 0 && forceMagnitude > cornerState.frictionLimit
+                limitScale = cornerState.frictionLimit / forceMagnitude;
+                cornerState.Fx = cornerState.Fx * limitScale;
+                cornerState.Fy = cornerState.Fy * limitScale;
+                cornerState.Mx = cornerState.Mx * limitScale;
+                cornerState.My = cornerState.My * limitScale;
+                cornerState.Mz = cornerState.Mz * limitScale;
+                forceMagnitude = cornerState.frictionLimit;
+            end
+            if cornerState.frictionLimit > 0
+                cornerState.frictionUsage = forceMagnitude / cornerState.frictionLimit;
+            else
+                cornerState.frictionUsage = 0;
+            end
         end
         
         %% ---- TireModel interface methods ----
@@ -128,14 +157,16 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            inputsMF = [normalLoad, 0, slipAngle, 0, 0, ...
+            evalLoad = max(normalLoad, obj.minEvaluationLoad);
+            loadScale = normalLoad / evalLoad;
+            inputsMF = [evalLoad, 0, slipAngle, 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
-            rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+            rawPeakMu = obj.computePeakMuInternal(evalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fy = outputs(:,2) * surfaceScale;
+            Fy = -outputs(:,2) * surfaceScale * loadScale;
         end
         
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -150,14 +181,16 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            inputsMF = [normalLoad, slipRatio, 0, 0, 0, ...
+            evalLoad = max(normalLoad, obj.minEvaluationLoad);
+            loadScale = normalLoad / evalLoad;
+            inputsMF = [evalLoad, slipRatio, 0, 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
-            rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+            rawPeakMu = obj.computePeakMuInternal(evalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fx = outputs(:,1) * surfaceScale;
+            Fx = outputs(:,1) * surfaceScale * loadScale;
         end
         
         function peakMu = getPeakFriction(obj, normalLoad)
@@ -172,7 +205,8 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            peakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+            evalLoad = max(normalLoad, obj.minEvaluationLoad);
+            peakMu = obj.computePeakMuInternal(evalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
         end
         
@@ -182,12 +216,9 @@ classdef PacejkaTire < components.Tire.TireModel
             % COMPUTESLIPANGLES Compute per-corner tire slip angles [rad]
             %   slipAngles = computeSlipAngles(vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac)
             %
-            %   Uses bicycle model kinematics:
-            %     Rear:  alpha = -atan((vy - lr*yawRate) / vx)
-            %     Front: alpha = delta - atan((vy + lf*yawRate) / vx)
-            %
-            %   Left and right tires on the same axle share the same slip
-            %   angle (Ackermann steering geometry is not yet modelled).
+            %   Uses per-corner wheel-plane kinematics. When track width is
+            %   supplied through updateAllFromState, the front wheels use
+            %   simple Ackermann steering angles.
             %
             %   Inputs:
             %     vx              - forward velocity [m/s]
@@ -200,32 +231,59 @@ classdef PacejkaTire < components.Tire.TireModel
             %   Returns struct with:
             %     slipAngles.FL, .FR, .RL, .RR  [rad]
 
-            slipAngles = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
+            wheelKinematics = obj.computeWheelKinematics( ...
+                vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac, 0);
+            slipAngles = struct('FL', wheelKinematics.FL.slipAngle, ...
+                'FR', wheelKinematics.FR.slipAngle, ...
+                'RL', wheelKinematics.RL.slipAngle, ...
+                'RR', wheelKinematics.RR.slipAngle);
             
             % At very low speed, slip angles are undefined → return zeros
             if vx < 0.5
                 return;
             end
             
-            % CG-to-axle distances
-            lf = wheelbase * frontWeightFrac;       % CG to front axle
-            lr = wheelbase * (1 - frontWeightFrac); % CG to rear axle
-            
-            % Steering angle with geometry (TODO: Ackermann, rack ratio)
-            delta = obj.computeSteeringAngle(steerInput);
-            
-            % Rear slip angle (both rear tyres identical)
-            alpha_rear = -atan((vy - lr * yawRate) / vx);
-            
-            % Front slip angle (both front tyres identical)
-            alpha_front = delta - atan((vy + lf * yawRate) / vx);
-            
-            slipAngles.FL = alpha_front;
-            slipAngles.FR = alpha_front;
-            slipAngles.RL = alpha_rear;
-            slipAngles.RR = alpha_rear;
         end
         
+        function wheelKinematics = computeWheelKinematics(obj, vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac, trackWidth)
+            % COMPUTEWHEELKINEMATICS Per-corner slip angle and wheel-plane speed
+            wheelKinematics = obj.emptyWheelKinematics(max(vx, 0));
+
+            if vx < 0.5
+                return;
+            end
+            if nargin < 8 || isempty(trackWidth)
+                trackWidth = 0;
+            end
+
+            lf = wheelbase * (1 - frontWeightFrac);
+            lr = wheelbase * frontWeightFrac;
+            halfTrack = max(trackWidth, 0) / 2;
+            [deltaFL, deltaFR] = obj.computeAckermannSteer(steerInput, wheelbase, trackWidth);
+
+            wheelKinematics.FL = obj.computeCornerKinematics(vx, vy, yawRate, lf, halfTrack, deltaFL);
+            wheelKinematics.FR = obj.computeCornerKinematics(vx, vy, yawRate, lf, -halfTrack, deltaFR);
+            wheelKinematics.RL = obj.computeCornerKinematics(vx, vy, yawRate, -lr, halfTrack, 0);
+            wheelKinematics.RR = obj.computeCornerKinematics(vx, vy, yawRate, -lr, -halfTrack, 0);
+        end
+
+        function wheel = computeCornerKinematics(~, vx, vy, yawRate, xOffset, yOffset, steerAngle)
+            wheelVx = vx - yawRate * yOffset;
+            wheelVy = vy + yawRate * xOffset;
+            pathAngle = atan2(wheelVy, max(wheelVx, eps));
+            localLongitudinalSpeed = wheelVx * cos(steerAngle) + wheelVy * sin(steerAngle);
+
+            wheel = struct( ...
+                'slipAngle', steerAngle - pathAngle, ...
+                'longitudinalSpeed', max(localLongitudinalSpeed, 0));
+        end
+
+        function wheelKinematics = emptyWheelKinematics(~, vehicleSpeed)
+            zeroWheel = struct('slipAngle', 0, 'longitudinalSpeed', max(vehicleSpeed, 0));
+            wheelKinematics = struct('FL', zeroWheel, 'FR', zeroWheel, ...
+                'RL', zeroWheel, 'RR', zeroWheel);
+        end
+
         %% ---- Slip ratio computation ----
         
         function kappa = computeSlipRatio(obj, cornerState, vehicleSpeed)
@@ -327,9 +385,9 @@ classdef PacejkaTire < components.Tire.TireModel
             obj.updateCorner(obj.RR, Fz_RR, slipAngle_RR, kappa_RR, 0, mu);
         end
         
-        function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
+        function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu, dt)
             % UPDATEALLFROMSTATE Compute slip angles/ratios and update all corners
-            %   updateAllFromState(state, vehicleManager, cornerLoads, mu)
+            %   updateAllFromState(state, vehicleManager, cornerLoads, mu, dt)
             %
             %   Computes per-corner slip angles from vehicle kinematics and
             %   per-corner slip ratios from wheel rotational state, then
@@ -341,38 +399,63 @@ classdef PacejkaTire < components.Tire.TireModel
             %     cornerLoads    - struct with .FL, .FR, .RL, .RR normal forces [N]
             %     mu             - Surface friction multiplier
             %                      Treated as an absolute surface grip cap here.
+            %     dt             - Timestep [s] for tire relaxation
+            if nargin < 6
+                dt = 0;
+            end
             
-            % Compute per-corner slip angles
-            slipAngles = obj.computeSlipAngles( ...
+            % Compute per-corner slip angles and local wheel-plane speeds
+            wheelKinematics = obj.computeWheelKinematics( ...
                 state.speed, state.vy, state.yawRate, state.steer, ...
-                vehicleManager.wheelbase, vehicleManager.staticFrontWeight);
+                vehicleManager.wheelbase, vehicleManager.staticFrontWeight, ...
+                vehicleManager.trackWidth);
             
             % Compute per-corner slip ratios from wheel rotational state
-            kappa_FL = obj.computeSlipRatio(obj.FL, state.speed);
-            kappa_FR = obj.computeSlipRatio(obj.FR, state.speed);
-            kappa_RL = obj.computeSlipRatio(obj.RL, state.speed);
-            kappa_RR = obj.computeSlipRatio(obj.RR, state.speed);
+            kappa_FL = obj.computeSlipRatio(obj.FL, wheelKinematics.FL.longitudinalSpeed);
+            kappa_FR = obj.computeSlipRatio(obj.FR, wheelKinematics.FR.longitudinalSpeed);
+            kappa_RL = obj.computeSlipRatio(obj.RL, wheelKinematics.RL.longitudinalSpeed);
+            kappa_RR = obj.computeSlipRatio(obj.RR, wheelKinematics.RR.longitudinalSpeed);
+
+            [alpha_FL, kappa_FL] = obj.relaxSlipInputs( ...
+                obj.FL, wheelKinematics.FL.slipAngle, kappa_FL, state.speed, dt);
+            [alpha_FR, kappa_FR] = obj.relaxSlipInputs( ...
+                obj.FR, wheelKinematics.FR.slipAngle, kappa_FR, state.speed, dt);
+            [alpha_RL, kappa_RL] = obj.relaxSlipInputs( ...
+                obj.RL, wheelKinematics.RL.slipAngle, kappa_RL, state.speed, dt);
+            [alpha_RR, kappa_RR] = obj.relaxSlipInputs( ...
+                obj.RR, wheelKinematics.RR.slipAngle, kappa_RR, state.speed, dt);
             
             obj.updateAllCorners( ...
                 cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
-                slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
+                alpha_FL, alpha_FR, alpha_RL, alpha_RR, ...
                 kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu);
         end
     end
     
     methods (Access = private)
         
-        function steeringAngle = computeSteeringAngle(obj, steerInput)
-            % COMPUTESTEERINGANGLE Convert driver steering input to wheel angle
-            %   steeringAngle = computeSteeringAngle(steerInput)
-            %
-            %   TODO: Implement proper steering geometry:
-            %     - Steering rack ratio
-            %     - Ackermann correction (inside vs outside wheel)
-            %     - Compliance effects
-            %   Currently trivialized to a direct pass-through.
-            
-            steeringAngle = steerInput;
+        function [deltaFL, deltaFR] = computeAckermannSteer(~, steerInput, wheelbase, trackWidth)
+            % COMPUTEACKERMANNSTEER Convert bicycle steer to front wheel angles.
+            if abs(steerInput) < 1e-6 || trackWidth <= 0 || wheelbase <= 0
+                deltaFL = steerInput;
+                deltaFR = steerInput;
+                return;
+            end
+
+            turnRadius = wheelbase / tan(abs(steerInput));
+            halfTrack = trackWidth / 2;
+            innerRadius = max(turnRadius - halfTrack, 0.1);
+            outerRadius = turnRadius + halfTrack;
+            innerAngle = atan(wheelbase / innerRadius);
+            outerAngle = atan(wheelbase / outerRadius);
+
+            if steerInput > 0
+                deltaFL = innerAngle;
+                deltaFR = outerAngle;
+            else
+                deltaFL = -outerAngle;
+                deltaFR = -innerAngle;
+            end
         end
 
         function surfaceScale = computeSurfaceScale(obj, rawPeakMu, surfaceMu)
@@ -383,6 +466,37 @@ classdef PacejkaTire < components.Tire.TireModel
             else
                 surfaceScale = min(1, surfaceMu / rawPeakMu);
             end
+        end
+
+        function [alpha, kappa] = relaxSlipInputs(obj, cornerState, targetAlpha, targetKappa, vehicleSpeed, dt)
+            cornerState.targetSlipAngle = targetAlpha;
+            cornerState.targetSlipRatio = targetKappa;
+
+            if ~obj.enableRelaxation || dt <= 0 || vehicleSpeed < 0.5
+                cornerState.relaxedSlipAngle = targetAlpha;
+                cornerState.relaxedSlipRatio = targetKappa;
+                cornerState.slipStateInitialized = true;
+                alpha = targetAlpha;
+                kappa = targetKappa;
+                return;
+            end
+
+            if ~cornerState.slipStateInitialized
+                cornerState.relaxedSlipAngle = targetAlpha;
+                cornerState.relaxedSlipRatio = targetKappa;
+                cornerState.slipStateInitialized = true;
+            end
+
+            alphaGain = min(1, vehicleSpeed * dt / max(obj.lateralRelaxationLength, eps));
+            kappaGain = min(1, vehicleSpeed * dt / max(obj.longitudinalRelaxationLength, eps));
+
+            cornerState.relaxedSlipAngle = cornerState.relaxedSlipAngle + ...
+                alphaGain * (targetAlpha - cornerState.relaxedSlipAngle);
+            cornerState.relaxedSlipRatio = cornerState.relaxedSlipRatio + ...
+                kappaGain * (targetKappa - cornerState.relaxedSlipRatio);
+
+            alpha = cornerState.relaxedSlipAngle;
+            kappa = cornerState.relaxedSlipRatio;
         end
         
         function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params)

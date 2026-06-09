@@ -143,7 +143,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         
         %% ---- Per-corner transient computation ----
         
-        function loads = computeCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
+        function loads = computeCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass, dt, chassisKinematics)
             % COMPUTECORNERLOADS Compute demanded loads and update all four corners
             %   loads = computeCornerLoads(state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
             %
@@ -152,6 +152,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   Fz_aero_rear   - Aero downforce on rear axle [N]
             %   totalMass      - Total vehicle mass [kg]
             %   dt             - Timestep [s]
+            %   chassisKinematics - optional struct with per-corner
+            %                      .displacement and .velocity fields
             %
             %   Returns struct with per-corner tire normal forces:
             %     loads.FL, loads.FR, loads.RL, loads.RR  [N]
@@ -174,6 +176,26 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             Fz_static_FR = Fz_static_front / 2;
             Fz_static_RL = Fz_static_rear  / 2;
             Fz_static_RR = Fz_static_rear  / 2;
+
+            if nargin >= 7 && ~isempty(chassisKinematics)
+                disp = chassisKinematics.displacement;
+                vel = chassisKinematics.velocity;
+
+                obj.frontLeft.updateCornerFromKinematics( ...
+                    obj.frontLeft.state, Fz_static_FL, disp.FL, vel.FL);
+                obj.frontRight.updateCornerFromKinematics( ...
+                    obj.frontRight.state, Fz_static_FR, disp.FR, vel.FR);
+                obj.rearLeft.updateCornerFromKinematics( ...
+                    obj.rearLeft.state, Fz_static_RL, disp.RL, vel.RL);
+                obj.rearRight.updateCornerFromKinematics( ...
+                    obj.rearRight.state, Fz_static_RR, disp.RR, vel.RR);
+
+                loads.FL = obj.frontLeft.state.tireNormalForce;
+                loads.FR = obj.frontRight.state.tireNormalForce;
+                loads.RL = obj.rearLeft.state.tireNormalForce;
+                loads.RR = obj.rearRight.state.tireNormalForce;
+                return;
+            end
             
             % --- Aero downforce per corner (split evenly per axle) ---
             Fz_aero_FL = Fz_aero_front / 2;

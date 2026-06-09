@@ -28,6 +28,8 @@ classdef DriverModel
         maxSteeringAngle = 0.6    % Steering angle limit [rad]
         minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
         apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
+        yawRateFeedbackGain = 0.08 % Steering correction per yaw-rate error
+        sideslipFeedbackGain = 0.70 % Steering correction per sideslip angle
 
         % Cached track geometry
         trackArcLen      = []
@@ -86,7 +88,7 @@ classdef DriverModel
             speedError = speed - targetSpeed;
 
             [apexDistance, atApex, inActiveCorner, afterApex] = obj.distanceToRelevantApex(idx, s);
-            [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
+            [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s, state);
             longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
 
             throttle = 0;
@@ -243,7 +245,7 @@ classdef DriverModel
                 inActiveCorner;
         end
 
-        function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
+        function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s, state)
             [arcLen, curvature] = obj.getTrackGeometry();
             steer = 0;
             steeringUsageFrac = 0;
@@ -270,6 +272,12 @@ classdef DriverModel
             peakSteer = min(obj.maxSteeringAngle, peakSteer);
 
             steer = turnSign * peakSteer * steeringUsageFrac;
+
+            targetYawRate = state.speed * curvature(idx);
+            yawRateError = targetYawRate - state.yawRate;
+            steer = steer + obj.yawRateFeedbackGain * yawRateError ...
+                - obj.sideslipFeedbackGain * state.sideslipAngle;
+            steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
         end
 
         function scale = computeLongitudinalCommandScale(obj, steeringUsageFrac)

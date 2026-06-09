@@ -8,7 +8,7 @@ classdef GraphPlotter
     %   2. Driver Dashboard   - Throttle, brake, steering, and input traces
     %   3. Aero Dashboard     - Aero forces, balance, pitch, axle loads
     %   4. Suspension Dashboard - Travel, damper velocity, tire loads, load transfer
-    %   5. Tire Dashboard     - Slip ratios, wheel speeds, tire forces, utilization
+    %   5. Tire Dashboard     - Slip ratios, wheel speeds, and tire forces
     %   6. Powertrain Dashboard - Torque, drive force, speed overlay, force balance
     %
     % Usage:
@@ -119,12 +119,20 @@ classdef GraphPlotter
             
             % --- Longitudinal and Lateral Acceleration ---
             if isempty(startIdx), subplot(2,2,3); else, subplot(6,4,startIdx+2); end
-            plot(time, axG, 'b-', 'LineWidth', 1); hold on;
-            plot(time, ayG, 'r-', 'LineWidth', 1);
+            hAx = plot(time, axG, 'b-', 'LineWidth', 1); hold on;
+            hAy = plot(time, ayG, 'r-', 'LineWidth', 1);
+            legendHandles = [hAx hAy];
+            legendLabels = {'a_x', 'a_y tire'};
+            if isfield(stateLog, 'ayDemand')
+                hAyDemand = plot(time, stateLog.ayDemand / 9.81, ...
+                    '--', 'Color', [0.5 0 0], 'LineWidth', 0.75);
+                legendHandles = [legendHandles hAyDemand];
+                legendLabels{end+1} = 'a_y demand';
+            end
             xlabel('Time [s]');
             ylabel('Acceleration [g]');
             title('Accelerations');
-            legend('a_x', 'a_y', 'Location', 'best');
+            legend(legendHandles, legendLabels, 'Location', 'best');
             grid on;
             
             % --- g-g Diagram ---
@@ -152,7 +160,7 @@ classdef GraphPlotter
             %   Creates a 4-subplot figure with:
             %     1. Throttle, brake, and steering vs time
             %     2. Throttle, brake, and steering vs distance
-            %     3. Steering and curvature vs distance
+            %     3. Steering and yaw response vs distance
             %     4. Speed vs distance colored by longitudinal input
             %
             %   useSingleFigure, startIdx (optional): when provided, plots into
@@ -239,22 +247,33 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(controlS)]);
 
-            % --- Steering and curvature ---
+            % --- Steering and yaw response ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             yyaxis left;
-            plot(controlS, steerDeg, 'b-', 'LineWidth', 1); hold on;
+            hSteer = plot(controlS, steerDeg, 'b-', 'LineWidth', 1); hold on;
             yline(0, 'k-', 'LineWidth', 0.5);
             ylabel('Steering [deg]');
             yyaxis right;
-            if isfield(stateLog, 'curvature')
-                plot(controlS, stateLog.curvature, 'Color', [0.5 0 0.5], 'LineWidth', 1);
+            if isfield(stateLog, 'yawRate') && isfield(stateLog, 'curvature')
+                yawTarget = stateLog.speed .* stateLog.curvature;
+                hYaw = plot(s, stateLog.yawRate, 'Color', [0.5 0 0.5], 'LineWidth', 1);
+                hold on;
+                hYawTarget = plot(s, yawTarget, '--', 'Color', [0.3 0.3 0.3], 'LineWidth', 0.75);
+                ylabel('Yaw Rate [rad/s]');
+                title('Steering & Yaw Response');
+                legend([hSteer hYaw hYawTarget], 'Steer', 'Yaw rate', 'Yaw target', 'Location', 'best');
+            elseif isfield(stateLog, 'curvature')
+                hCurvature = plot(controlS, stateLog.curvature, 'Color', [0.5 0 0.5], 'LineWidth', 1);
                 ylabel('Curvature [1/m]');
+                title('Steering & Curvature');
+                legend([hSteer hCurvature], 'Steer', 'Curvature', 'Location', 'best');
             else
-                plot(controlS, zeros(size(controlS)), 'Color', [0.5 0 0.5], 'LineWidth', 1);
+                hCurvature = plot(controlS, zeros(size(controlS)), 'Color', [0.5 0 0.5], 'LineWidth', 1);
                 ylabel('Curvature [1/m]');
+                title('Steering & Curvature');
+                legend([hSteer hCurvature], 'Steer', 'Curvature', 'Location', 'best');
             end
             xlabel('Distance [m]');
-            title('Steering & Curvature');
             grid on;
             xlim([0 max(controlS)]);
 

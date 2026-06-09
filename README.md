@@ -1,6 +1,6 @@
 # FSAE Transient Lap Time Simulation
 
-An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The project composes swappable aero, suspension, powertrain, tire, and track models, then runs a transient simulation loop through `Simulator`.
+An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The project composes swappable aero, chassis, suspension, powertrain, tire, and track models, then runs a transient simulation loop through `Simulator`.
 
 ## Quick Start
 
@@ -19,9 +19,11 @@ Edit `trackType` in `src/run_simulation.m` to switch between:
 ## Current Model
 
 - Multi-element aero system: `FrontWing`, `RearWing`, and `UnderbodyFloor` aggregated by `components.Aero.AeroManager`.
-- Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
+- Transient chassis platform: `components.Chassis.SimpleChassis` integrates heave, pitch, and roll, then exposes per-corner displacement and velocity to suspension.
+- Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner, using chassis kinematics when available.
 - EMRAX 228 powertrain: `components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
-- Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state.
+- Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file, evaluates per-corner combined slip from local wheel-plane kinematics, applies configurable tire relaxation, and tracks per-corner tire state.
+- Transient yaw response: `Simulator` integrates yaw rate and lateral velocity from tire forces, while `DriverModel` applies yaw-rate and sideslip steering feedback.
 - Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, and busstop layouts.
 
 ## Documentation

@@ -15,6 +15,8 @@ VehicleManager
 |   |-- FrontWing
 |   |-- RearWing
 |   `-- UnderbodyFloor
+|-- components.Chassis.SimpleChassis
+|   `-- ChassisState
 |-- components.Suspension.SuspensionManager
 |   |-- SimpleSuspension + SuspensionState (FL)
 |   |-- SimpleSuspension + SuspensionState (FR)
@@ -34,13 +36,14 @@ See the [class diagram](class-diagram/) for a fuller relationship map.
 
 ## Simulation Model
 
-- `DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
+- `DriverModel` builds a local racing speed envelope, commands late braking/full throttle, and shapes steering through active corner segments with yaw-rate and sideslip feedback.
 - `AeroManager` resolves positioned aero elements into front/rear downforce and total drag.
-- `SuspensionManager` combines static load, aero load, lateral load transfer, and longitudinal load transfer, then updates each corner's transient suspension state.
+- `SimpleChassis` integrates heave, pitch, and roll from longitudinal/lateral acceleration and aero load, then exposes per-corner chassis displacement and velocity.
+- `SuspensionManager` uses chassis corner kinematics when available, so spring and compression/rebound damper forces create transient tire normal loads. Without a chassis component, it falls back to the older algebraic load-transfer path.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
 - `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
-- `PacejkaTire` computes per-corner tire forces from slip ratio, slip angle, normal load, and surface friction.
-- `VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
+- `PacejkaTire` computes per-corner combined-slip tire forces from local wheel-plane speed, slip ratio, slip angle, normal load, and surface friction, with simple Ackermann front steering and relaxation lengths for transient force buildup.
+- `VehicleState` integrates speed, position, acceleration, heading, yaw rate, yaw acceleration, lateral velocity, sideslip, chassis pitch/roll/ride height, and elapsed time.
 
 ## Usage
 
@@ -74,6 +77,7 @@ src/DriverModel.m                            Look-ahead driver inputs
 src/VehicleManager.m                         Component and vehicle-parameter container
 src/VehicleState.m                           Vehicle dynamic state
 src/+components/+Aero/                       Aero components and manager
+src/+components/+Chassis/                    Heave/pitch/roll chassis platform
 src/+components/+Suspension/                 Four-corner transient suspension
 src/+components/+Powertrain/                 Simple and EMRAX powertrains
 src/+components/+Tire/                       Simple and Pacejka tire models

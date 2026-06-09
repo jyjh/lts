@@ -2,7 +2,7 @@
 % Entry point script that configures and runs the simulation
 %
 % Architecture:
-%   - Components (aero, suspension, powertrain, tire) are swappable objects
+%   - Components (aero, chassis, suspension, powertrain, tire) are swappable objects
 %   - AeroManager aggregates multiple positioned AeroComponents (FW, RW, Floor)
 %   - VehicleManager holds component references and vehicle parameters
 %   - DriverModel decides throttle/brake inputs based on track lookahead
@@ -113,6 +113,11 @@ dt = 0.001;
 
 % VehicleManager is created first so SuspensionManager can reference it
 vehicle = VehicleManager(aero, [], powertrain, tire, track);
+
+% --- Chassis platform dynamics ---
+chassis = components.Chassis.SimpleChassis(vehicle);
+vehicle.chassis = chassis;
+fprintf('Chassis: SimpleChassis (heave/pitch/roll transient platform)\n');
 
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...

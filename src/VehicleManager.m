@@ -1,4 +1,4 @@
-classdef VehicleManager
+classdef VehicleManager < handle
     % VEHICLEMANAGER Configuration container for vehicle components and parameters
     % Holds references to all swappable components (aero, chassis, suspension, powertrain, tire, track)
     % and all non-changing vehicle parameters (mass, wheelbase, track width, etc).
@@ -19,10 +19,14 @@ classdef VehicleManager
         wheelbase     = 1.55     % Wheelbase [m]
         trackWidth    = 1.2      % Track width [m]
         cgHeight      = 0.28     % CG height [m]
+        yawInertia    = 85       % Yaw moment of inertia [kg*m^2]
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight = 0.45 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
         brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
+        yawRateDamping = 25.0    % Numerical/physical yaw damping [N*m*s/rad]
+        lateralVelocityDamping = 0.4 % Lateral velocity damping [1/s]
+        maxSideslipAngle = 0.18  % Sideslip clamp for path-following sim stability [rad]
         
         % Simulation parameters
         maxSpeed      = 80       % Speed limiter [m/s] (~288 km/h)

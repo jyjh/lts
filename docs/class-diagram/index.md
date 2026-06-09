@@ -49,13 +49,14 @@ The simulation separates vehicle configuration from simulation execution:
 | `Simulator` | `vehicleManager` | `VehicleManager` |
 | `Simulator` | `driverModel` | `DriverModel` |
 | `VehicleManager` | `aero` | `AeroManager` |
+| `VehicleManager` | `chassis` | `ChassisComponent` |
 | `VehicleManager` | `suspension` | `SuspensionManager` |
 | `VehicleManager` | `powertrain` | `PowertrainComponent` |
 | `VehicleManager` | `tire` | `TireModel` |
 | `VehicleManager` | `track` | `Track` |
 | `SuspensionManager` | corner suspensions | `SimpleSuspension` |
 | `SimpleSuspension` | `state` | `SuspensionState` |
-| `PacejkaTire` | corner states | `TireState` |
+| `PacejkaTire` / `SimpleTire` | corner states | `TireState` |
 | `EMRAX228Powertrain` / `SimplePowertrain` | `state` | `PowertrainState` |
 
 ### Data Flow
@@ -65,9 +66,10 @@ The simulation separates vehicle configuration from simulation execution:
 1. Read current `VehicleState` and track curvature/friction/heading.
 2. Ask `DriverModel` for throttle and brake.
 3. Compute aero downforce and drag through `AeroManager`.
-4. Compute static, aero, lateral, and longitudinal corner loads through `SuspensionManager`.
+4. Compute chassis kinematics and corner loads through `SimpleChassis` and `SuspensionManager`.
 5. Update `PowertrainState` from driven-wheel angular velocity and compute drive force from motor RPM.
-6. Update wheel rotational state and tire forces through `PacejkaTire`.
-7. Resolve longitudinal and lateral acceleration limits.
-8. Integrate `VehicleState`.
-9. Append telemetry to `stateLog`.
+6. Update wheel rotational state, per-corner wheel kinematics, relaxed tire slip inputs, and tire forces through `TireModel`.
+7. Integrate yaw rate and sideslip from tire forces.
+8. Resolve longitudinal and lateral acceleration limits.
+9. Integrate `VehicleState`.
+10. Append telemetry to `stateLog`.

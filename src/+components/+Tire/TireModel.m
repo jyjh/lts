@@ -23,6 +23,6 @@ classdef (Abstract) TireModel
         peakMu = getPeakFriction(obj, normalLoad)
         kappa = computeSlipRatio(obj, cornerState, vehicleSpeed)
         updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt)
-        updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
+        updateAllFromState(obj, state, vehicleManager, cornerLoads, mu, dt)
     end
 end

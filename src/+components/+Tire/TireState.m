@@ -16,9 +16,24 @@ classdef TireState < handle
         
         % Slip angle [rad] (positive = left turn for this tire)
         slipAngle       = 0
+
+        % Raw target slip angle before relaxation [rad]
+        targetSlipAngle = 0
+
+        % Relaxed force-producing slip angle [rad]
+        relaxedSlipAngle = 0
         
         % Slip ratio [-1 to 1] (positive = driving, negative = braking)
         slipRatio       = 0
+
+        % Raw target slip ratio before relaxation [-1 to 1]
+        targetSlipRatio = 0
+
+        % Relaxed force-producing slip ratio [-1 to 1]
+        relaxedSlipRatio = 0
+
+        % True once relaxation states have been initialized
+        slipStateInitialized = false
         
         % Inclination (camber) angle [rad] (positive = top tilted outward)
         camberAngle     = 0
@@ -50,6 +65,10 @@ classdef TireState < handle
         
         % Peak friction coefficient at current load
         peakMu          = 0
+
+        % Combined tire force limit and usage ratio
+        frictionLimit   = 0
+        frictionUsage   = 0
     end
     
     methods
@@ -57,23 +76,35 @@ classdef TireState < handle
             % TIRESTATE Construct with zero initial conditions
             obj.normalForce     = 0;
             obj.slipAngle       = 0;
+            obj.targetSlipAngle = 0;
+            obj.relaxedSlipAngle = 0;
             obj.slipRatio       = 0;
+            obj.targetSlipRatio = 0;
+            obj.relaxedSlipRatio = 0;
+            obj.slipStateInitialized = false;
             obj.camberAngle     = 0;
             obj.angularVelocity = 0;
-            % wheelRadius keeps its default (0.2286 m)
+            % wheelRadius keeps its default effective rolling radius
             obj.Fy              = 0;
             obj.Fx              = 0;
             obj.Mx              = 0;
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.frictionLimit   = 0;
+            obj.frictionUsage   = 0;
         end
         
         function reset(obj)
             % RESET Reset all dynamic state to zero
             obj.normalForce     = 0;
             obj.slipAngle       = 0;
+            obj.targetSlipAngle = 0;
+            obj.relaxedSlipAngle = 0;
             obj.slipRatio       = 0;
+            obj.targetSlipRatio = 0;
+            obj.relaxedSlipRatio = 0;
+            obj.slipStateInitialized = false;
             obj.camberAngle     = 0;
             obj.angularVelocity = 0;
             obj.Fy              = 0;
@@ -82,6 +113,8 @@ classdef TireState < handle
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.frictionLimit   = 0;
+            obj.frictionUsage   = 0;
         end
     end
 end

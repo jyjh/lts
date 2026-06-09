@@ -11,6 +11,7 @@ classDiagram
 
     class VehicleManager {
         +aero
+        +chassis
         +suspension
         +powertrain
         +tire
@@ -19,7 +20,12 @@ classDiagram
         +wheelbase
         +trackWidth
         +cgHeight
+        +yawInertia
         +staticFrontWeight
+        +brakeBiasFront
+        +yawRateDamping
+        +lateralVelocityDamping
+        +maxSideslipAngle
         +maxSpeed
     }
 
@@ -27,6 +33,8 @@ classDiagram
         +vehicleManager
         +lookaheadTime
         +brakingLookahead
+        +yawRateFeedbackGain
+        +sideslipFeedbackGain
         +computeInputs(state)
     }
 
@@ -38,12 +46,52 @@ classDiagram
         +ay
         +heading
         +yawRate
+        +yawAccel
+        +vy
+        +sideslipAngle
         +pitchAngle
+        +rollAngle
+        +rideHeight
         +throttle
         +brake
         +time
-        +updateFromDynamics(ax, ay, ds, dt, curvature, heading, mu)
+        +updateFromDynamics(ax, ay, ds, dt, curvature, heading, mu, vy, yawRate, yawAccel)
         +toLogStruct()
+    }
+
+    class ChassisComponent {
+        <<abstract>>
+        +state
+        +reset()*
+        +updateFromAccelerations(ax, ay, aeroForces, dt)*
+        +computeCornerKinematics()*
+        +getHeave()*
+        +getPitchAngle()*
+        +getRollAngle()*
+    }
+
+    class SimpleChassis {
+        +state
+        +sprungMass
+        +pitchInertia
+        +rollInertia
+        +heaveStiffness
+        +pitchStiffness
+        +rollStiffness
+        +updateFromAccelerations(ax, ay, aeroForces, dt)
+        +computeCornerKinematics()
+    }
+
+    class ChassisState {
+        +heave
+        +heaveRate
+        +pitchAngle
+        +pitchRate
+        +rollAngle
+        +rollRate
+        +cornerDisplacement
+        +cornerVelocity
+        +reset()
     }
 
     class AeroComponent {
@@ -93,7 +141,7 @@ classDiagram
 
     class SuspensionComponent {
         <<abstract>>
-        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)*
+        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt, chassisKinematics)*
     }
 
     class SuspensionManager {
@@ -103,7 +151,7 @@ classDiagram
         +rearRight
         +staticFrontWeight
         +warmup(totalMass, dt)
-        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)
+        +computeCornerLoads(state, FzFront, FzRear, totalMass, dt, chassisKinematics)
         +computePitchAngle()
     }
 
@@ -117,6 +165,7 @@ classDiagram
         +unsprungMass
         +state
         +updateCorner(cornerState, demandedLoad, dt)
+        +updateCornerFromKinematics(cornerState, baseLoad, chassisDisplacement, chassisVelocity)
     }
 
     class SuspensionState {
@@ -130,7 +179,12 @@ classDiagram
 
     class PowertrainComponent {
         <<abstract>>
+        +state
         +computeDriveForce(speed, throttle)*
+        +updateStateFromDrivenWheels(drivenWheelAngularVelocity)*
+        +updateStateFromVehicleSpeed(vehicleSpeed)*
+        +getMaxDrivenWheelAngularVelocity()*
+        +limitDrivenWheelAngularVelocity(drivenWheelAngularVelocity)*
         +getMaxTorque(engineSpeed)*
         +getTotalGearRatio()*
         +getDrivetrainEfficiency()*
@@ -143,6 +197,17 @@ classDiagram
         +rpmFalloffStartRPM
         +rpmFalloffFactor
         +rpmLimitRPM
+        +computeDriveForce(speed, throttle)
+        +updateStateFromDrivenWheels(omega)
+        +limitDrivenWheelAngularVelocity(omega)
+    }
+
+    class SimplePowertrain {
+        +state
+        +torqueCurveRPM
+        +torqueCurveNm
+        +totalGearRatio
+        +maxEngineRPM
         +computeDriveForce(speed, throttle)
         +updateStateFromDrivenWheels(omega)
         +limitDrivenWheelAngularVelocity(omega)
@@ -167,6 +232,9 @@ classDiagram
         +computeLateralForce(normalLoad, slipAngle, mu)*
         +computeLongitudinalForce(normalLoad, slipRatio, mu)*
         +getPeakFriction(normalLoad)*
+        +computeSlipRatio(cornerState, vehicleSpeed)*
+        +updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)*
+        +updateAllFromState(state, vehicleManager, cornerLoads, mu, dt)*
     }
 
     class PacejkaTire {
@@ -175,19 +243,43 @@ classDiagram
         +FR
         +RL
         +RR
+        +enableRelaxation
+        +lateralRelaxationLength
+        +longitudinalRelaxationLength
         +computeSlipRatio(cornerState, vehicleSpeed)
+        +computeWheelKinematics(vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac, trackWidth)
         +updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
-        +updateAllFromState(state, vehicleManager, cornerLoads, mu)
+        +updateAllFromState(state, vehicleManager, cornerLoads, mu, dt)
+    }
+
+    class SimpleTire {
+        +FL
+        +FR
+        +RL
+        +RR
+        +enableRelaxation
+        +lateralRelaxationLength
+        +longitudinalRelaxationLength
+        +computeSlipRatio(cornerState, vehicleSpeed)
+        +computeWheelKinematics(vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac, trackWidth)
+        +updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
+        +updateAllFromState(state, vehicleManager, cornerLoads, mu, dt)
     }
 
     class TireState {
         +normalForce
         +slipAngle
+        +targetSlipAngle
+        +relaxedSlipAngle
         +slipRatio
+        +targetSlipRatio
+        +relaxedSlipRatio
         +angularVelocity
         +wheelRadius
         +Fx
         +Fy
+        +frictionLimit
+        +frictionUsage
         +reset()
     }
 
@@ -235,14 +327,18 @@ classDiagram
     AeroComponent <|-- UnderbodyFloor
     AeroComponent <|-- SimpleAero
 
+    ChassisComponent <|-- SimpleChassis
     SuspensionComponent <|-- SuspensionManager
     PowertrainComponent <|-- EMRAX228Powertrain
+    PowertrainComponent <|-- SimplePowertrain
     TireModel <|-- PacejkaTire
+    TireModel <|-- SimpleTire
     Track <|-- TestTrack
 
     Simulator *-- VehicleManager : vehicleManager
     Simulator *-- DriverModel : driverModel
     VehicleManager *-- AeroManager : aero
+    VehicleManager *-- ChassisComponent : chassis
     VehicleManager *-- SuspensionManager : suspension
     VehicleManager *-- PowertrainComponent : powertrain
     VehicleManager *-- TireModel : tire
@@ -250,8 +346,11 @@ classDiagram
     VehicleState --> VehicleManager : vehicleManager
 
     AeroManager o-- AeroComponent : components
+    SimpleChassis *-- ChassisState : state
     SuspensionManager *-- SimpleSuspension : corners
     SimpleSuspension *-- SuspensionState : state
     EMRAX228Powertrain *-- PowertrainState : state
+    SimplePowertrain *-- PowertrainState : state
     PacejkaTire *-- TireState : corners
     PacejkaTire *-- TireConstants : tireConstants
+    SimpleTire *-- TireState : corners

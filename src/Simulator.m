@@ -62,6 +62,7 @@ classdef Simulator
             %     newState    - VehicleState at next timestep
             %     forces      - struct with F_downforce, F_drag, F_drive
             
+            obj.ensureChassis();
             vm = obj.vehicleManager;
             v = state.speed;
             if nargin < 8
@@ -78,9 +79,14 @@ classdef Simulator
             
             % --- WEIGHT AND PER-CORNER LOADS ---
             W = vm.totalMass * 9.81;
+
+            chassisKinematics = [];
+            if ~isempty(vm.chassis)
+                chassisKinematics = vm.chassis.computeCornerKinematics();
+            end
             
             cornerLoads = vm.suspension.computeCornerLoads( ...
-                state, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
+                state, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt, chassisKinematics);
             
             Fz_front = cornerLoads.FL + cornerLoads.FR;
             Fz_rear  = cornerLoads.RL + cornerLoads.RR;
@@ -93,12 +99,13 @@ classdef Simulator
             F_drive = vm.powertrain.computeDriveForce(v, throttle);
 
             % --- COMBINED TIRE GRIP LIMIT ---
-            totalNormalLoad = W + F_downforce;
+            totalNormalLoad = max(cornerLoads.FL + cornerLoads.FR + ...
+                cornerLoads.RL + cornerLoads.RR, 0.1);
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
             effectiveMu = min(max(peakMu, 0), max(curMu, 0));
             maxTireAccel = max(0.1, effectiveMu * totalNormalLoad / vm.totalMass);
 
-            % --- LATERAL DYNAMICS ---
+            % --- LATERAL DEMAND ESTIMATE ---
             if abs(curKappa) > 1e-6 && v > 0.5
                 ayDemand = v^2 * curKappa;
             else
@@ -187,7 +194,13 @@ classdef Simulator
             tireInputState.steer = steer;
             tireInputState.curvature = curKappa;
             tireInputState.mu = curMu;
-            vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu);
+            vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu, obj.dt);
+
+            lateralDynamics = obj.computeLateralDynamics( ...
+                vm, state, steer, obj.dt, maxTireAccel);
+            ay = lateralDynamics.ay;
+            lateralUsage = min(abs(ay) / max(maxTireAccel, eps), 1);
+            availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
             % --- LONGITUDINAL FORCE BALANCE ---
             F_net_long = F_drive + F_brake - F_drag;
             F_rollResist = 0.015 * (W + F_downforce);
@@ -209,7 +222,12 @@ classdef Simulator
             newState.throttle = throttle;
             newState.brake = effectiveBrakeCommand;
             newState.steer = steer;
-            newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
+            if ~isempty(vm.chassis)
+                vm.chassis.updateFromAccelerations(ax, ay, aeroForces, obj.dt);
+            end
+            newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, ...
+                curKappa, curHeading, curMu, lateralDynamics.vy, ...
+                lateralDynamics.yawRate, lateralDynamics.yawAccel);
             
             % Sanity check: warn once if speed exceeds maxSpeed
             if newState.speed > vm.maxSpeed && ~obj.warnedMaxSpeed
@@ -254,6 +272,21 @@ classdef Simulator
             end
             forces.aeroFz_front = aeroForces.Fz_front;
             forces.aeroFz_rear  = aeroForces.Fz_rear;
+            forces.chassisHeave = 0;
+            forces.chassisPitchRate = 0;
+            forces.chassisRollAngle = 0;
+            forces.chassisRollRate = 0;
+            forces.yawAccel = lateralDynamics.yawAccel;
+            forces.yawMoment = lateralDynamics.yawMoment;
+            forces.sideslipAngle = lateralDynamics.sideslipAngle;
+            forces.ayDemand = ayDemand;
+            forces.ayTire = ay;
+            if ~isempty(vm.chassis)
+                forces.chassisHeave = vm.chassis.state.heave;
+                forces.chassisPitchRate = vm.chassis.state.pitchRate;
+                forces.chassisRollAngle = vm.chassis.state.rollAngle;
+                forces.chassisRollRate = vm.chassis.state.rollRate;
+            end
         end
         
         function [stateLog, lapTime] = simulate(obj, initialState, track)
@@ -263,7 +296,11 @@ classdef Simulator
             %   initialState - VehicleState at simulation start
             %   track        - Track object with geometry and surface data
             
+            obj.ensureChassis();
             vm = obj.vehicleManager;
+            if ~isempty(vm.chassis)
+                vm.chassis.reset();
+            end
             
             % Set vehicleManager reference on state so components can access constants
             initialState.vehicleManager = vm;
@@ -294,6 +331,13 @@ classdef Simulator
                 'controlTime', zeros(maxSteps, 1), ...
                 'ax',          zeros(maxSteps, 1), ...
                 'ay',          zeros(maxSteps, 1), ...
+                'ayDemand',    zeros(maxSteps, 1), ...
+                'ayTire',      zeros(maxSteps, 1), ...
+                'vy',          zeros(maxSteps, 1), ...
+                'yawRate',     zeros(maxSteps, 1), ...
+                'yawAccel',    zeros(maxSteps, 1), ...
+                'yawMoment',   zeros(maxSteps, 1), ...
+                'sideslipAngle', zeros(maxSteps, 1), ...
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
                 'brakeRequested', zeros(maxSteps, 1), ...
@@ -320,6 +364,11 @@ classdef Simulator
                 'drivenWheelRPM', zeros(maxSteps, 1), ...
                 'rpmLimitActive', false(maxSteps, 1), ...
                 'pitchAngle',  zeros(maxSteps, 1), ...
+                'rollAngle',   zeros(maxSteps, 1), ...
+                'rideHeight',  zeros(maxSteps, 1), ...
+                'chassisHeave', zeros(maxSteps, 1), ...
+                'chassisPitchRate', zeros(maxSteps, 1), ...
+                'chassisRollRate', zeros(maxSteps, 1), ...
                 'Fz_FL',       zeros(maxSteps, 1), ...
                 'Fz_FR',       zeros(maxSteps, 1), ...
                 'Fz_RL',       zeros(maxSteps, 1), ...
@@ -348,6 +397,10 @@ classdef Simulator
                 'tireFy_FR',    zeros(maxSteps, 1), ...
                 'tireFy_RL',    zeros(maxSteps, 1), ...
                 'tireFy_RR',    zeros(maxSteps, 1), ...
+                'tireUsage_FL', zeros(maxSteps, 1), ...
+                'tireUsage_FR', zeros(maxSteps, 1), ...
+                'tireUsage_RL', zeros(maxSteps, 1), ...
+                'tireUsage_RR', zeros(maxSteps, 1), ...
                 'aeroFz_front', zeros(maxSteps, 1), ...
                 'aeroFz_rear',  zeros(maxSteps, 1) ...
             );
@@ -393,6 +446,13 @@ classdef Simulator
                     stateLog.controlTime(step) = currentState.time;
                     stateLog.ax(step)          = newState.ax;
                     stateLog.ay(step)          = newState.ay;
+                    stateLog.ayDemand(step)    = forces.ayDemand;
+                    stateLog.ayTire(step)      = forces.ayTire;
+                    stateLog.vy(step)          = newState.vy;
+                    stateLog.yawRate(step)     = newState.yawRate;
+                    stateLog.yawAccel(step)    = forces.yawAccel;
+                    stateLog.yawMoment(step)   = forces.yawMoment;
+                    stateLog.sideslipAngle(step) = newState.sideslipAngle;
                     stateLog.throttle(step)    = throttle;
                     stateLog.brake(step)       = forces.brake;
                     stateLog.brakeRequested(step) = forces.brakeCommand;
@@ -419,6 +479,11 @@ classdef Simulator
                     stateLog.drivenWheelRPM(step) = forces.drivenWheelRPM;
                     stateLog.rpmLimitActive(step) = forces.rpmLimitActive;
                     stateLog.pitchAngle(step)  = newState.pitchAngle;
+                    stateLog.rollAngle(step)   = newState.rollAngle;
+                    stateLog.rideHeight(step)  = newState.rideHeight;
+                    stateLog.chassisHeave(step) = forces.chassisHeave;
+                    stateLog.chassisPitchRate(step) = forces.chassisPitchRate;
+                    stateLog.chassisRollRate(step) = forces.chassisRollRate;
                     stateLog.aeroFz_front(step) = forces.aeroFz_front;
                     stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
                     
@@ -454,6 +519,10 @@ classdef Simulator
                     stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
                     stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
                     stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
+                    stateLog.tireUsage_FL(step) = vm.tire.FL.frictionUsage;
+                    stateLog.tireUsage_FR(step) = vm.tire.FR.frictionUsage;
+                    stateLog.tireUsage_RL(step) = vm.tire.RL.frictionUsage;
+                    stateLog.tireUsage_RR(step) = vm.tire.RR.frictionUsage;
                 end
                 
                 % Advance state
@@ -566,6 +635,55 @@ classdef Simulator
 
             cornerState.angularVelocity = max(vehicleSpeed, 0) / ...
                 max(cornerState.wheelRadius, eps);
+        end
+
+        function dyn = computeLateralDynamics(obj, vm, state, steer, dt, maxTireAccel)
+            % COMPUTELATERALDYNAMICS Integrate yaw rate and lateral velocity
+            % from per-corner tire forces. Heading/path progress still follow
+            % the track centerline; this supplies the transient body response
+            % used by tire slip-angle and chassis roll calculations.
+
+            frontFx = vm.tire.FL.Fx + vm.tire.FR.Fx;
+            frontFy = vm.tire.FL.Fy + vm.tire.FR.Fy;
+            rearFy = vm.tire.RL.Fy + vm.tire.RR.Fy;
+
+            frontLateral = frontFy * cos(steer) + frontFx * sin(steer);
+            rearLateral = rearFy;
+            totalLateralForce = frontLateral + rearLateral;
+
+            ay = totalLateralForce / max(vm.totalMass, eps);
+            ay = max(-maxTireAccel, min(ay, maxTireAccel));
+
+            lf = vm.wheelbase * (1 - vm.staticFrontWeight);
+            lr = vm.wheelbase * vm.staticFrontWeight;
+            yawMoment = frontLateral * lf - rearLateral * lr ...
+                - vm.yawRateDamping * state.yawRate;
+
+            yawAccel = yawMoment / max(vm.yawInertia, eps);
+            yawRate = state.yawRate + yawAccel * dt;
+
+            vyDot = ay - max(state.speed, 0) * yawRate ...
+                - vm.lateralVelocityDamping * state.vy;
+            vy = state.vy + vyDot * dt;
+
+            maxVy = tan(max(vm.maxSideslipAngle, 0.01)) * max(state.speed, 1);
+            vy = max(-maxVy, min(vy, maxVy));
+            sideslipAngle = atan2(vy, max(state.speed, eps));
+
+            dyn.ay = ay;
+            dyn.vy = vy;
+            dyn.vyDot = vyDot;
+            dyn.yawRate = yawRate;
+            dyn.yawAccel = yawAccel;
+            dyn.yawMoment = yawMoment;
+            dyn.sideslipAngle = sideslipAngle;
+        end
+
+        function ensureChassis(obj)
+            vm = obj.vehicleManager;
+            if isempty(vm.chassis)
+                vm.chassis = components.Chassis.SimpleChassis(vm);
+            end
         end
     end
 end

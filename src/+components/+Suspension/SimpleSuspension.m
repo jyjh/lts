@@ -151,5 +151,47 @@ classdef SimpleSuspension
             % Store total suspension force for logging
             cornerState.suspensionForce = F_spring + F_damper + F_bumpstop;
         end
+
+        function updateCornerFromKinematics(obj, cornerState, baseLoad, chassisDisplacement, chassisVelocity)
+            % UPDATECORNERFROMKINEMATICS Update tire load from chassis motion
+            %   baseLoad              - Static corner load [N]
+            %   chassisDisplacement   - Corner body motion from static [m]
+            %                           positive = compression-producing
+            %   chassisVelocity       - Corner body velocity [m/s]
+            %                           positive = compressing
+            %
+            % This path is used when the chassis owns heave/pitch/roll
+            % dynamics. The suspension no longer invents load transfer from
+            % ax/ay directly; spring and damper forces emerge from the
+            % chassis corner motion.
+
+            x = chassisDisplacement;
+            v = chassisVelocity;
+
+            K_eff = obj.springRate * obj.motionRatio^2;
+            if v >= 0
+                C_eff = obj.dampingCoeff * obj.motionRatio^2;
+            else
+                C_eff = obj.reboundCoeff * obj.motionRatio^2;
+            end
+
+            F_spring = K_eff * x;
+            F_damper = C_eff * v;
+
+            F_bumpstop = 0;
+            if x > obj.bumpStopLength
+                F_bumpstop = obj.bumpStopRate * (x - obj.bumpStopLength);
+            end
+
+            dynamicLoad = F_spring + F_damper + F_bumpstop;
+            tireLoad = max(baseLoad + dynamicLoad, 0);
+
+            cornerState.damperPosition = x;
+            cornerState.damperVelocity = v;
+            cornerState.tireDeflection = tireLoad / max(obj.tireSpringRate, eps);
+            cornerState.tireNormalForce = tireLoad;
+            cornerState.suspensionForce = dynamicLoad;
+            cornerState.demandedLoad = baseLoad + dynamicLoad;
+        end
     end
 end

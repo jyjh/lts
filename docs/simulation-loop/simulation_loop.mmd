@@ -19,7 +19,7 @@ sequenceDiagram
         Sim->>Aero: computeForces(currentState)
         Aero-->>Sim: downforce, drag, front/rear aero load
 
-        Sim->>Susp: computeCornerLoads(state, aero loads, mass, dt)
+        Sim->>Susp: computeCornerLoads(state, aero loads, mass, dt, chassis kinematics)
         Susp-->>Sim: FL, FR, RL, RR normal loads
 
         Sim->>PT: updateStateFromDrivenWheels(RL omega, RR omega)
@@ -29,11 +29,13 @@ sequenceDiagram
         Sim->>Tire: updateWheelDynamics(each corner)
         Sim->>PT: limitDrivenWheelAngularVelocity(RL/RR omega)
         Sim->>PT: updateStateFromDrivenWheels(limited RL/RR omega)
-        Sim->>Tire: updateAllFromState(state, vehicle, corner loads, mu)
+        Sim->>Tire: updateAllFromState(state, vehicle, corner loads, mu, dt)
+        Tire->>Tire: compute per-corner wheel kinematics and relaxed slip
         Tire-->>Sim: slip ratios, Fx, Fy
 
+        Sim->>Sim: integrate yaw rate and sideslip from tire forces
         Sim->>Sim: compute ax, ay, speed/corner limits
-        Sim->>State: updateFromDynamics(ax, ay, ds, dt, heading, mu)
+        Sim->>State: updateFromDynamics(ax, ay, ds, dt, heading, mu, vy, yawRate, yawAccel)
         Sim->>Sim: append stateLog telemetry
     end
 
