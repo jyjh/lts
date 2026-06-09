@@ -99,7 +99,7 @@ classdef PacejkaTire < components.Tire.TireModel
             % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
             inputsMF = [Fz, kappa, alpha, gamma, 0, V, P];
             
-            % Evaluate Pacejka Magic Formula via MFeval (useMode=1: combined)
+            % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
             outputs = mfeval(params, inputsMF, 111);
             
             rawPeakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
@@ -135,7 +135,7 @@ classdef PacejkaTire < components.Tire.TireModel
             rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fy = outputs.Fy * surfaceScale;
+            Fy = outputs(:,2) * surfaceScale;
         end
         
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -152,12 +152,12 @@ classdef PacejkaTire < components.Tire.TireModel
             
             inputsMF = [normalLoad, slipRatio, 0, 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
-            outputs = mfeval(obj.tireConstants.params, inputsMF, 1);
+            outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
             rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fx = outputs.Fx * surfaceScale;
+            Fx = outputs(:,1) * surfaceScale;
         end
         
         function peakMu = getPeakFriction(obj, normalLoad)

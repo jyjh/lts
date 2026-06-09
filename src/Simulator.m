@@ -20,6 +20,10 @@ classdef Simulator
         
         % Simulation timestep [s]
         dt = 0.001
+
+        % Maximum braking slip ratio before brake input is reduced.
+        % Prevents wheel-speed integration from numerically locking a tire.
+        maxBrakeSlipRatio = 0.15
         
         % Internal: track whether maxSpeed warning was issued (warn once)
         warnedMaxSpeed = false
@@ -109,6 +113,14 @@ classdef Simulator
             lateralUsage = min(abs(ay) / maxTireAccel, 1);
             availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
 
+            % --- WHEEL TORQUE SETUP ---
+            % RWD assumption: drive torque only on rear wheels.
+            % Brake distribution: fixed front/rear bias from VehicleManager.
+            % Drive force is split equally between the two driven wheels.
+            R = vm.tire.RL.wheelRadius;  % all corners share same radius
+            T_drive_front = 0;
+            T_drive_rear  = F_drive * R / 2;
+
             % --- BRAKE FORCE ---
             brakeCommand = max(0, min(1, brake));
             brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
@@ -135,7 +147,11 @@ classdef Simulator
                 brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RR / brakeBiasRear);
             end
 
-            maxBrakeForce = min(brakeForceCapacity, brakeGripLimit);
+            wheelLockLimit = obj.computeWheelLockBrakeLimit( ...
+                vm, v, R, T_drive_front, T_drive_rear, ...
+                brakeBiasFront, brakeBiasRear);
+
+            maxBrakeForce = min([brakeForceCapacity, brakeGripLimit, wheelLockLimit]);
             brakeForceMag = min(brakeCommand * brakeForceCapacity, maxBrakeForce);
             F_brake_front = brakeForceMag * brakeBiasFront;
             F_brake_rear = brakeForceMag * brakeBiasRear;
@@ -148,16 +164,6 @@ classdef Simulator
             % --- WHEEL DYNAMICS & SLIP RATIO ---
             % Compute per-corner torques and update wheel angular velocities,
             % then evaluate tire forces with computed slip ratios.
-            %
-            % RWD assumption: drive torque only on rear wheels.
-            % Brake distribution: fixed front/rear bias from VehicleManager.
-            % Drive force is split equally between the two driven wheels.
-            R = vm.tire.RL.wheelRadius;  % all corners share same radius
-
-            % Per-corner drive torque (RWD: rear only, split equally)
-            T_drive_front = 0;
-            T_drive_rear  = F_drive * R / 2;
-
             % Per-corner brake torque by axle bias
             T_brake_front = F_brake_front * R / 2;
             T_brake_rear = F_brake_rear * R / 2;
@@ -226,7 +232,9 @@ classdef Simulator
             forces.F_brake_RR = -F_brake_rear / 2;
             forces.brakeCommand = brakeCommand;
             forces.brake = effectiveBrakeCommand;
-            forces.brakeGripLimit = maxBrakeForce;
+            forces.brakeLimit = maxBrakeForce;
+            forces.brakeGripLimit = brakeGripLimit;
+            forces.brakeWheelLockLimit = wheelLockLimit;
             forces.brakeForceCapacity = brakeForceCapacity;
             forces.brakeGrip_FL = longGrip_FL;
             forces.brakeGrip_FR = longGrip_FR;
@@ -346,6 +354,7 @@ classdef Simulator
             
             % Working state (will be updated each step)
             currentState = initialState;
+            obj.initializeWheelSpeeds(currentState.speed);
             
             step = 0;
             fprintf('Starting simulation...\n');
@@ -477,6 +486,86 @@ classdef Simulator
             fprintf('Track Length: %.1f m\n', currentState.s);
             fprintf('Max Speed:  %.1f km/h\n', max(stateLog.speedKmh));
             fprintf('Steps:      %d\n', step);
+        end
+
+        function brakeLimit = computeWheelLockBrakeLimit(obj, vm, vehicleSpeed, ...
+                wheelRadius, driveTorqueFront, driveTorqueRear, ...
+                brakeBiasFront, brakeBiasRear)
+            % Compute the fixed-bias brake force limit that prevents any
+            % corner from crossing the configured braking slip in one step.
+            if vehicleSpeed < 0.5
+                brakeLimit = inf;
+                return;
+            end
+
+            cap_FL = obj.computeCornerLockBrakeForce(vm.tire.FL, vehicleSpeed, ...
+                driveTorqueFront, wheelRadius);
+            cap_FR = obj.computeCornerLockBrakeForce(vm.tire.FR, vehicleSpeed, ...
+                driveTorqueFront, wheelRadius);
+            cap_RL = obj.computeCornerLockBrakeForce(vm.tire.RL, vehicleSpeed, ...
+                driveTorqueRear, wheelRadius);
+            cap_RR = obj.computeCornerLockBrakeForce(vm.tire.RR, vehicleSpeed, ...
+                driveTorqueRear, wheelRadius);
+
+            brakeLimit = inf;
+            if brakeBiasFront > eps
+                brakeLimit = min(brakeLimit, 2 * cap_FL / brakeBiasFront);
+                brakeLimit = min(brakeLimit, 2 * cap_FR / brakeBiasFront);
+            end
+            if brakeBiasRear > eps
+                brakeLimit = min(brakeLimit, 2 * cap_RL / brakeBiasRear);
+                brakeLimit = min(brakeLimit, 2 * cap_RR / brakeBiasRear);
+            end
+        end
+
+        function brakeForceCap = computeCornerLockBrakeForce(obj, cornerState, ...
+                vehicleSpeed, driveTorque, fallbackRadius)
+            wheelRadius = cornerState.wheelRadius;
+            if wheelRadius <= 0 || ~isfinite(wheelRadius)
+                wheelRadius = fallbackRadius;
+            end
+            wheelRadius = max(wheelRadius, eps);
+
+            tire = obj.vehicleManager.tire;
+            wheelInertia = 0.5;
+            if isprop(tire, 'wheelInertia')
+                wheelInertia = tire.wheelInertia;
+            end
+
+            maxSlip = max(0, min(0.95, obj.maxBrakeSlipRatio));
+            minOmega = (1 - maxSlip) * max(vehicleSpeed, 0) / wheelRadius;
+            omega = max(cornerState.angularVelocity, 0);
+
+            % I*domega/dt = T_drive - T_brake - Fx*R. Solve for the largest
+            % brake torque that still keeps omega above the lock threshold.
+            tireReactionTorque = cornerState.Fx * wheelRadius;
+            allowableBrakeTorque = driveTorque - tireReactionTorque + ...
+                (omega - minOmega) * wheelInertia / max(obj.dt, eps);
+
+            brakeForceCap = max(0, allowableBrakeTorque / wheelRadius);
+        end
+
+        function initializeWheelSpeeds(obj, vehicleSpeed)
+            if vehicleSpeed <= 0
+                return;
+            end
+
+            tire = obj.vehicleManager.tire;
+            obj.initializeCornerWheelSpeed(tire.FL, vehicleSpeed);
+            obj.initializeCornerWheelSpeed(tire.FR, vehicleSpeed);
+            obj.initializeCornerWheelSpeed(tire.RL, vehicleSpeed);
+            obj.initializeCornerWheelSpeed(tire.RR, vehicleSpeed);
+            obj.vehicleManager.powertrain.updateStateFromDrivenWheels( ...
+                [tire.RL.angularVelocity, tire.RR.angularVelocity]);
+        end
+
+        function initializeCornerWheelSpeed(~, cornerState, vehicleSpeed)
+            if cornerState.angularVelocity > 0
+                return;
+            end
+
+            cornerState.angularVelocity = max(vehicleSpeed, 0) / ...
+                max(cornerState.wheelRadius, eps);
         end
     end
 end

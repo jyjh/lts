@@ -141,9 +141,12 @@ classdef SimpleSuspension
             cornerState.damperPosition = x_new;
             cornerState.damperVelocity = v_new;
             
-            % Tire spring force = tire normal force
-            cornerState.tireDeflection = x_new;
-            cornerState.tireNormalForce = K_tire * max(x_new, 0);
+            % Contact-patch normal load comes from the vehicle load-transfer
+            % balance. Damper position is suspension travel, not tire
+            % deflection; using it as tire deflection inflates Fz by the
+            % tire/spring-rate ratio and breaks the tire model.
+            cornerState.tireNormalForce = max(demandedLoad, 0);
+            cornerState.tireDeflection = cornerState.tireNormalForce / K_tire;
             
             % Store total suspension force for logging
             cornerState.suspensionForce = F_spring + F_damper + F_bumpstop;
