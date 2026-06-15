@@ -1,4 +1,4 @@
-classdef (Abstract) SuspensionComponent
+classdef (Abstract) SuspensionComponent < handle
     % SUSPENSIONCOMPONENT Abstract interface for suspension models
     % Provides per-corner transient load computation with state tracking.
     %

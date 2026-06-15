@@ -4,43 +4,74 @@ classdef FrontWing < components.Aero.AeroComponent
     % because it operates in ground effect with a large pitch moment arm.
     %
     % Pitch behavior:
-    %   - Nose UP (braking) → increased front ride height → less ground effect → LESS downforce
-    %   - Nose DOWN (accel) → decreased front ride height → more ground effect → MORE downforce
+    %   - Nose UP (acceleration squat) → increased front ride height → LESS downforce
+    %   - Nose DOWN (braking dive) → decreased front ride height → MORE downforce
     %   This is pitchSensitivityClA < 0 (negative: positive pitch reduces ClA)
     
     properties
-        heightSensitivity    = 0.3 % Fractional ClA change per cm of height deviation
+        heightSensitivity    = 0.03 % Fractional ClA change per cm of height deviation
     end
-    
+
     methods
+        function obj = set.heightSensitivity(obj, value)
+            obj.heightSensitivity = utils.nonnegativeScalarOrDefault(value, 0.03);
+        end
+
         function obj = FrontWing(xPosition, zPosition, ClA, CdA, pitchSensitivityClA, heightSensitivity)
             % FRONTWING Construct a front wing model
-            %   FrontWing(name, xPosition, zPosition, ClA, CdA, pitchSensitivityClA, heightSensitivity)
+            %   FrontWing()
+            %   FrontWing(xPosition, zPosition, ClA, CdA, pitchSensitivityClA, heightSensitivity)
+            if nargin < 1 || isempty(xPosition)
+                xPosition = 0;
+            end
+            if nargin < 2 || isempty(zPosition)
+                zPosition = 0;
+            end
+            if nargin < 3 || isempty(ClA)
+                ClA = 1.0;
+            end
+            if nargin < 4 || isempty(CdA)
+                CdA = 0.5;
+            end
+            if nargin < 5 || isempty(pitchSensitivityClA)
+                pitchSensitivityClA = 0;
+            end
+            if nargin < 6 || isempty(heightSensitivity)
+                heightSensitivity = 0.03;
+            end
             obj@components.Aero.AeroComponent("Front Wing", xPosition, zPosition, ClA, CdA, pitchSensitivityClA);
-            obj.heightSensitivity = heightSensitivity;
+            obj.heightSensitivity = utils.nonnegativeScalarOrDefault( ...
+                heightSensitivity, obj.heightSensitivity);
         end
         
         function F_downforce = computeDownforce(obj, vehicleState)
             % Pitch effect: positive pitch (nose up) reduces front wing AoA
             pitchFactor = 1 + obj.pitchSensitivityClA * vehicleState.pitchAngle;
             
-            % Height effect: front wing sensitive to ride height changes
+            % Height effect: front wing sensitive to ride height changes.
+            % dz is already in centimeters, so heightSensitivity is applied
+            % directly as fractional ClA change per centimeter.
             effectiveZ = obj.computeEffectiveHeight(vehicleState);
             dz = (effectiveZ - obj.zPosition) * 100;  % cm deviation from design height
-            heightFactor = 1 - obj.heightSensitivity * dz / 100;
+            heightFactor = 1 - obj.heightSensitivity * dz;
             
-            effectiveClA = obj.ClA * pitchFactor * heightFactor;
-            effectiveClA = max(0, effectiveClA);
-            rho = vehicleState.vehicleManager.airDensity;
-            F_downforce = 0.5 * rho * effectiveClA * vehicleState.speed^2;
+            % Pitch and height factors are independent losses. If either
+            % goes past zero outside the valid aero map, it should stall the
+            % element instead of multiplying two negatives back into downforce.
+            effectiveClA = obj.ClA * max(0, pitchFactor) * max(0, heightFactor);
+            F_downforce = obj.computeDownforceFromClA(vehicleState, effectiveClA);
         end
         
         function F_drag = computeDrag(obj, vehicleState)
             pitchFactor = 1 + 0.5 * abs(obj.pitchSensitivityClA) * abs(vehicleState.pitchAngle);
             effectiveCdA = obj.CdA * pitchFactor;
-            effectiveCdA = max(0, effectiveCdA);
-            rho = vehicleState.vehicleManager.airDensity;
-            F_drag = 0.5 * rho * effectiveCdA * vehicleState.speed^2;
+            F_drag = obj.computeLongitudinalDragFromCdA(vehicleState, effectiveCdA);
+        end
+
+        function F_side = computeSideDrag(obj, vehicleState)
+            pitchFactor = 1 + 0.5 * abs(obj.pitchSensitivityClA) * abs(vehicleState.pitchAngle);
+            effectiveCdA = obj.CdA * pitchFactor;
+            F_side = obj.computeLateralDragFromCdA(vehicleState, effectiveCdA);
         end
     end
 end

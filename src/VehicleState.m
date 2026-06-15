@@ -11,7 +11,7 @@ classdef VehicleState
         % Position along track [m]
         s           = 0
         
-        % Vehicle speed [m/s]
+        % Body-forward speed [m/s]. Total airspeed is hypot(speed, vy).
         speed       = 0
         
         % Longitudinal acceleration [m/s^2] (positive = forward)
@@ -20,7 +20,7 @@ classdef VehicleState
         % Lateral acceleration [m/s^2] (positive = left)
         ay          = 0
         
-        % Heading angle [rad]
+        % Vehicle heading angle [rad]
         heading     = 0
         
         % Yaw rate [rad/s]
@@ -34,8 +34,20 @@ classdef VehicleState
 
         % Vehicle sideslip angle at CG [rad]
         sideslipAngle = 0
-        
-        % Pitch angle [rad] (positive = nose up, e.g. under braking)
+
+        % Difference between vehicle heading and track tangent [rad]
+        headingError = 0
+
+        % Lateral displacement from the requested track centerline [m]
+        lateralError = 0
+
+        % Rate of change of lateralError [m/s]
+        lateralErrorRate = 0
+
+        % Forward progress speed along the track centerline [m/s]
+        trackProgressSpeed = 0
+
+        % Pitch angle [rad] (positive = nose up, e.g. acceleration squat)
         pitchAngle  = 0
 
         % Roll angle [rad] (positive = right side down)
@@ -70,12 +82,107 @@ classdef VehicleState
         function obj = VehicleState(varargin)
             % VEHICLESTATE Construct with optional name-value pairs
             if nargin > 0
-                for i = 1:2:nargin
-                    if isprop(obj, varargin{i})
-                        obj.(varargin{i}) = varargin{i+1};
+                for i = 1:2:(nargin - 1)
+                    propertyName = varargin{i};
+                    if (ischar(propertyName) ...
+                            || (isstring(propertyName) && isscalar(propertyName))) ...
+                            && isprop(obj, propertyName)
+                        obj.(char(propertyName)) = varargin{i+1};
                     end
                 end
             end
+        end
+
+        function obj = set.s(obj, value)
+            obj.s = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function obj = set.speed(obj, value)
+            obj.speed = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function obj = set.ax(obj, value)
+            obj.ax = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.ay(obj, value)
+            obj.ay = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.heading(obj, value)
+            obj.heading = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.yawRate(obj, value)
+            obj.yawRate = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.yawAccel(obj, value)
+            obj.yawAccel = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.vy(obj, value)
+            obj.vy = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.sideslipAngle(obj, value)
+            obj.sideslipAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.headingError(obj, value)
+            obj.headingError = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.lateralError(obj, value)
+            obj.lateralError = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.lateralErrorRate(obj, value)
+            obj.lateralErrorRate = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.trackProgressSpeed(obj, value)
+            obj.trackProgressSpeed = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function obj = set.pitchAngle(obj, value)
+            obj.pitchAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.rollAngle(obj, value)
+            obj.rollAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.rideHeight(obj, value)
+            obj.rideHeight = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.throttle(obj, value)
+            obj.throttle = utils.unitScalarOrDefault(value, 0);
+        end
+
+        function obj = set.brake(obj, value)
+            obj.brake = utils.unitScalarOrDefault(value, 0);
+        end
+
+        function obj = set.steer(obj, value)
+            obj.steer = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.curvature(obj, value)
+            obj.curvature = utils.scalarOrDefault(value, 0);
+        end
+
+        function obj = set.mu(obj, value)
+            obj.mu = utils.nonnegativeScalarOrDefault(value, 1.2);
+        end
+
+        function obj = set.time(obj, value)
+            obj.time = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function obj = set.onTrack(obj, value)
+            obj.onTrack = utils.logicalScalarOrDefault(value, true);
         end
         
         function obj = updateFromDynamics(obj, ax, ay, ds, dt, curvature, heading, mu, vy, yawRate, yawAccel)
@@ -84,9 +191,9 @@ classdef VehicleState
             %   ay         - lateral acceleration [m/s^2]
             %   ds         - distance increment [m]
             %   dt         - time increment [s]
-            %   curvature  - track curvature at new position [1/m]
-            %   heading    - track heading at new position [rad]
-            %   mu         - surface friction at new position
+            %   curvature  - track curvature for this integration sample [1/m]
+            %   heading    - track tangent heading for this sample [rad]
+            %   mu         - surface friction for this sample
             %   vy         - optional lateral velocity from transient yaw model [m/s]
             %   yawRate    - optional yaw rate from transient yaw model [rad/s]
             %   yawAccel   - optional yaw acceleration from transient yaw model [rad/s^2]
@@ -96,6 +203,9 @@ classdef VehicleState
             obj.s = obj.s + ds;
             obj.speed = max(0, obj.speed + ax * dt);
             obj.curvature = curvature;
+            % Temporarily store the centerline tangent. updatePathTracking()
+            % adds headingError at the end of the step so obj.heading remains
+            % the vehicle's physical heading, not just the path tangent.
             obj.heading = heading;
             obj.mu = mu;
             
@@ -126,7 +236,88 @@ classdef VehicleState
             
             obj.time = obj.time + dt;
         end
-        
+
+        function obj = updatePathTracking(obj, trackHalfWidth, dt, ...
+                bodyLongitudinalDistance, previousVy, previousYawRate)
+            % UPDATEPATHTRACKING Estimate deviation from the track centerline.
+            %
+            % The lap model advances along a known centerline instead of
+            % carrying full global x/y vehicle position. To keep that shortcut
+            % from violating physics, this method integrates a simple path-frame
+            % error model:
+            %   s_dot = (u*cos(error) - vy*sin(error)) / (1 - kappa*ey)
+            %   headingError_dot = yawRate - s_dot * curvature
+            %   lateralError_dot = u*sin(error) + vy*cos(error)
+            % A car that cannot generate the yaw rate or side velocity required
+            % by the requested path will drift away from the centerline and can
+            % leave the track.
+            if nargin < 3 || dt <= 0
+                return;
+            end
+            if nargin < 4 || isempty(bodyLongitudinalDistance)
+                bodyLongitudinalDistance = max(obj.speed, 0) * dt;
+            end
+            if nargin < 5 || isempty(previousVy)
+                previousVy = obj.vy;
+            end
+            if nargin < 6 || isempty(previousYawRate)
+                previousYawRate = obj.yawRate;
+            end
+
+            trackHeading = obj.heading;
+            previousHeadingError = obj.headingError;
+            previousLateralError = obj.lateralError;
+
+            bodyLongitudinalSpeed = max(bodyLongitudinalDistance, 0) / dt;
+            % bodyLongitudinalDistance already represents the timestep integral
+            % of body-forward speed. Use matching mean lateral velocity and yaw
+            % rate so path-frame motion is integrated over the same interval
+            % instead of pretending the post-step state existed for the whole
+            % timestep.
+            meanVy = 0.5 * (previousVy + obj.vy);
+            meanYawRate = 0.5 * (previousYawRate + obj.yawRate);
+            curvatureDenominator = 1 - obj.curvature * previousLateralError;
+            if abs(curvatureDenominator) < 0.2
+                % The curvilinear transform becomes singular when lateral
+                % error approaches local turn radius. At that point the lap
+                % model is outside its useful range, so mark off-track and
+                % keep the denominator finite for telemetry.
+                obj.onTrack = false;
+                curvatureDenominator = sign(curvatureDenominator) * 0.2;
+                if curvatureDenominator == 0
+                    curvatureDenominator = 0.2;
+                end
+            end
+
+            pathSpeed = (bodyLongitudinalSpeed * cos(previousHeadingError) ...
+                - meanVy * sin(previousHeadingError)) / curvatureDenominator;
+            if pathSpeed < 0
+                % A full x/y model could move backward along the centerline.
+                % This lap-time coordinate is one-way, so stop progress and
+                % flag the state as no longer a valid on-track lap condition.
+                pathSpeed = 0;
+                obj.onTrack = false;
+            end
+            obj.trackProgressSpeed = pathSpeed;
+            obj.s = max(0, obj.s - bodyLongitudinalDistance + pathSpeed * dt);
+
+            pathYawRate = pathSpeed * obj.curvature;
+            obj.headingError = obj.headingError + ...
+                (meanYawRate - pathYawRate) * dt;
+            % Keep angular error in a principal range; sin/cos only depend on
+            % wrapped angle, and wrapping prevents unbounded numerical growth.
+            obj.headingError = atan2(sin(obj.headingError), cos(obj.headingError));
+
+            obj.lateralErrorRate = meanVy * cos(previousHeadingError) ...
+                + bodyLongitudinalSpeed * sin(previousHeadingError);
+            obj.lateralError = obj.lateralError + obj.lateralErrorRate * dt;
+            obj.heading = trackHeading + obj.headingError;
+
+            if abs(obj.lateralError) > max(trackHalfWidth, eps)
+                obj.onTrack = false;
+            end
+        end
+
         function pitchAngle = computePitch(obj)
             % COMPUTEPITCH Compute pitch angle from suspension compression
             %   positive = nose up (e.g. acceleration squat)
@@ -188,6 +379,10 @@ classdef VehicleState
             log.yawAccel  = obj.yawAccel;
             log.vy        = obj.vy;
             log.sideslipAngle = obj.sideslipAngle;
+            log.headingError = obj.headingError;
+            log.lateralError = obj.lateralError;
+            log.lateralErrorRate = obj.lateralErrorRate;
+            log.trackProgressSpeed = obj.trackProgressSpeed;
             log.rollAngle = obj.rollAngle;
             log.rideHeight = obj.rideHeight;
             log.throttle  = obj.throttle;

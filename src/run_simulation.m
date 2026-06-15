@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
 %  ====================================================================
-trackType = 'autocross';
+trackType = 'straight';
 
 %% ====================================================================
 %  DISPLAY OPTIONS
@@ -35,10 +35,10 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 frontWing = components.Aero.FrontWing( ...
     0.9, ...                   % xPosition: 0.9m forward of CG (ahead of front axle)
     0.08, ...                  % zPosition: 8cm above reference plane
-    0.45, ...                   % ClA: Downforce coefficient * area
+    0.25, ...                   % ClA: Downforce coefficient * area
     0.35, ...                  % CdA: Drag coefficient * area
     -5.0, ...                  % pitchSensitivityClA: Loses DF when nose pitches up
-    0.3 ...                    % heightSensitivity: Sensitive to ride height
+    0.03 ...                   % heightSensitivity: 3% ClA change per cm ride height
 );
 fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
     frontWing.xPosition, frontWing.ClA, frontWing.CdA);
@@ -47,10 +47,10 @@ fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
 rearWing = components.Aero.RearWing( ...
     -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
     0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
-    0.55, ...                   % ClA: Highest DF element
+    0.3, ...                   % ClA: Highest DF element
     0.8, ...                  % CdA: Highest drag element
     3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
-    0.15 ...                   % heightSensitivity: Moderately sensitive
+    0.005 ...                  % heightSensitivity: 0.5% ClA change per cm ride height
 );
 fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
     rearWing.xPosition, rearWing.ClA, rearWing.CdA);
@@ -59,7 +59,7 @@ fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
 floor = components.Aero.UnderbodyFloor( ...
     0.0, ...                   % xPosition: At CG
     0.035, ...                 % zPosition: 3.5cm (nominal floor height)
-    0.4, ...                   % ClA: Moderate DF
+    0.2, ...                   % ClA: Moderate DF
     0.10, ...                  % CdA: Very low drag
     -8.0, ...                  % pitchSensitivityClA: Very pitch-sensitive (ground effect)
     0.015, ...                 % stallHeight: Stall below 1.5cm
@@ -108,7 +108,8 @@ fprintf('\n');
 %  CREATE VEHICLE MANAGER, DRIVER MODEL, AND SIMULATOR
 %  ====================================================================
 
-% Simulation timestep [s]
+% Simulation timestep [s]. Keep the physics floor millisecond-scale; the
+% simulator can take larger adaptive steps on simple track sections.
 dt = 0.001;
 
 % VehicleManager is created first so SuspensionManager can reference it

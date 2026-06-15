@@ -1,4 +1,4 @@
-classdef (Abstract) ChassisComponent
+classdef (Abstract) ChassisComponent < handle
     % CHASSISCOMPONENT Abstract interface for chassis attitude dynamics
     %
     % Chassis components own the sprung-mass attitude state used for future
@@ -12,8 +12,10 @@ classdef (Abstract) ChassisComponent
         % Reset dynamic chassis attitude state to static equilibrium
         reset(obj)
 
-        % Update heave, pitch, and roll from vehicle accelerations
-        updateFromAccelerations(obj, ax, ay, aeroForces, dt)
+        % Update heave, pitch, and roll from vehicle accelerations plus
+        % optional tire contact-patch forces used for load-transfer moments.
+        updateFromAccelerations(obj, ax, ay, aeroForces, dt, ...
+            longitudinalGroundForce, lateralGroundForce)
 
         % Return current per-corner chassis displacement/velocity structs
         cornerKinematics = computeCornerKinematics(obj)

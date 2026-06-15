@@ -99,14 +99,19 @@ classdef GraphPlotter
             ylabel('Speed [km/h]');
             title('Speed vs Distance');
             grid on;
-            xlim([0 max(s)]);
+            GraphPlotter.applyNondegenerateXLim(s);
             
             % --- Track Map colored by G-load ---
             if isempty(startIdx), subplot(2,2,2); else, subplot(6,4,startIdx+1); end
             trackPts = track.getTrackPoints();
-            arcLen = [0; cumsum(sqrt(diff(trackPts(:,1)).^2 + diff(trackPts(:,2)).^2))];
-            xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
-            yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
+            [arcLen, trackPts] = GraphPlotter.prepareTrackMapSamples(trackPts);
+            if numel(arcLen) < 2
+                xFit = trackPts(1, 1) * ones(size(stateLog.s));
+                yFit = trackPts(1, 2) * ones(size(stateLog.s));
+            else
+                xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
+                yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
+            end
             scatter(xFit, yFit, 10, combinedG, 'filled');
             cb = colorbar;
             cb.Label.String = 'Combined G Load [g]';
@@ -245,7 +250,7 @@ classdef GraphPlotter
                     'Throttle', 'Brake', 'Brake req.', 'Steer', 'Location', 'best');
             end
             grid on;
-            xlim([0 max(controlS)]);
+            GraphPlotter.applyNondegenerateXLim(controlS);
 
             % --- Steering and yaw response ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
@@ -261,7 +266,15 @@ classdef GraphPlotter
                 hYawTarget = plot(s, yawTarget, '--', 'Color', [0.3 0.3 0.3], 'LineWidth', 0.75);
                 ylabel('Yaw Rate [rad/s]');
                 title('Steering & Yaw Response');
-                legend([hSteer hYaw hYawTarget], 'Steer', 'Yaw rate', 'Yaw target', 'Location', 'best');
+                legendHandles = [hSteer hYaw hYawTarget];
+                legendLabels = {'Steer', 'Yaw rate', 'Yaw target'};
+                if isfield(stateLog, 'headingError')
+                    hHeadingError = plot(s, stateLog.headingError, ':', ...
+                        'Color', [0.1 0.1 0.1], 'LineWidth', 0.75);
+                    legendHandles = [legendHandles hHeadingError];
+                    legendLabels{end+1} = 'Heading error';
+                end
+                legend(legendHandles, legendLabels, 'Location', 'best');
             elseif isfield(stateLog, 'curvature')
                 hCurvature = plot(controlS, stateLog.curvature, 'Color', [0.5 0 0.5], 'LineWidth', 1);
                 ylabel('Curvature [1/m]');
@@ -275,21 +288,49 @@ classdef GraphPlotter
             end
             xlabel('Distance [m]');
             grid on;
-            xlim([0 max(controlS)]);
+            GraphPlotter.applyNondegenerateXLim(controlS);
 
             % --- Speed vs distance with driver input color ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
-            inputColor = stateLog.throttle - stateLog.brake;
-            scatter(controlS, speedKmh, 5, inputColor, 'filled');
-            colormap(parula);
-            cb = colorbar;
-            cb.Label.String = 'Throttle - Brake';
-            caxis([-1 1]);
+            if isfield(stateLog, 'lateralError')
+                finitePathError = abs(stateLog.lateralError(isfinite(stateLog.lateralError)));
+                if isempty(finitePathError)
+                    trackHalfWidth = 1;
+                else
+                    trackHalfWidth = max(finitePathError);
+                end
+                if isfield(stateLog, 'trackHalfWidth') && any(stateLog.trackHalfWidth > 0)
+                    trackHalfWidth = max(stateLog.trackHalfWidth);
+                end
+                yyaxis left;
+                plot(s, stateLog.lateralError, 'k-', 'LineWidth', 1); hold on;
+                yline(trackHalfWidth, 'r--', 'LineWidth', 0.75);
+                yline(-trackHalfWidth, 'r--', 'LineWidth', 0.75);
+                ylabel('Path Error [m]');
+                yyaxis right;
+                plot(s, speedKmh, 'b-', 'LineWidth', 0.8); hold on;
+                legendLabels = {'Lateral error', 'Track edge', 'Track edge', 'Speed'};
+                if isfield(stateLog, 'trackProgressSpeed')
+                    plot(s, stateLog.trackProgressSpeed * 3.6, ...
+                        'Color', [0 0.35 0.65], 'LineStyle', '--', 'LineWidth', 0.8);
+                    legendLabels{end+1} = 'Track progress';
+                end
+                ylabel('Speed [km/h]');
+                title('Path Error & Speed');
+                legend(legendLabels, 'Location', 'best');
+            else
+                inputColor = stateLog.throttle - stateLog.brake;
+                scatter(controlS, speedKmh, 5, inputColor, 'filled');
+                colormap(parula);
+                cb = colorbar;
+                cb.Label.String = 'Throttle - Brake';
+                caxis([-1 1]);
+                ylabel('Speed [km/h]');
+                title('Speed Colored by Driver Input');
+            end
             xlabel('Distance [m]');
-            ylabel('Speed [km/h]');
-            title('Speed Colored by Driver Input');
             grid on;
-            xlim([0 max(controlS)]);
+            GraphPlotter.applyNondegenerateXLim(controlS);
         end
         
         function plotAero(stateLog, vehicle, aero, useSingleFigure, startIdx)
@@ -320,10 +361,19 @@ classdef GraphPlotter
             plot(time, stateLog.F_downforce, 'b-', 'LineWidth', 1); hold on;
             plot(time, stateLog.F_drag, 'r-', 'LineWidth', 1);
             plot(time, stateLog.F_drive, 'g-', 'LineWidth', 1);
+            legendEntries = {'Downforce', 'Drag', 'Drive'};
+            if isfield(stateLog, 'F_aero_lat')
+                plot(time, stateLog.F_aero_lat, 'c-', 'LineWidth', 1);
+                legendEntries{end+1} = 'Aero side drag';
+            end
+            if isfield(stateLog, 'F_lateral_damping')
+                plot(time, stateLog.F_lateral_damping, 'm-', 'LineWidth', 1);
+                legendEntries{end+1} = 'Lateral damping';
+            end
             xlabel('Time [s]');
             ylabel('Force [N]');
             title('Aerodynamic & Drive Forces');
-            legend('Downforce', 'Drag', 'Drive', 'Location', 'best');
+            legend(legendEntries, 'Location', 'best');
             grid on;
             
             % --- Aero Axle Loads by Speed (bar chart) ---
@@ -365,13 +415,43 @@ classdef GraphPlotter
             grid on;
             ylim([0 100]);
             
-            % --- Pitch Angle vs Time ---
+            % --- Pitch, Aero Sideslip, and Aero Moments ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             pitchDeg = stateLog.pitchAngle * (180/pi);
-            plot(time, pitchDeg, 'm-', 'LineWidth', 1);
+            legendHandles = [];
+            legendLabels = {};
+            yyaxis left;
+            hPitch = plot(time, pitchDeg, 'm-', 'LineWidth', 1);
+            legendHandles = [legendHandles hPitch];
+            legendLabels{end+1} = 'Pitch';
+            hold on;
+            if isfield(stateLog, 'aeroSideslipAngle')
+                hSideslip = plot(time, stateLog.aeroSideslipAngle * (180/pi), ...
+                    'c-', 'LineWidth', 1);
+                legendHandles = [legendHandles hSideslip];
+                legendLabels{end+1} = 'Aero sideslip';
+            end
             xlabel('Time [s]');
-            ylabel('Pitch Angle [deg]');
-            title('Vehicle Pitch');
+            ylabel('Angle [deg]');
+            if isfield(stateLog, 'aeroYawMoment') || isfield(stateLog, 'aeroRollMoment')
+                yyaxis right;
+                hold on;
+                if isfield(stateLog, 'aeroYawMoment')
+                    hYawMoment = plot(time, stateLog.aeroYawMoment, ...
+                        'Color', [0.1 0.45 0.9], 'LineWidth', 1);
+                    legendHandles = [legendHandles hYawMoment];
+                    legendLabels{end+1} = 'Aero yaw moment';
+                end
+                if isfield(stateLog, 'aeroRollMoment')
+                    hRollMoment = plot(time, stateLog.aeroRollMoment, ...
+                        'Color', [0.95 0.55 0.15], 'LineWidth', 1);
+                    legendHandles = [legendHandles hRollMoment];
+                    legendLabels{end+1} = 'Aero roll moment';
+                end
+                ylabel('Moment [N*m]');
+            end
+            title('Vehicle Pitch / Aero Moments');
+            legend(legendHandles, legendLabels, 'Location', 'best');
             grid on;
         end
         
@@ -451,7 +531,7 @@ classdef GraphPlotter
             title('Suspension Travel');
             legend('FL', 'FR', 'RL', 'RR', 'Bump Stop', 'Location', 'best');
             grid on;
-            xlim([0 max(s)]);
+            GraphPlotter.applyNondegenerateXLim(s);
             
             % --- Per-Corner Tire Loads vs Distance ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
@@ -464,7 +544,7 @@ classdef GraphPlotter
             title('Per-Corner Tire Loads');
             legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
-            xlim([0 max(s)]);
+            GraphPlotter.applyNondegenerateXLim(s);
             
             % --- Damper Velocity vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
@@ -499,7 +579,7 @@ classdef GraphPlotter
             %     1. Per-Corner Slip Ratio vs Time
             %     2. Wheel Speed vs Vehicle Speed (4 corners)
             %     3. Per-Corner Tire Longitudinal Force Fx vs Time
-            %     4. Per-Corner Tire Lateral Force Fy vs Time
+            %     4. Combined Tire Force Magnitude vs Directional Limit
             %
             %   useSingleFigure, startIdx (optional): when provided, plots into
             %     subplot(6,4,startIdx+N) instead of creating a new figure.
@@ -536,20 +616,20 @@ classdef GraphPlotter
             
             % --- Wheel Speed vs Vehicle Speed ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
-            % Get wheel radius for converting omega to linear speed
             if isfield(stateLog, 'omega_FL') && any(stateLog.omega_FL ~= 0)
-                R = vehicle.tire.FL.wheelRadius;
-                wheelSpeedFL = stateLog.omega_FL * R * 3.6;  % km/h
-                wheelSpeedFR = stateLog.omega_FR * R * 3.6;
-                wheelSpeedRL = stateLog.omega_RL * R * 3.6;
-                wheelSpeedRR = stateLog.omega_RR * R * 3.6;
+                % Convert each wheel with its own rolling radius. Using one
+                % shared radius would make staggered tires look falsely synced.
+                wheelSpeedFL = stateLog.omega_FL * vehicle.tire.FL.wheelRadius * 3.6;
+                wheelSpeedFR = stateLog.omega_FR * vehicle.tire.FR.wheelRadius * 3.6;
+                wheelSpeedRL = stateLog.omega_RL * vehicle.tire.RL.wheelRadius * 3.6;
+                wheelSpeedRR = stateLog.omega_RR * vehicle.tire.RR.wheelRadius * 3.6;
                 
                 plot(speedKmh, wheelSpeedFL, '.', 'Color', colFL, 'MarkerSize', 1); hold on;
                 plot(speedKmh, wheelSpeedFR, '.', 'Color', colFR, 'MarkerSize', 1);
                 plot(speedKmh, wheelSpeedRL, '.', 'Color', colRL, 'MarkerSize', 1);
                 plot(speedKmh, wheelSpeedRR, '.', 'Color', colRR, 'MarkerSize', 1);
                 % Reference line: wheel speed = vehicle speed
-                maxSpd = max(speedKmh) * 1.1;
+                maxSpd = GraphPlotter.positiveAxisUpper(speedKmh) * 1.1;
                 plot([0 maxSpd], [0 maxSpd], 'k--', 'LineWidth', 1);
                 xlabel('Vehicle Speed [km/h]');
                 ylabel('Wheel Speed [km/h]');
@@ -582,9 +662,31 @@ classdef GraphPlotter
                     'HorizontalAlignment', 'center', 'Units', 'normalized');
             end
             
-            % --- Per-Corner Tire Lateral Force Fy ---
+            % --- Per-Corner Combined Tire Force vs Friction Limit ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
-            if isfield(stateLog, 'tireFy_FL')
+            if isfield(stateLog, 'tireFrictionLimit_FL') && isfield(stateLog, 'tireFx_FL')
+                forceMagFL = hypot(stateLog.tireFx_FL, stateLog.tireFy_FL);
+                forceMagFR = hypot(stateLog.tireFx_FR, stateLog.tireFy_FR);
+                forceMagRL = hypot(stateLog.tireFx_RL, stateLog.tireFy_RL);
+                forceMagRR = hypot(stateLog.tireFx_RR, stateLog.tireFy_RR);
+
+                plot(time, forceMagFL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                plot(time, forceMagFR, '-', 'Color', colFR, 'LineWidth', 1);
+                plot(time, forceMagRL, '-', 'Color', colRL, 'LineWidth', 1);
+                plot(time, forceMagRR, '-', 'Color', colRR, 'LineWidth', 1);
+                plot(time, stateLog.tireFrictionLimit_FL, '--', 'Color', colFL, 'LineWidth', 0.8);
+                plot(time, stateLog.tireFrictionLimit_FR, '--', 'Color', colFR, 'LineWidth', 0.8);
+                plot(time, stateLog.tireFrictionLimit_RL, '--', 'Color', colRL, 'LineWidth', 0.8);
+                plot(time, stateLog.tireFrictionLimit_RR, '--', 'Color', colRR, 'LineWidth', 0.8);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Time [s]');
+                ylabel('Force Magnitude [N]');
+                title('Tire Force vs Directional Limit');
+                legend('FL |F|', 'FR |F|', 'RL |F|', 'RR |F|', ...
+                    'FL limit', 'FR limit', 'RL limit', 'RR limit', ...
+                    'Location', 'best');
+                grid on;
+            elseif isfield(stateLog, 'tireFy_FL')
                 plot(time, stateLog.tireFy_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
                 plot(time, stateLog.tireFy_FR, '-', 'Color', colFR, 'LineWidth', 1);
                 plot(time, stateLog.tireFy_RL, '-', 'Color', colRL, 'LineWidth', 1);
@@ -607,9 +709,9 @@ classdef GraphPlotter
             %
             %   Creates a 4-subplot figure with:
             %     1. Motor and wheel torque vs time
-            %     2. Drive Force vs Time
+            %     2. Commanded drive and actual tire force vs time
             %     3. Speed vs Distance with powertrain color overlay
-            %     4. Force Balance (Drive, Drag, Brake) vs Time
+            %     4. Longitudinal force balance vs time
             %
             %   useSingleFigure, startIdx (optional): when provided, plots into
             %     subplot(6,4,startIdx+N) instead of creating a new figure.
@@ -630,18 +732,34 @@ classdef GraphPlotter
             hasMotorTorque = isfield(stateLog, 'motorTorque');
             hasWheelTorque = isfield(stateLog, 'wheelTorque');
             if hasMotorTorque || hasWheelTorque
+                legendHandles = [];
+                legendLabels = {};
                 if hasMotorTorque
                     yyaxis left;
-                    plot(time, stateLog.motorTorque, 'm-', 'LineWidth', 1); hold on;
+                    hMotorTorque = plot(time, stateLog.motorTorque, 'm-', 'LineWidth', 1);
+                    hold on;
+                    legendHandles = [legendHandles hMotorTorque];
+                    legendLabels{end+1} = 'Motor torque';
                     ylabel('Motor Torque [Nm]');
                 end
                 if hasWheelTorque
                     yyaxis right;
-                    plot(time, stateLog.wheelTorque, 'Color', [0.1 0.45 0.9], 'LineWidth', 1);
-                    ylabel('Wheel Torque [Nm]');
+                    hWheelTorque = plot(time, stateLog.wheelTorque, ...
+                        'Color', [0.1 0.45 0.9], 'LineWidth', 1);
+                    hold on;
+                    legendHandles = [legendHandles hWheelTorque];
+                    legendLabels{end+1} = 'Applied axle torque';
+                    if isfield(stateLog, 'driveWheelTorqueRequested')
+                        hRequestedTorque = plot(time, 2 * stateLog.driveWheelTorqueRequested, ...
+                            '--', 'Color', [0 0.2 0.5], 'LineWidth', 0.9);
+                        legendHandles = [legendHandles hRequestedTorque];
+                        legendLabels{end+1} = 'Requested axle torque';
+                    end
+                    ylabel('Driven-Axle Torque [Nm]');
                 end
                 xlabel('Time [s]');
                 title('Motor & Wheel Torque');
+                legend(legendHandles, legendLabels, 'Location', 'best');
                 grid on;
             else
                 text(0.5, 0.5, 'No torque data available', ...
@@ -651,15 +769,32 @@ classdef GraphPlotter
             % --- Drive Force vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             yyaxis left;
-            plot(time, stateLog.F_drive, 'g-', 'LineWidth', 1.5);
+            hDriveCommand = plot(time, stateLog.F_drive, 'g-', 'LineWidth', 1.2);
+            hold on;
+            legendHandles = hDriveCommand;
+            legendLabels = {'Commanded drive'};
+            if isfield(stateLog, 'F_drive_applied')
+                hDriveApplied = plot(time, stateLog.F_drive_applied, ...
+                    '--', 'Color', [0 0.45 0.1], 'LineWidth', 1.0);
+                legendHandles = [legendHandles hDriveApplied];
+                legendLabels{end+1} = 'Applied drive';
+            end
+            if isfield(stateLog, 'F_tire_long')
+                hTireLong = plot(time, stateLog.F_tire_long, ...
+                    'Color', [0 0.35 0], 'LineWidth', 1.2);
+                legendHandles = [legendHandles hTireLong];
+                legendLabels{end+1} = 'Actual tire Fx';
+            end
             xlabel('Time [s]');
-            ylabel('Drive Force [N]');
-            title('Drive Force & Motor Speed');
+            ylabel('Longitudinal Force [N]');
+            title('Drive Command, Tire Force & Motor Speed');
             grid on;
             
             if isfield(stateLog, 'motorRPM')
                 yyaxis right;
-                plot(time, stateLog.motorRPM, 'm-', 'LineWidth', 1);
+                hMotorRPM = plot(time, stateLog.motorRPM, 'm-', 'LineWidth', 1);
+                legendHandles = [legendHandles hMotorRPM];
+                legendLabels{end+1} = 'Motor speed';
                 ylabel('Motor Speed [rpm]');
                 if isprop(vehicle.powertrain, 'rpmFalloffStartRPM') && vehicle.powertrain.rpmFalloffStartRPM > 0
                     yline(vehicle.powertrain.rpmFalloffStartRPM, 'm:', 'Falloff start');
@@ -668,10 +803,24 @@ classdef GraphPlotter
                     yline(vehicle.powertrain.rpmLimitRPM, 'm--', 'RPM cap');
                 end
             end
+            legend(legendHandles, legendLabels, 'Location', 'best');
             
             % --- Speed vs Distance with powertrain color overlay ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
-            if isfield(stateLog, 'motorRPM')
+            if isfield(stateLog, 'wheelPower') && isfield(stateLog, 'brakePowerTotal')
+                % Positive values are driven-axle power into the wheels;
+                % negative values are brake rotor heat dissipation. Plotting
+                % the signed balance makes braking-energy events visible on
+                % the speed trace instead of hiding them in force telemetry.
+                powertrainColor = (stateLog.wheelPower - stateLog.brakePowerTotal) / 1000;
+                colorLabel = 'Net Wheel/Brake Power [kW]';
+            elseif isfield(stateLog, 'wheelPower')
+                powertrainColor = stateLog.wheelPower / 1000;
+                colorLabel = 'Driven-Axle Power [kW]';
+            elseif isfield(stateLog, 'brakePowerTotal')
+                powertrainColor = -stateLog.brakePowerTotal / 1000;
+                colorLabel = 'Brake Power [kW]';
+            elseif isfield(stateLog, 'motorRPM')
                 powertrainColor = stateLog.motorRPM;
                 colorLabel = 'Motor Speed [rpm]';
             else
@@ -686,12 +835,33 @@ classdef GraphPlotter
             ylabel('Speed [km/h]');
             title('Speed vs Distance (powertrain)');
             grid on;
-            xlim([0 max(s)]);
+            GraphPlotter.applyNondegenerateXLim(s);
             
             % --- Force Balance vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
-            if isfield(stateLog, 'F_brake')
+            if isfield(stateLog, 'F_tire_long') && isfield(stateLog, 'F_net_long')
+                plot(time, stateLog.F_tire_long, 'g-', 'LineWidth', 1.2); hold on;
+                plot(time, -stateLog.F_drag, 'r-', 'LineWidth', 1.0);
+                if isfield(stateLog, 'F_rollResist')
+                    plot(time, -stateLog.F_rollResist, ...
+                        'Color', [0.45 0.45 0.45], 'LineWidth', 1.0);
+                    legendLabels = {'Tire Fx', '-Drag', '-Rolling resistance'};
+                else
+                    legendLabels = {'Tire Fx', '-Drag'};
+                end
+                if isfield(stateLog, 'F_ground_long')
+                    plot(time, stateLog.F_ground_long, ...
+                        'Color', [0.0 0.45 0.65], 'LineStyle', '--', 'LineWidth', 1.0);
+                    legendLabels{end+1} = 'Ground longitudinal';
+                end
+                plot(time, stateLog.F_net_long, 'k-', 'LineWidth', 1.4);
+                legendLabels{end+1} = 'Net longitudinal';
+                legend(legendLabels, 'Location', 'best');
+            elseif isfield(stateLog, 'F_brake')
                 F_brake_plot = stateLog.F_brake;
+                area(time, [stateLog.F_drive, -stateLog.F_drag, F_brake_plot], ...
+                    'LineStyle', 'none');
+                legend('Drive', '-Drag', 'Brake', 'Location', 'best');
             else
                 W = vehicle.totalMass * 9.81;
                 F_brake_plot = zeros(numel(time), 1);
@@ -701,15 +871,55 @@ classdef GraphPlotter
                         (W + stateLog.F_downforce(brakeIdx));
                     F_brake_plot(brakeIdx) = -stateLog.brake(brakeIdx) .* maxBrakeForce;
                 end
+                area(time, [stateLog.F_drive, -stateLog.F_drag, F_brake_plot], ...
+                    'LineStyle', 'none');
+                legend('Drive', '-Drag', 'Brake', 'Location', 'best');
             end
-            
-            area(time, [stateLog.F_drive, -stateLog.F_drag, F_brake_plot], ...
-                'LineStyle', 'none');
-            legend('Drive', '-Drag', 'Brake', 'Location', 'best');
             xlabel('Time [s]');
             ylabel('Force [N]');
-            title('Force Balance');
+            title('Longitudinal Force Balance');
             grid on;
+        end
+
+        function [arcLen, points] = prepareTrackMapSamples(points)
+            % PREPARETRACKMAPSAMPLES Remove zero-length plotting intervals.
+            %
+            % Imported and hand-edited tracks can contain duplicate consecutive
+            % points. They have no geometric length, but interp1 requires unique
+            % sample positions, so keep one copy before drawing the map.
+            if isempty(points)
+                points = [0, 0];
+                arcLen = 0;
+                return;
+            end
+
+            points = points(:, 1:2);
+            arcLen = components.Track.computeArcLength(points);
+            keep = [true; diff(arcLen) > eps];
+            points = points(keep, :);
+            arcLen = arcLen(keep);
+            if isempty(points)
+                points = [0, 0];
+                arcLen = 0;
+            end
+        end
+
+        function applyNondegenerateXLim(values)
+            xlim([0, GraphPlotter.positiveAxisUpper(values)]);
+        end
+
+        function upper = positiveAxisUpper(values)
+            values = values(:);
+            values = values(isfinite(values));
+            if isempty(values)
+                upper = 1;
+                return;
+            end
+
+            upper = max(values);
+            if upper <= 0
+                upper = 1;
+            end
         end
         
     end

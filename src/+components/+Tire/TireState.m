@@ -63,10 +63,13 @@ classdef TireState < handle
         % Aligning torque Mz [Nm]
         Mz              = 0
         
-        % Peak friction coefficient at current load
+        % Peak lateral friction coefficient at current load
         peakMu          = 0
 
-        % Combined tire force limit and usage ratio
+        % Peak longitudinal friction coefficient at current load
+        peakMuLong      = 0
+
+        % Combined tire force limit in the current force direction and usage
         frictionLimit   = 0
         frictionUsage   = 0
     end
@@ -91,8 +94,89 @@ classdef TireState < handle
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.peakMuLong      = 0;
             obj.frictionLimit   = 0;
             obj.frictionUsage   = 0;
+        end
+
+        function set.normalForce(obj, value)
+            obj.normalForce = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function set.slipAngle(obj, value)
+            obj.slipAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.targetSlipAngle(obj, value)
+            obj.targetSlipAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.relaxedSlipAngle(obj, value)
+            obj.relaxedSlipAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.slipRatio(obj, value)
+            obj.slipRatio = utils.unitSignedScalarOrDefault(value, 0);
+        end
+
+        function set.targetSlipRatio(obj, value)
+            obj.targetSlipRatio = utils.unitSignedScalarOrDefault(value, 0);
+        end
+
+        function set.relaxedSlipRatio(obj, value)
+            obj.relaxedSlipRatio = utils.unitSignedScalarOrDefault(value, 0);
+        end
+
+        function set.slipStateInitialized(obj, value)
+            obj.slipStateInitialized = utils.logicalScalarOrDefault(value, false);
+        end
+
+        function set.camberAngle(obj, value)
+            obj.camberAngle = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.angularVelocity(obj, value)
+            obj.angularVelocity = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function set.wheelRadius(obj, value)
+            obj.wheelRadius = utils.positiveScalarOrDefault(value, 0.241935);
+        end
+
+        function set.Fy(obj, value)
+            obj.Fy = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.Fx(obj, value)
+            obj.Fx = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.Mx(obj, value)
+            obj.Mx = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.My(obj, value)
+            obj.My = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.Mz(obj, value)
+            obj.Mz = utils.scalarOrDefault(value, 0);
+        end
+
+        function set.peakMu(obj, value)
+            obj.peakMu = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function set.peakMuLong(obj, value)
+            obj.peakMuLong = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function set.frictionLimit(obj, value)
+            obj.frictionLimit = utils.nonnegativeScalarOrDefault(value, 0);
+        end
+
+        function set.frictionUsage(obj, value)
+            obj.frictionUsage = utils.unitScalarOrDefault(value, 0);
         end
         
         function reset(obj)
@@ -113,6 +197,7 @@ classdef TireState < handle
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.peakMuLong      = 0;
             obj.frictionLimit   = 0;
             obj.frictionUsage   = 0;
         end

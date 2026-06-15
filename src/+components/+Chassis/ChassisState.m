@@ -26,13 +26,94 @@ classdef ChassisState < handle
         % Derived load-transfer terms for telemetry/debugging [N]
         longitudinalLoadTransfer = 0
         lateralLoadTransfer = 0
+        groundLongitudinalPitchMoment = 0
+        groundLateralRollMoment = 0
         aeroPitchMoment = 0
+        aeroVerticalPitchMoment = 0
+        dragPitchMoment = 0
+        aeroRollMoment = 0
     end
 
-    methods
-        function obj = ChassisState()
-            obj.reset();
-        end
+	    methods
+	        function obj = ChassisState()
+	            obj.reset();
+	        end
+
+	        function set.heave(obj, value)
+	            obj.heave = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.heaveRate(obj, value)
+	            obj.heaveRate = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.heaveAccel(obj, value)
+	            obj.heaveAccel = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.pitchAngle(obj, value)
+	            obj.pitchAngle = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.pitchRate(obj, value)
+	            obj.pitchRate = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.pitchAccel(obj, value)
+	            obj.pitchAccel = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.rollAngle(obj, value)
+	            obj.rollAngle = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.rollRate(obj, value)
+	            obj.rollRate = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.rollAccel(obj, value)
+	            obj.rollAccel = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.cornerDisplacement(obj, value)
+	            obj.cornerDisplacement = utils.cornerStructOrDefault(value);
+	        end
+
+	        function set.cornerVelocity(obj, value)
+	            obj.cornerVelocity = utils.cornerStructOrDefault(value);
+	        end
+
+	        function set.longitudinalLoadTransfer(obj, value)
+	            obj.longitudinalLoadTransfer = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.lateralLoadTransfer(obj, value)
+	            obj.lateralLoadTransfer = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.groundLongitudinalPitchMoment(obj, value)
+	            obj.groundLongitudinalPitchMoment = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.groundLateralRollMoment(obj, value)
+	            obj.groundLateralRollMoment = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.aeroPitchMoment(obj, value)
+	            obj.aeroPitchMoment = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.aeroVerticalPitchMoment(obj, value)
+	            obj.aeroVerticalPitchMoment = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.dragPitchMoment(obj, value)
+	            obj.dragPitchMoment = utils.scalarOrDefault(value, 0);
+	        end
+
+	        function set.aeroRollMoment(obj, value)
+	            obj.aeroRollMoment = utils.scalarOrDefault(value, 0);
+	        end
 
         function reset(obj)
             obj.heave = 0;
@@ -48,25 +129,41 @@ classdef ChassisState < handle
             obj.cornerVelocity = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
             obj.longitudinalLoadTransfer = 0;
             obj.lateralLoadTransfer = 0;
+            obj.groundLongitudinalPitchMoment = 0;
+            obj.groundLateralRollMoment = 0;
             obj.aeroPitchMoment = 0;
+            obj.aeroVerticalPitchMoment = 0;
+            obj.dragPitchMoment = 0;
+            obj.aeroRollMoment = 0;
         end
 
-        function updateCornerKinematics(obj, wheelbase, trackWidth, staticFrontWeight)
-            % UPDATECORNERKINEMATICS Convert body attitude to corner motion
-            % Outputs are positive for compression-producing body motion.
-            frontArm = wheelbase * (1 - staticFrontWeight);
-            rearArm = wheelbase * staticFrontWeight;
-            halfTrack = trackWidth / 2;
+	        function updateCornerKinematics(obj, wheelbase, trackWidth, staticFrontWeight)
+	            % UPDATECORNERKINEMATICS Convert body attitude to corner motion
+	            % Outputs are positive for compression-producing body motion.
+	            frontArm = wheelbase * (1 - staticFrontWeight);
+	            rearArm = wheelbase * staticFrontWeight;
+	            halfTrack = trackWidth / 2;
 
-            obj.cornerDisplacement.FL = obj.heave - obj.pitchAngle * frontArm - obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.FR = obj.heave - obj.pitchAngle * frontArm + obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.RL = obj.heave + obj.pitchAngle * rearArm - obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.RR = obj.heave + obj.pitchAngle * rearArm + obj.rollAngle * halfTrack;
+	            displacement.FL = obj.heave - obj.pitchAngle * frontArm ...
+	                - obj.rollAngle * halfTrack;
+	            displacement.FR = obj.heave - obj.pitchAngle * frontArm ...
+	                + obj.rollAngle * halfTrack;
+	            displacement.RL = obj.heave + obj.pitchAngle * rearArm ...
+	                - obj.rollAngle * halfTrack;
+	            displacement.RR = obj.heave + obj.pitchAngle * rearArm ...
+	                + obj.rollAngle * halfTrack;
 
-            obj.cornerVelocity.FL = obj.heaveRate - obj.pitchRate * frontArm - obj.rollRate * halfTrack;
-            obj.cornerVelocity.FR = obj.heaveRate - obj.pitchRate * frontArm + obj.rollRate * halfTrack;
-            obj.cornerVelocity.RL = obj.heaveRate + obj.pitchRate * rearArm - obj.rollRate * halfTrack;
-            obj.cornerVelocity.RR = obj.heaveRate + obj.pitchRate * rearArm + obj.rollRate * halfTrack;
-        end
-    end
-end
+	            velocity.FL = obj.heaveRate - obj.pitchRate * frontArm ...
+	                - obj.rollRate * halfTrack;
+	            velocity.FR = obj.heaveRate - obj.pitchRate * frontArm ...
+	                + obj.rollRate * halfTrack;
+	            velocity.RL = obj.heaveRate + obj.pitchRate * rearArm ...
+	                - obj.rollRate * halfTrack;
+	            velocity.RR = obj.heaveRate + obj.pitchRate * rearArm ...
+	                + obj.rollRate * halfTrack;
+
+	            obj.cornerDisplacement = displacement;
+	            obj.cornerVelocity = velocity;
+	        end
+	    end
+	end
