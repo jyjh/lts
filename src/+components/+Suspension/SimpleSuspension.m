@@ -82,6 +82,7 @@ classdef SimpleSuspension
             
             % Initialize transient state
             obj.state = components.Suspension.SuspensionState();
+            obj.state.motionRatioEffective = obj.motionRatio;
         end
         
         function updateCorner(obj, cornerState, demandedLoad, dt)
@@ -103,14 +104,20 @@ classdef SimpleSuspension
             v_prev = cornerState.damperVelocity;
             
             % Effective spring and damping (through motion ratio)
-            K_eff = obj.springRate * obj.motionRatio^2;
+            MR_eff = obj.motionRatio;
+            if isprop(cornerState, 'motionRatioEffective') && ...
+                    cornerState.motionRatioEffective > 0
+                MR_eff = cornerState.motionRatioEffective;
+            end
+
+            K_eff = obj.springRate * MR_eff^2;
             K_tire = obj.tireSpringRate;
             
             % Asymmetric damping: compression vs rebound
             if v_prev >= 0
-                C_eff = obj.dampingCoeff * obj.motionRatio^2;
+                C_eff = obj.dampingCoeff * MR_eff^2;
             else
-                C_eff = obj.reboundCoeff * obj.motionRatio^2;
+                C_eff = obj.reboundCoeff * MR_eff^2;
             end
             
             % --- Forces on the sprung mass ---

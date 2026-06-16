@@ -114,6 +114,13 @@ dt = 0.001;
 % VehicleManager is created first so SuspensionManager can reference it
 vehicle = VehicleManager(aero, [], powertrain, tire, track);
 
+% --- Suspension geometry ---
+% Options: 'neutral', 'baseline', 'high-camber-gain', 'pro-ackermann'
+geometryPreset = 'baseline';
+geometry = components.Suspension.SuspensionGeometry.fromPreset(geometryPreset, vehicle);
+fprintf('Suspension Geometry: %s (Ackermann %.0f%%)\n', ...
+    geometryPreset, geometry.ackermann * 100);
+
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...
     vehicle, ...                    % vehicleManager handle
@@ -124,10 +131,11 @@ suspension = components.Suspension.SuspensionManager( ...
     0.025, ...                      % bumpStopLength [m]
     200000, ...                     % bumpStopRate [N/m]
     200000, ...                     % tireSpringRate [N/m]
-    25 ...                          % unsprungMass per corner [kg]
+    25, ...                         % unsprungMass per corner [kg]
+    geometry ...                    % suspension/steering geometry preset
 );
 vehicle.suspension = suspension;
-fprintf('Suspension: SuspensionManager (4-corner transient, FL/FR front, RL/RR rear)\n');
+fprintf('Suspension: SuspensionManager (4-corner transient + geometry)\n');
 
 % Warmup suspension to static equilibrium (prevents zero-state startup transient)
 suspension.warmup(vehicle.totalMass, dt);

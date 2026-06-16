@@ -370,8 +370,8 @@ classdef GraphPlotter
             %   Creates a 6-subplot figure when opened standalone:
             %     1. Damper Travel vs Distance (all 4 corners, mm)
             %     2. Damper Speed vs Distance (all 4 corners, mm/s)
-            %     3. Damper Travel vs Time (all 4 corners, mm)
-            %     4. Damper Speed vs Time (all 4 corners, mm/s)
+            %     3. Camber vs Distance (all 4 corners, deg)
+            %     4. Wheel Steer vs Distance (all 4 corners, deg)
             %     5. Damper Speed vs Travel phase plot
             %     6. Per-Corner Tire Loads and axle load transfer
             %
@@ -400,6 +400,20 @@ classdef GraphPlotter
             velRL_mm = stateLog.damperVel_RL * 1000;
             velRR_mm = stateLog.damperVel_RR * 1000;
             speedMatrix = [velFL_mm, velFR_mm, velRL_mm, velRR_mm];
+
+            % Geometry telemetry, if available
+            hasGeometryTelemetry = isfield(stateLog, 'camber_FL') && ...
+                isfield(stateLog, 'wheelSteer_FL');
+            if hasGeometryTelemetry
+                camberFL_deg = stateLog.camber_FL * 180 / pi;
+                camberFR_deg = stateLog.camber_FR * 180 / pi;
+                camberRL_deg = stateLog.camber_RL * 180 / pi;
+                camberRR_deg = stateLog.camber_RR * 180 / pi;
+                steerFL_deg = stateLog.wheelSteer_FL * 180 / pi;
+                steerFR_deg = stateLog.wheelSteer_FR * 180 / pi;
+                steerRL_deg = stateLog.wheelSteer_RL * 180 / pi;
+                steerRR_deg = stateLog.wheelSteer_RR * 180 / pi;
+            end
             
             % Corner tire normal forces
             Fz_FL = stateLog.Fz_FL;
@@ -490,32 +504,37 @@ classdef GraphPlotter
             end
             
             if ~useSingleFigure
-                % --- Damper Travel vs Time ---
+                % --- Camber vs Distance ---
                 subplot(3,2,3);
-                plot(time, damperFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
-                plot(time, damperFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
-                plot(time, damperRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
-                plot(time, damperRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
-                yline(bumpStopMM, 'k--', 'LineWidth', 1);
+                if hasGeometryTelemetry
+                    plot(s, camberFL_deg, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                    plot(s, camberFR_deg, '-', 'Color', colFR, 'LineWidth', 1);
+                    plot(s, camberRL_deg, '-', 'Color', colRL, 'LineWidth', 1);
+                    plot(s, camberRR_deg, '-', 'Color', colRR, 'LineWidth', 1);
+                end
                 yline(0, 'k-', 'LineWidth', 0.5);
-                xlabel('Time [s]');
-                ylabel('Travel [mm]');
-                title('Damper Travel vs Time');
-                legend('FL', 'FR', 'RL', 'RR', 'Bump Stop', 'Location', 'best');
-                grid on;
-
-                % --- Damper Speed vs Time ---
-                subplot(3,2,4);
-                plot(time, velFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
-                plot(time, velFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
-                plot(time, velRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
-                plot(time, velRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
-                yline(0, 'k-', 'LineWidth', 0.5);
-                xlabel('Time [s]');
-                ylabel('Speed [mm/s]');
-                title('Damper Speed vs Time');
+                xlabel('Distance [m]');
+                ylabel('Camber [deg]');
+                title('Camber vs Distance');
                 legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
                 grid on;
+                xlim([0 max(s)]);
+
+                % --- Wheel Steer vs Distance ---
+                subplot(3,2,4);
+                if hasGeometryTelemetry
+                    plot(s, steerFL_deg, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                    plot(s, steerFR_deg, '-', 'Color', colFR, 'LineWidth', 1);
+                    plot(s, steerRL_deg, '-', 'Color', colRL, 'LineWidth', 1);
+                    plot(s, steerRR_deg, '-', 'Color', colRR, 'LineWidth', 1);
+                end
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Distance [m]');
+                ylabel('Wheel Steer [deg]');
+                title('Wheel Steer vs Distance');
+                legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+                grid on;
+                xlim([0 max(s)]);
             end
             
             if ~useSingleFigure

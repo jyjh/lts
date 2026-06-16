@@ -21,6 +21,9 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         
         % Static front weight distribution (from VehicleManager)
         staticFrontWeight = 0.48  % [0-1]
+
+        % Suspension and steering kinematic model
+        geometry
     end
     
     methods
@@ -29,7 +32,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass)
+                tireSpringRate, unsprungMass, geometry)
             % SUSPENSIONMANAGER Construct with front/rear suspension parameters
             %   SuspensionManager(vehicleManager, ...
             %       frontRollStiffDist, ...
@@ -52,8 +55,16 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   tireSpringRate      - Tire vertical stiffness [N/m] (shared)
             %   unsprungMass        - Per-corner unsprung mass [kg] (shared)
             
+            if nargin < 14 || isempty(geometry)
+                geometry = components.Suspension.SuspensionGeometry.fromPreset( ...
+                    'neutral', vehicleManager);
+                geometry.frontMotionRatioCurve = motionRatio * [1 1 1];
+                geometry.rearMotionRatioCurve = motionRatio * [1 1 1];
+            end
+
             % Pull static weight distribution from VehicleManager
             obj.staticFrontWeight = vehicleManager.staticFrontWeight;
+            obj.geometry = geometry;
             
             % Create front corners (share front parameters, each has own state)
             obj.frontLeft = components.Suspension.SimpleSuspension( ...
@@ -122,6 +133,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
                 obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
                 obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
+                obj.updateGeometry(0);
                 
                 % Check convergence: max absolute damper velocity across corners
                 maxVel = max(abs([
@@ -212,12 +224,41 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
             obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
             obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
+            obj.updateGeometry(state.steer);
             
             % --- Return per-corner tire normal forces ---
             loads.FL = obj.frontLeft.state.tireNormalForce;
             loads.FR = obj.frontRight.state.tireNormalForce;
             loads.RL = obj.rearLeft.state.tireNormalForce;
             loads.RR = obj.rearRight.state.tireNormalForce;
+        end
+
+        function updateGeometry(obj, steerInput)
+            % UPDATEGEOMETRY Refresh per-corner suspension kinematics.
+            obj.updateCornerGeometry(obj.frontLeft,  'FL', steerInput);
+            obj.updateCornerGeometry(obj.frontRight, 'FR', steerInput);
+            obj.updateCornerGeometry(obj.rearLeft,   'RL', steerInput);
+            obj.updateCornerGeometry(obj.rearRight,  'RR', steerInput);
+        end
+
+        function updateCornerGeometry(obj, cornerUnit, cornerName, steerInput)
+            cornerState = cornerUnit.state;
+            wheelTravel = cornerState.damperPosition / max(cornerUnit.motionRatio, eps);
+            kin = obj.geometry.computeCornerKinematics(cornerName, wheelTravel, steerInput);
+
+            cornerState.wheelTravel = kin.wheelTravel;
+            cornerState.camberAngle = kin.camberAngle;
+            cornerState.toeAngle = kin.toeAngle;
+            cornerState.steerAngle = kin.steerAngle;
+            cornerState.motionRatioEffective = max(kin.motionRatio, eps);
+        end
+
+        function cornerKinematics = getCornerKinematics(obj)
+            % GETCORNERKINEMATICS Return tire-facing geometry for all corners.
+            cornerKinematics.FL = obj.stateToKinematics(obj.frontLeft.state);
+            cornerKinematics.FR = obj.stateToKinematics(obj.frontRight.state);
+            cornerKinematics.RL = obj.stateToKinematics(obj.rearLeft.state);
+            cornerKinematics.RR = obj.stateToKinematics(obj.rearRight.state);
         end
         
         function pitchAngle = computePitchAngle(obj)
@@ -241,6 +282,16 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                                 obj.rearRight.state.damperPosition) / 2;
             
             pitchAngle = atan2(avgRearCompress - avgFrontCompress, obj.frontLeft.wheelbase);
+        end
+    end
+
+    methods (Static, Access = private)
+        function kin = stateToKinematics(state)
+            kin.wheelTravel = state.wheelTravel;
+            kin.camberAngle = state.camberAngle;
+            kin.toeAngle = state.toeAngle;
+            kin.steerAngle = state.steerAngle;
+            kin.motionRatio = state.motionRatioEffective;
         end
     end
 end

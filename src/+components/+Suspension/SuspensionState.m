@@ -21,6 +21,22 @@ classdef SuspensionState < handle
         
         % Normal force at tire contact patch [N]
         tireNormalForce  = 0
+
+        % Wheel travel from static equilibrium [m]
+        % Positive = bump/compression
+        wheelTravel      = 0
+
+        % Tire inclination angle from suspension geometry [rad]
+        camberAngle      = 0
+
+        % Static/compliance toe angle from suspension geometry [rad]
+        toeAngle         = 0
+
+        % Road-wheel steering angle from steering geometry [rad]
+        steerAngle       = 0
+
+        % Effective installation motion ratio from geometry [-]
+        motionRatioEffective = 1
         
         % Net spring + damper force acting on sprung mass [N]
         suspensionForce  = 0
@@ -36,6 +52,11 @@ classdef SuspensionState < handle
             obj.damperVelocity  = 0;
             obj.tireDeflection  = 0;
             obj.tireNormalForce = 0;
+            obj.wheelTravel     = 0;
+            obj.camberAngle     = 0;
+            obj.toeAngle        = 0;
+            obj.steerAngle      = 0;
+            obj.motionRatioEffective = 1;
             obj.suspensionForce = 0;
             obj.demandedLoad    = 0;
         end
@@ -46,6 +67,11 @@ classdef SuspensionState < handle
             obj.damperVelocity  = 0;
             obj.tireDeflection  = 0;
             obj.tireNormalForce = 0;
+            obj.wheelTravel     = 0;
+            obj.camberAngle     = 0;
+            obj.toeAngle        = 0;
+            obj.steerAngle      = 0;
+            obj.motionRatioEffective = 1;
             obj.suspensionForce = 0;
             obj.demandedLoad    = 0;
         end

@@ -128,25 +128,30 @@ classdef SimpleTire < components.Tire.TireModel
         function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
             % UPDATEALLFROMSTATE Update all four tire states from vehicle state
             slipAngles = obj.computeSlipAngles( ...
-                state.speed, state.vy, state.yawRate, state.steer, ...
-                vehicleManager.wheelbase, vehicleManager.staticFrontWeight);
+                state.speed, state.vy, state.yawRate, state.steer, vehicleManager);
+            suspensionKinematics = components.Tire.SimpleTire.getSuspensionKinematics( ...
+                vehicleManager, state.steer);
 
             obj.updateCorner(obj.FL, cornerLoads.FL, slipAngles.FL, ...
-                obj.computeSlipRatio(obj.FL, state.speed), mu);
+                obj.computeSlipRatio(obj.FL, state.speed), ...
+                suspensionKinematics.FL.camberAngle, mu);
             obj.updateCorner(obj.FR, cornerLoads.FR, slipAngles.FR, ...
-                obj.computeSlipRatio(obj.FR, state.speed), mu);
+                obj.computeSlipRatio(obj.FR, state.speed), ...
+                suspensionKinematics.FR.camberAngle, mu);
             obj.updateCorner(obj.RL, cornerLoads.RL, slipAngles.RL, ...
-                obj.computeSlipRatio(obj.RL, state.speed), mu);
+                obj.computeSlipRatio(obj.RL, state.speed), ...
+                suspensionKinematics.RL.camberAngle, mu);
             obj.updateCorner(obj.RR, cornerLoads.RR, slipAngles.RR, ...
-                obj.computeSlipRatio(obj.RR, state.speed), mu);
+                obj.computeSlipRatio(obj.RR, state.speed), ...
+                suspensionKinematics.RR.camberAngle, mu);
         end
 
-        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, mu)
+        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
             % UPDATECORNER Evaluate the simple tire model for one corner
             cornerState.normalForce = normalLoad;
             cornerState.slipAngle = slipAngle;
             cornerState.slipRatio = slipRatio;
-            cornerState.camberAngle = 0;
+            cornerState.camberAngle = camberAngle;
             cornerState.Fx = obj.computeLongitudinalForce(normalLoad, slipRatio, mu);
             cornerState.Fy = obj.computeLateralForce(normalLoad, slipAngle, mu);
             cornerState.Mx = 0;
@@ -155,24 +160,73 @@ classdef SimpleTire < components.Tire.TireModel
             cornerState.peakMu = obj.getPeakFriction(normalLoad);
         end
 
-        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac)
-            % COMPUTESLIPANGLES Bicycle-model slip angles for all corners
+        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, vehicleManager)
+            % COMPUTESLIPANGLES Per-corner slip angles from wheel kinematics
             slipAngles = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
 
             if vx < 0.5
                 return;
             end
 
-            lf = wheelbase * frontWeightFrac;
-            lr = wheelbase * (1 - frontWeightFrac);
+            suspensionKinematics = components.Tire.SimpleTire.getSuspensionKinematics( ...
+                vehicleManager, steerInput);
+            [xFL, yFL] = components.Tire.SimpleTire.getWheelPosition(vehicleManager, 'FL');
+            [xFR, yFR] = components.Tire.SimpleTire.getWheelPosition(vehicleManager, 'FR');
+            [xRL, yRL] = components.Tire.SimpleTire.getWheelPosition(vehicleManager, 'RL');
+            [xRR, yRR] = components.Tire.SimpleTire.getWheelPosition(vehicleManager, 'RR');
 
-            alphaRear = -atan((vy - lr * yawRate) / vx);
-            alphaFront = steerInput - atan((vy + lf * yawRate) / vx);
+            slipAngles.FL = components.Tire.SimpleTire.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFL, yFL, suspensionKinematics.FL);
+            slipAngles.FR = components.Tire.SimpleTire.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFR, yFR, suspensionKinematics.FR);
+            slipAngles.RL = components.Tire.SimpleTire.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRL, yRL, suspensionKinematics.RL);
+            slipAngles.RR = components.Tire.SimpleTire.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRR, yRR, suspensionKinematics.RR);
+        end
+    end
 
-            slipAngles.FL = alphaFront;
-            slipAngles.FR = alphaFront;
-            slipAngles.RL = alphaRear;
-            slipAngles.RR = alphaRear;
+    methods (Static, Access = private)
+        function suspensionKinematics = getSuspensionKinematics(vehicleManager, steerInput)
+            if ~isempty(vehicleManager.suspension) && ...
+                    ismethod(vehicleManager.suspension, 'getCornerKinematics')
+                suspensionKinematics = vehicleManager.suspension.getCornerKinematics();
+                return;
+            end
+
+            suspensionKinematics = struct();
+            suspensionKinematics.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+            suspensionKinematics.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+        end
+
+        function [x, y] = getWheelPosition(vehicleManager, corner)
+            frontArm = vehicleManager.wheelbase * (1 - vehicleManager.staticFrontWeight);
+            rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
+            halfTrack = vehicleManager.trackWidth / 2;
+
+            switch upper(corner)
+                case 'FL'
+                    x = frontArm;
+                    y = halfTrack;
+                case 'FR'
+                    x = frontArm;
+                    y = -halfTrack;
+                case 'RL'
+                    x = -rearArm;
+                    y = halfTrack;
+                otherwise
+                    x = -rearArm;
+                    y = -halfTrack;
+            end
+        end
+
+        function alpha = computeCornerSlipAngle(vx, vy, yawRate, x, y, kin)
+            vxCorner = vx - yawRate * y;
+            vyCorner = vy + yawRate * x;
+            wheelHeading = kin.steerAngle + kin.toeAngle;
+            alpha = wheelHeading - atan2(vyCorner, max(vxCorner, eps));
         end
     end
 end

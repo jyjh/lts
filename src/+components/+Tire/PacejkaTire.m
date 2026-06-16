@@ -178,24 +178,22 @@ classdef PacejkaTire < components.Tire.TireModel
         
         %% ---- Slip angle computation ----
         
-        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac)
+        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, vehicleManager)
             % COMPUTESLIPANGLES Compute per-corner tire slip angles [rad]
-            %   slipAngles = computeSlipAngles(vx, vy, yawRate, steerInput, wheelbase, frontWeightFrac)
+            %   slipAngles = computeSlipAngles(vx, vy, yawRate, steerInput, vehicleManager)
             %
-            %   Uses bicycle model kinematics:
-            %     Rear:  alpha = -atan((vy - lr*yawRate) / vx)
-            %     Front: alpha = delta - atan((vy + lf*yawRate) / vx)
+            %   Uses per-corner wheel kinematics:
+            %     alpha_i = steer_i + toe_i - atan2(vy_i, vx_i)
             %
-            %   Left and right tires on the same axle share the same slip
-            %   angle (Ackermann steering geometry is not yet modelled).
+            %   steer_i and toe_i come from the suspension geometry model,
+            %   allowing Ackermann, bump steer, rear steer, and toe curves.
             %
             %   Inputs:
             %     vx              - forward velocity [m/s]
             %     vy              - lateral velocity at CG [m/s]
             %     yawRate         - yaw rate [rad/s]
             %     steerInput      - driver steering input [rad]
-            %     wheelbase       - vehicle wheelbase [m]
-            %     frontWeightFrac - static front weight distribution [0-1]
+            %     vehicleManager  - vehicle/component manager with geometry
             %
             %   Returns struct with:
             %     slipAngles.FL, .FR, .RL, .RR  [rad]
@@ -207,23 +205,20 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            % CG-to-axle distances
-            lf = wheelbase * frontWeightFrac;       % CG to front axle
-            lr = wheelbase * (1 - frontWeightFrac); % CG to rear axle
-            
-            % Steering angle with geometry (TODO: Ackermann, rack ratio)
-            delta = obj.computeSteeringAngle(steerInput);
-            
-            % Rear slip angle (both rear tyres identical)
-            alpha_rear = -atan((vy - lr * yawRate) / vx);
-            
-            % Front slip angle (both front tyres identical)
-            alpha_front = delta - atan((vy + lf * yawRate) / vx);
-            
-            slipAngles.FL = alpha_front;
-            slipAngles.FR = alpha_front;
-            slipAngles.RL = alpha_rear;
-            slipAngles.RR = alpha_rear;
+            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, steerInput);
+            [xFL, yFL] = obj.getWheelPosition(vehicleManager, 'FL');
+            [xFR, yFR] = obj.getWheelPosition(vehicleManager, 'FR');
+            [xRL, yRL] = obj.getWheelPosition(vehicleManager, 'RL');
+            [xRR, yRR] = obj.getWheelPosition(vehicleManager, 'RR');
+
+            slipAngles.FL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFL, yFL, suspensionKinematics.FL);
+            slipAngles.FR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFR, yFR, suspensionKinematics.FR);
+            slipAngles.RL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRL, yRL, suspensionKinematics.RL);
+            slipAngles.RR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRR, yRR, suspensionKinematics.RR);
         end
         
         %% ---- Slip ratio computation ----
@@ -312,7 +307,8 @@ classdef PacejkaTire < components.Tire.TireModel
         
         function updateAllCorners(obj, Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
                 slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
-                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu)
+                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu, ...
+                camber_FL, camber_FR, camber_RL, camber_RR)
             % UPDATEALLCORNERS Evaluate all four corners at once
             %   updateAllCorners(Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
             %       slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
@@ -321,10 +317,17 @@ classdef PacejkaTire < components.Tire.TireModel
             %   Updates all four corner states with per-corner slip ratios.
             %   Camber defaults to 0 for all corners.
             
-            obj.updateCorner(obj.FL, Fz_FL, slipAngle_FL, kappa_FL, 0, mu);
-            obj.updateCorner(obj.FR, Fz_FR, slipAngle_FR, kappa_FR, 0, mu);
-            obj.updateCorner(obj.RL, Fz_RL, slipAngle_RL, kappa_RL, 0, mu);
-            obj.updateCorner(obj.RR, Fz_RR, slipAngle_RR, kappa_RR, 0, mu);
+            if nargin < 15
+                camber_FL = 0;
+                camber_FR = 0;
+                camber_RL = 0;
+                camber_RR = 0;
+            end
+
+            obj.updateCorner(obj.FL, Fz_FL, slipAngle_FL, kappa_FL, camber_FL, mu);
+            obj.updateCorner(obj.FR, Fz_FR, slipAngle_FR, kappa_FR, camber_FR, mu);
+            obj.updateCorner(obj.RL, Fz_RL, slipAngle_RL, kappa_RL, camber_RL, mu);
+            obj.updateCorner(obj.RR, Fz_RR, slipAngle_RR, kappa_RR, camber_RR, mu);
         end
         
         function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
@@ -342,10 +345,11 @@ classdef PacejkaTire < components.Tire.TireModel
             %     mu             - Surface friction multiplier
             %                      Treated as an absolute surface grip cap here.
             
-            % Compute per-corner slip angles
+            % Compute per-corner slip angles and suspension geometry
             slipAngles = obj.computeSlipAngles( ...
                 state.speed, state.vy, state.yawRate, state.steer, ...
-                vehicleManager.wheelbase, vehicleManager.staticFrontWeight);
+                vehicleManager);
+            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, state.steer);
             
             % Compute per-corner slip ratios from wheel rotational state
             kappa_FL = obj.computeSlipRatio(obj.FL, state.speed);
@@ -356,25 +360,56 @@ classdef PacejkaTire < components.Tire.TireModel
             obj.updateAllCorners( ...
                 cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
                 slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
-                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu);
+                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu, ...
+                suspensionKinematics.FL.camberAngle, ...
+                suspensionKinematics.FR.camberAngle, ...
+                suspensionKinematics.RL.camberAngle, ...
+                suspensionKinematics.RR.camberAngle);
         end
     end
     
     methods (Access = private)
-        
-        function steeringAngle = computeSteeringAngle(obj, steerInput)
-            % COMPUTESTEERINGANGLE Convert driver steering input to wheel angle
-            %   steeringAngle = computeSteeringAngle(steerInput)
-            %
-            %   TODO: Implement proper steering geometry:
-            %     - Steering rack ratio
-            %     - Ackermann correction (inside vs outside wheel)
-            %     - Compliance effects
-            %   Currently trivialized to a direct pass-through.
-            
-            steeringAngle = steerInput;
+        function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)
+            if ~isempty(vehicleManager.suspension) && ...
+                    ismethod(vehicleManager.suspension, 'getCornerKinematics')
+                suspensionKinematics = vehicleManager.suspension.getCornerKinematics();
+                return;
+            end
+
+            suspensionKinematics = struct();
+            suspensionKinematics.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+            suspensionKinematics.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
         end
 
+        function [x, y] = getWheelPosition(~, vehicleManager, corner)
+            frontArm = vehicleManager.wheelbase * (1 - vehicleManager.staticFrontWeight);
+            rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
+            halfTrack = vehicleManager.trackWidth / 2;
+
+            switch upper(corner)
+                case 'FL'
+                    x = frontArm;
+                    y = halfTrack;
+                case 'FR'
+                    x = frontArm;
+                    y = -halfTrack;
+                case 'RL'
+                    x = -rearArm;
+                    y = halfTrack;
+                otherwise
+                    x = -rearArm;
+                    y = -halfTrack;
+            end
+        end
+
+        function alpha = computeCornerSlipAngle(~, vx, vy, yawRate, x, y, kin)
+            vxCorner = vx - yawRate * y;
+            vyCorner = vy + yawRate * x;
+            wheelHeading = kin.steerAngle + kin.toeAngle;
+            alpha = wheelHeading - atan2(vyCorner, max(vxCorner, eps));
+        end
         function surfaceScale = computeSurfaceScale(obj, rawPeakMu, surfaceMu)
             % COMPUTESURFACESCALE Scale tire forces so surface mu is an absolute cap.
             surfaceMu = max(surfaceMu, 0);
