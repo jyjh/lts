@@ -9,7 +9,8 @@ classdef GraphPlotter
     %   3. Aero Dashboard     - Aero forces, balance, pitch, axle loads
     %   4. Suspension Dashboard - Travel, damper velocity, tire loads, load transfer
     %   5. Tire Dashboard     - Slip ratios, wheel speeds, tire forces, utilization
-    %   6. Powertrain Dashboard - Torque, drive force, speed overlay, force balance
+    %   6. Wheel Speed Dashboard - Four-corner wheel speeds and free-rolling error
+    %   7. Powertrain Dashboard - Torque, drive force, speed overlay, force balance
     %
     % Usage:
     %   GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero)
@@ -32,6 +33,9 @@ classdef GraphPlotter
     %
     %   GraphPlotter.plotTire(stateLog, vehicle)
     %     Creates the tire performance dashboard.
+    %
+    %   GraphPlotter.plotWheelSpeeds(stateLog, vehicle)
+    %     Creates the four-corner wheel speed dashboard.
     %
     %   GraphPlotter.plotPowertrain(stateLog, vehicle)
     %     Creates the powertrain dashboard.
@@ -61,6 +65,9 @@ classdef GraphPlotter
             GraphPlotter.plotAero(stateLog, vehicle, aero, singleWindow, 9);
             GraphPlotter.plotSuspension(stateLog, vehicle, singleWindow, 13);
             GraphPlotter.plotTire(stateLog, vehicle, singleWindow, 17);
+            if ~singleWindow
+                GraphPlotter.plotWheelSpeeds(stateLog, vehicle);
+            end
             GraphPlotter.plotPowertrain(stateLog, vehicle, singleWindow, 21);
         end
         
@@ -360,11 +367,16 @@ classdef GraphPlotter
             % PLOTSUSPENSION Create the suspension telemetry dashboard
             %   GraphPlotter.plotSuspension(stateLog, vehicle, useSingleFigure, startIdx)
             %
-            %   Creates a 4-subplot figure with:
-            %     1. Suspension Travel vs Distance (all 4 corners, mm)
-            %     2. Per-Corner Tire Loads vs Distance (N)
-            %     3. Damper Velocity vs Time (all 4 corners, mm/s)
-            %     4. Front/Rear Axle Load Transfer vs Time (N)
+            %   Creates a 6-subplot figure when opened standalone:
+            %     1. Damper Travel vs Distance (all 4 corners, mm)
+            %     2. Damper Speed vs Distance (all 4 corners, mm/s)
+            %     3. Damper Travel vs Time (all 4 corners, mm)
+            %     4. Damper Speed vs Time (all 4 corners, mm/s)
+            %     5. Damper Speed vs Travel phase plot
+            %     6. Per-Corner Tire Loads and axle load transfer
+            %
+            %   In single-window mode, uses the existing 4 allocated tiles:
+            %     travel vs distance, speed vs distance, tire loads, load transfer.
             %
             %   useSingleFigure, startIdx (optional): when provided, plots into
             %     subplot(6,4,startIdx+N) instead of creating a new figure.
@@ -380,12 +392,14 @@ classdef GraphPlotter
             damperFR_mm = stateLog.damperPos_FR * 1000;
             damperRL_mm = stateLog.damperPos_RL * 1000;
             damperRR_mm = stateLog.damperPos_RR * 1000;
+            travelMatrix = [damperFL_mm, damperFR_mm, damperRL_mm, damperRR_mm];
             
             % Convert damper velocity from m/s to mm/s
             velFL_mm = stateLog.damperVel_FL * 1000;
             velFR_mm = stateLog.damperVel_FR * 1000;
             velRL_mm = stateLog.damperVel_RL * 1000;
             velRR_mm = stateLog.damperVel_RR * 1000;
+            speedMatrix = [velFL_mm, velFR_mm, velRL_mm, velRR_mm];
             
             % Corner tire normal forces
             Fz_FL = stateLog.Fz_FL;
@@ -416,11 +430,11 @@ classdef GraphPlotter
             colRR = [0.929 0.694 0.125];   % gold
             
             if ~useSingleFigure
-                figure('Name', 'LTS - Suspension', 'Position', [100 100 1400 900]);
+                figure('Name', 'LTS - Suspension', 'Position', [100 100 1500 1000]);
             end
             
             % --- Suspension Travel vs Distance ---
-            if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
+            if useSingleFigure, subplot(6,4,startIdx); else, subplot(3,2,1); end
             plot(s, damperFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
             plot(s, damperFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
             plot(s, damperRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
@@ -428,48 +442,136 @@ classdef GraphPlotter
             yline(bumpStopMM, 'k--', 'LineWidth', 1);
             yline(0, 'k-', 'LineWidth', 0.5);
             xlabel('Distance [m]');
-            ylabel('Damper Displacement [mm]');
-            title('Suspension Travel');
+            ylabel('Travel [mm]');
+            title('Damper Travel vs Distance');
             legend('FL', 'FR', 'RL', 'RR', 'Bump Stop', 'Location', 'best');
+            grid on;
+            xlim([0 max(s)]);
+
+            % --- Damper Speed vs Distance ---
+            if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(3,2,2); end
+            plot(s, velFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+            plot(s, velFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
+            plot(s, velRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
+            plot(s, velRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
+            yline(0, 'k-', 'LineWidth', 0.5);
+            xlabel('Distance [m]');
+            ylabel('Speed [mm/s]');
+            title('Damper Speed vs Distance');
+            legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
             xlim([0 max(s)]);
             
             % --- Per-Corner Tire Loads vs Distance ---
-            if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
-            plot(s, Fz_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
-            plot(s, Fz_FR, '-', 'Color', colFR, 'LineWidth', 1);
-            plot(s, Fz_RL, '-', 'Color', colRL, 'LineWidth', 1);
-            plot(s, Fz_RR, '-', 'Color', colRR, 'LineWidth', 1);
+            if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(3,2,6); end
+            hFzFL = plot(s, Fz_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+            hFzFR = plot(s, Fz_FR, '-', 'Color', colFR, 'LineWidth', 1);
+            hFzRL = plot(s, Fz_RL, '-', 'Color', colRL, 'LineWidth', 1);
+            hFzRR = plot(s, Fz_RR, '-', 'Color', colRR, 'LineWidth', 1);
             xlabel('Distance [m]');
             ylabel('Tire Normal Force [N]');
             title('Per-Corner Tire Loads');
-            legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
             xlim([0 max(s)]);
+
+            if ~useSingleFigure
+                yyaxis right;
+                hFrontTransfer = plot(s, frontLoadTransfer, 'b--', 'LineWidth', 1);
+                hRearTransfer = plot(s, rearLoadTransfer, 'r--', 'LineWidth', 1);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                ylabel('Axle Load Transfer [N]');
+                title('Tire Loads & Axle Transfer');
+                legend([hFzFL hFzFR hFzRL hFzRR hFrontTransfer hRearTransfer], ...
+                    'FL F_z', 'FR F_z', 'RL F_z', 'RR F_z', ...
+                    'Front transfer', 'Rear transfer', 'Location', 'best');
+                yyaxis left;
+            else
+                legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+            end
             
-            % --- Damper Velocity vs Time ---
-            if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
-            plot(time, velFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
-            plot(time, velFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
-            plot(time, velRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
-            plot(time, velRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
-            yline(0, 'k-', 'LineWidth', 0.5);
-            xlabel('Time [s]');
-            ylabel('Damper Velocity [mm/s]');
-            title('Damper Velocity');
-            legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
-            grid on;
+            if ~useSingleFigure
+                % --- Damper Travel vs Time ---
+                subplot(3,2,3);
+                plot(time, damperFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                plot(time, damperFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
+                plot(time, damperRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
+                plot(time, damperRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
+                yline(bumpStopMM, 'k--', 'LineWidth', 1);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Time [s]');
+                ylabel('Travel [mm]');
+                title('Damper Travel vs Time');
+                legend('FL', 'FR', 'RL', 'RR', 'Bump Stop', 'Location', 'best');
+                grid on;
+
+                % --- Damper Speed vs Time ---
+                subplot(3,2,4);
+                plot(time, velFL_mm, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                plot(time, velFR_mm, '-', 'Color', colFR, 'LineWidth', 1);
+                plot(time, velRL_mm, '-', 'Color', colRL, 'LineWidth', 1);
+                plot(time, velRR_mm, '-', 'Color', colRR, 'LineWidth', 1);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Time [s]');
+                ylabel('Speed [mm/s]');
+                title('Damper Speed vs Time');
+                legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+                grid on;
+            end
             
-            % --- Front/Rear Axle Load Transfer vs Time ---
-            if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
-            plot(time, frontLoadTransfer, 'b-', 'LineWidth', 1.5); hold on;
-            plot(time, rearLoadTransfer, 'r-', 'LineWidth', 1.5);
-            yline(0, 'k-', 'LineWidth', 0.5);
-            xlabel('Time [s]');
-            ylabel('Load Transfer [N]');
-            title('Axle Load Transfer (from static)');
-            legend('Front axle', 'Rear axle', 'Location', 'best');
-            grid on;
+            if ~useSingleFigure
+                % --- Damper Speed vs Travel ---
+                subplot(3,2,5);
+                plot(damperFL_mm, velFL_mm, '.', 'Color', colFL, 'MarkerSize', 2); hold on;
+                plot(damperFR_mm, velFR_mm, '.', 'Color', colFR, 'MarkerSize', 2);
+                plot(damperRL_mm, velRL_mm, '.', 'Color', colRL, 'MarkerSize', 2);
+                plot(damperRR_mm, velRR_mm, '.', 'Color', colRR, 'MarkerSize', 2);
+                xline(bumpStopMM, 'k--', 'LineWidth', 1);
+                xline(0, 'k-', 'LineWidth', 0.5);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Travel [mm]');
+                ylabel('Speed [mm/s]');
+                title('Damper Speed vs Travel');
+                legend('FL', 'FR', 'RL', 'RR', 'Bump Stop', 'Location', 'best');
+                grid on;
+
+                % Keep y-range readable if startup transients create one or two spikes.
+                allSpeeds = speedMatrix(:);
+                finiteSpeeds = allSpeeds(isfinite(allSpeeds));
+                if numel(finiteSpeeds) > 10
+                    sortedSpeeds = sort(abs(finiteSpeeds));
+                    speedIdx = max(1, ceil(0.99 * numel(sortedSpeeds)));
+                    speedLimit = sortedSpeeds(speedIdx);
+                    if speedLimit > 0
+                        ylim([-speedLimit speedLimit]);
+                    end
+                end
+
+                % Add a compact travel/speed summary in the corner-load plot.
+                subplot(3,2,6);
+                maxTravel = max(travelMatrix, [], 1);
+                minTravel = min(travelMatrix, [], 1);
+                peakSpeed = max(abs(speedMatrix), [], 1);
+                text(0.99, 0.95, sprintf(['Max travel [mm]: FL %.1f | FR %.1f | RL %.1f | RR %.1f\n' ...
+                    'Min travel [mm]: FL %.1f | FR %.1f | RL %.1f | RR %.1f\n' ...
+                    'Peak speed [mm/s]: FL %.0f | FR %.0f | RL %.0f | RR %.0f'], ...
+                    maxTravel(1), maxTravel(2), maxTravel(3), maxTravel(4), ...
+                    minTravel(1), minTravel(2), minTravel(3), minTravel(4), ...
+                    peakSpeed(1), peakSpeed(2), peakSpeed(3), peakSpeed(4)), ...
+                    'Units', 'normalized', 'HorizontalAlignment', 'right', ...
+                    'VerticalAlignment', 'top', 'FontSize', 8, ...
+                    'BackgroundColor', 'w', 'EdgeColor', [0.8 0.8 0.8]);
+            else
+                % --- Front/Rear Axle Load Transfer vs Time ---
+                subplot(6,4,startIdx+3);
+                plot(time, frontLoadTransfer, 'b-', 'LineWidth', 1.5); hold on;
+                plot(time, rearLoadTransfer, 'r-', 'LineWidth', 1.5);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Time [s]');
+                ylabel('Load Transfer [N]');
+                title('Axle Load Transfer (from static)');
+                legend('Front axle', 'Rear axle', 'Location', 'best');
+                grid on;
+            end
         end
         
         function plotTire(stateLog, vehicle, useSingleFigure, startIdx)
@@ -578,6 +680,111 @@ classdef GraphPlotter
                 grid on;
             else
                 text(0.5, 0.5, 'No tire force data available', ...
+                    'HorizontalAlignment', 'center', 'Units', 'normalized');
+            end
+        end
+
+        function plotWheelSpeeds(stateLog, vehicle, useSingleFigure, startIdx)
+            % PLOTWHEELSPEEDS Create the four-corner wheel-speed dashboard
+            %   GraphPlotter.plotWheelSpeeds(stateLog, vehicle, useSingleFigure, startIdx)
+            %
+            %   Creates a 4-subplot figure with:
+            %     1. Four-corner linear wheel speed vs time with vehicle speed
+            %     2. Four-corner wheel-speed error vs time
+            %     3. Four-corner angular wheel speed vs time
+            %     4. Four-corner slip ratio vs time
+
+            if nargin < 3, useSingleFigure = false; end
+            if nargin < 4, startIdx = 1; end
+
+            time = stateLog.time;
+            speedKmh = stateLog.speedKmh;
+
+            colFL = [0 0.447 0.741];
+            colFR = [0.850 0.325 0.098];
+            colRL = [0.467 0.675 0.188];
+            colRR = [0.929 0.694 0.125];
+
+            hasWheelOmega = isfield(stateLog, 'omega_FL') && ...
+                isfield(stateLog, 'omega_FR') && ...
+                isfield(stateLog, 'omega_RL') && ...
+                isfield(stateLog, 'omega_RR');
+
+            if ~useSingleFigure
+                figure('Name', 'LTS - Wheel Speeds', 'Position', [175 175 1500 950]);
+            end
+
+            if ~hasWheelOmega
+                if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
+                text(0.5, 0.5, 'No wheel-speed telemetry available', ...
+                    'HorizontalAlignment', 'center', 'Units', 'normalized');
+                return;
+            end
+
+            R = vehicle.tire.FL.wheelRadius;
+            wheelSpeedFL = stateLog.omega_FL * R * 3.6;
+            wheelSpeedFR = stateLog.omega_FR * R * 3.6;
+            wheelSpeedRL = stateLog.omega_RL * R * 3.6;
+            wheelSpeedRR = stateLog.omega_RR * R * 3.6;
+
+            wheelRpmFL = stateLog.omega_FL * 60 / (2 * pi);
+            wheelRpmFR = stateLog.omega_FR * 60 / (2 * pi);
+            wheelRpmRL = stateLog.omega_RL * 60 / (2 * pi);
+            wheelRpmRR = stateLog.omega_RR * 60 / (2 * pi);
+
+            % --- Linear wheel speed vs time ---
+            if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
+            plot(time, speedKmh, 'k--', 'LineWidth', 1); hold on;
+            plot(time, wheelSpeedFL, '-', 'Color', colFL, 'LineWidth', 1);
+            plot(time, wheelSpeedFR, '-', 'Color', colFR, 'LineWidth', 1);
+            plot(time, wheelSpeedRL, '-', 'Color', colRL, 'LineWidth', 1);
+            plot(time, wheelSpeedRR, '-', 'Color', colRR, 'LineWidth', 1);
+            xlabel('Time [s]');
+            ylabel('Speed [km/h]');
+            title('Wheel Linear Speed vs Time');
+            legend('Vehicle', 'FL', 'FR', 'RL', 'RR', 'Location', 'best');
+            grid on;
+
+            % --- Wheel speed error vs time ---
+            if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
+            plot(time, wheelSpeedFL - speedKmh, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+            plot(time, wheelSpeedFR - speedKmh, '-', 'Color', colFR, 'LineWidth', 1);
+            plot(time, wheelSpeedRL - speedKmh, '-', 'Color', colRL, 'LineWidth', 1);
+            plot(time, wheelSpeedRR - speedKmh, '-', 'Color', colRR, 'LineWidth', 1);
+            yline(0, 'k-', 'LineWidth', 0.5);
+            xlabel('Time [s]');
+            ylabel('Wheel - Vehicle [km/h]');
+            title('Wheel Speed Error');
+            legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+            grid on;
+
+            % --- Angular wheel speed vs time ---
+            if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
+            plot(time, wheelRpmFL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+            plot(time, wheelRpmFR, '-', 'Color', colFR, 'LineWidth', 1);
+            plot(time, wheelRpmRL, '-', 'Color', colRL, 'LineWidth', 1);
+            plot(time, wheelRpmRR, '-', 'Color', colRR, 'LineWidth', 1);
+            xlabel('Time [s]');
+            ylabel('Wheel Speed [rpm]');
+            title('Wheel Angular Speed');
+            legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+            grid on;
+
+            % --- Slip ratio vs time ---
+            if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
+            if isfield(stateLog, 'slipRatio_FL')
+                plot(time, stateLog.slipRatio_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
+                plot(time, stateLog.slipRatio_FR, '-', 'Color', colFR, 'LineWidth', 1);
+                plot(time, stateLog.slipRatio_RL, '-', 'Color', colRL, 'LineWidth', 1);
+                plot(time, stateLog.slipRatio_RR, '-', 'Color', colRR, 'LineWidth', 1);
+                yline(0, 'k-', 'LineWidth', 0.5);
+                xlabel('Time [s]');
+                ylabel('Slip Ratio [-]');
+                title('Slip Ratio From Wheel Speed');
+                legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
+                grid on;
+            else
+                text(0.5, 0.5, 'No slip-ratio telemetry available', ...
                     'HorizontalAlignment', 'center', 'Units', 'normalized');
             end
         end

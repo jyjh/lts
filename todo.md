@@ -1,2 +1,8 @@
 - Reimplement the whole contract model
 - LTS implements an "Interface" abstract class.
+- Improve non-driven wheel speed accuracy:
+  - Current free-rolling front wheel behavior is directionally correct: front wheels get zero drive torque, lagging wheel speed creates negative slip, tire Fx spins the wheels up through road contact.
+  - Current implementation is explicit and one timestep lagged because wheel dynamics use previous-step Fx before recomputing slip and tire force.
+  - Replace with a semi-implicit wheel/contact solve: iterate omega -> slip -> Fx -> omega a few times per timestep, or solve omega_new = omega_old + dt/I * (T_drive - T_brake - Fx(kappa(omega_new, V))*R).
+  - Add low-speed handling for slip ratio because startup slip is numerically ill-conditioned near zero speed.
+  - Add rolling resistance torque, bearing drag, and brake drag for more realistic free-rolling wheel behavior.

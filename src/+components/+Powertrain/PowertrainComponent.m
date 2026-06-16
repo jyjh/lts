@@ -1,14 +1,14 @@
 classdef (Abstract) PowertrainComponent
     % POWERTRAINCOMPONENT Abstract interface for powertrain models
-    % Provides drive force computation and motor speed state tracking.
+    % Provides wheel torque computation and motor speed state tracking.
 
     properties (Abstract)
         state  % components.Powertrain.PowertrainState
     end
     
     methods (Abstract)
-        % Drive force at wheels [N] given vehicle speed and throttle [0-1]
-        F_drive = computeDriveForce(obj, speed, throttle)
+        % Total driven-axle wheel torque [Nm] given vehicle speed and throttle [0-1]
+        wheelTorque = computeDriveTorque(obj, speed, throttle)
 
         % Update motor speed from driven-wheel angular velocity [rad/s]
         updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)

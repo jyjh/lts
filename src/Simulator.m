@@ -21,8 +21,8 @@ classdef Simulator
         % Simulation timestep [s]
         dt = 0.001
 
-        % Maximum braking slip ratio before brake input is reduced.
-        % Prevents wheel-speed integration from numerically locking a tire.
+        % Reserved for a future ABS-style brake controller.
+        % Open-loop braking currently applies commanded brake torque directly.
         maxBrakeSlipRatio = 0.15
         
         % Internal: track whether maxSpeed warning was issued (warn once)
@@ -87,10 +87,10 @@ classdef Simulator
             Fz_front = max(0, Fz_front);
             Fz_rear  = max(0, Fz_rear);
             
-            % --- POWERTRAIN STATE & DRIVE FORCE ---
+            % --- POWERTRAIN STATE & DRIVE TORQUE ---
             vm.powertrain.updateStateFromDrivenWheels( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
-            F_drive = vm.powertrain.computeDriveForce(v, throttle);
+            totalDriveTorque = vm.powertrain.computeDriveTorque(v, throttle);
 
             % --- COMBINED TIRE GRIP LIMIT ---
             totalNormalLoad = W + F_downforce;
@@ -116,15 +116,16 @@ classdef Simulator
             % --- WHEEL TORQUE SETUP ---
             % RWD assumption: drive torque only on rear wheels.
             % Brake distribution: fixed front/rear bias from VehicleManager.
-            % Drive force is split equally between the two driven wheels.
             R = vm.tire.RL.wheelRadius;  % all corners share same radius
             T_drive_front = 0;
-            T_drive_rear  = F_drive * R / 2;
+            T_drive_rear  = totalDriveTorque / 2;
 
-            % --- BRAKE FORCE ---
+            % --- BRAKE TORQUE ---
             brakeCommand = max(0, min(1, brake));
             brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
             brakeBiasRear = 1 - brakeBiasFront;
+            % Existing brakeForceCoefficient is preserved as an equivalent
+            % total brake force capacity, then converted to wheel torque.
             brakeForceCapacity = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
 
             longGripScale = sqrt(max(0, 1 - lateralUsage^2));
@@ -147,26 +148,19 @@ classdef Simulator
                 brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RR / brakeBiasRear);
             end
 
-            wheelLockLimit = obj.computeWheelLockBrakeLimit( ...
-                vm, v, R, T_drive_front, T_drive_rear, ...
-                brakeBiasFront, brakeBiasRear);
-
-            maxBrakeForce = min([brakeForceCapacity, brakeGripLimit, wheelLockLimit]);
-            brakeForceMag = min(brakeCommand * brakeForceCapacity, maxBrakeForce);
-            F_brake_front = brakeForceMag * brakeBiasFront;
-            F_brake_rear = brakeForceMag * brakeBiasRear;
-            F_brake = -brakeForceMag;
-            effectiveBrakeCommand = 0;
-            if brakeForceCapacity > eps
-                effectiveBrakeCommand = brakeForceMag / brakeForceCapacity;
-            end
+            wheelLockLimit = inf;
+            maxBrakeForce = brakeForceCapacity;
+            brakeForceMag = brakeCommand * brakeForceCapacity;
+            F_brake_front_cmd = brakeForceMag * brakeBiasFront;
+            F_brake_rear_cmd = brakeForceMag * brakeBiasRear;
+            effectiveBrakeCommand = brakeCommand;
             
             % --- WHEEL DYNAMICS & SLIP RATIO ---
             % Compute per-corner torques and update wheel angular velocities,
             % then evaluate tire forces with computed slip ratios.
             % Per-corner brake torque by axle bias
-            T_brake_front = F_brake_front * R / 2;
-            T_brake_rear = F_brake_rear * R / 2;
+            T_brake_front = F_brake_front_cmd * R / 2;
+            T_brake_rear = F_brake_rear_cmd * R / 2;
 
             % Update wheel rotational state (uses previous-timestep Fx)
             vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt);
@@ -189,7 +183,11 @@ classdef Simulator
             tireInputState.mu = curMu;
             vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu);
             % --- LONGITUDINAL FORCE BALANCE ---
-            F_net_long = F_drive + F_brake - F_drag;
+            F_tire_long = vm.tire.FL.Fx + vm.tire.FR.Fx + ...
+                vm.tire.RL.Fx + vm.tire.RR.Fx;
+            F_drive = max(0, F_tire_long);
+            F_brake = min(0, F_tire_long);
+            F_net_long = F_tire_long - F_drag;
             F_rollResist = 0.015 * (W + F_downforce);
             F_net_long = F_net_long - sign(v) * F_rollResist;
             
@@ -224,12 +222,13 @@ classdef Simulator
             forces.F_drag = F_drag;
             forces.F_drive = F_drive;
             forces.F_brake = F_brake;
-            forces.F_brake_front = -F_brake_front;
-            forces.F_brake_rear = -F_brake_rear;
-            forces.F_brake_FL = -F_brake_front / 2;
-            forces.F_brake_FR = -F_brake_front / 2;
-            forces.F_brake_RL = -F_brake_rear / 2;
-            forces.F_brake_RR = -F_brake_rear / 2;
+            forces.F_tire_long = F_tire_long;
+            forces.F_brake_front = min(0, vm.tire.FL.Fx + vm.tire.FR.Fx);
+            forces.F_brake_rear = min(0, vm.tire.RL.Fx + vm.tire.RR.Fx);
+            forces.F_brake_FL = min(0, vm.tire.FL.Fx);
+            forces.F_brake_FR = min(0, vm.tire.FR.Fx);
+            forces.F_brake_RL = min(0, vm.tire.RL.Fx);
+            forces.F_brake_RR = min(0, vm.tire.RR.Fx);
             forces.brakeCommand = brakeCommand;
             forces.brake = effectiveBrakeCommand;
             forces.brakeLimit = maxBrakeForce;
@@ -240,6 +239,13 @@ classdef Simulator
             forces.brakeGrip_FR = longGrip_FR;
             forces.brakeGrip_RL = longGrip_RL;
             forces.brakeGrip_RR = longGrip_RR;
+            forces.driveTorqueTotal = totalDriveTorque;
+            forces.driveTorque_RL = T_drive_rear;
+            forces.driveTorque_RR = T_drive_rear;
+            forces.brakeTorque_FL = T_brake_front;
+            forces.brakeTorque_FR = T_brake_front;
+            forces.brakeTorque_RL = T_brake_rear;
+            forces.brakeTorque_RR = T_brake_rear;
             forces.motorRPM = 0;
             forces.motorTorque = 0;
             forces.wheelTorque = 0;
@@ -304,6 +310,7 @@ classdef Simulator
                 'F_drag',      zeros(maxSteps, 1), ...
                 'F_drive',     zeros(maxSteps, 1), ...
                 'F_brake',     zeros(maxSteps, 1), ...
+                'F_tire_long', zeros(maxSteps, 1), ...
                 'F_brake_front', zeros(maxSteps, 1), ...
                 'F_brake_rear', zeros(maxSteps, 1), ...
                 'F_brake_FL',  zeros(maxSteps, 1), ...
@@ -314,6 +321,13 @@ classdef Simulator
                 'brakeGrip_FR', zeros(maxSteps, 1), ...
                 'brakeGrip_RL', zeros(maxSteps, 1), ...
                 'brakeGrip_RR', zeros(maxSteps, 1), ...
+                'driveTorqueTotal', zeros(maxSteps, 1), ...
+                'driveTorque_RL', zeros(maxSteps, 1), ...
+                'driveTorque_RR', zeros(maxSteps, 1), ...
+                'brakeTorque_FL', zeros(maxSteps, 1), ...
+                'brakeTorque_FR', zeros(maxSteps, 1), ...
+                'brakeTorque_RL', zeros(maxSteps, 1), ...
+                'brakeTorque_RR', zeros(maxSteps, 1), ...
                 'motorRPM',    zeros(maxSteps, 1), ...
                 'motorTorque', zeros(maxSteps, 1), ...
                 'wheelTorque', zeros(maxSteps, 1), ...
@@ -403,6 +417,7 @@ classdef Simulator
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
                     stateLog.F_brake(step)     = forces.F_brake;
+                    stateLog.F_tire_long(step) = forces.F_tire_long;
                     stateLog.F_brake_front(step) = forces.F_brake_front;
                     stateLog.F_brake_rear(step) = forces.F_brake_rear;
                     stateLog.F_brake_FL(step)  = forces.F_brake_FL;
@@ -413,6 +428,13 @@ classdef Simulator
                     stateLog.brakeGrip_FR(step) = forces.brakeGrip_FR;
                     stateLog.brakeGrip_RL(step) = forces.brakeGrip_RL;
                     stateLog.brakeGrip_RR(step) = forces.brakeGrip_RR;
+                    stateLog.driveTorqueTotal(step) = forces.driveTorqueTotal;
+                    stateLog.driveTorque_RL(step) = forces.driveTorque_RL;
+                    stateLog.driveTorque_RR(step) = forces.driveTorque_RR;
+                    stateLog.brakeTorque_FL(step) = forces.brakeTorque_FL;
+                    stateLog.brakeTorque_FR(step) = forces.brakeTorque_FR;
+                    stateLog.brakeTorque_RL(step) = forces.brakeTorque_RL;
+                    stateLog.brakeTorque_RR(step) = forces.brakeTorque_RR;
                     stateLog.motorRPM(step)    = forces.motorRPM;
                     stateLog.motorTorque(step) = forces.motorTorque;
                     stateLog.wheelTorque(step) = forces.wheelTorque;

@@ -29,8 +29,8 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             obj.torqueCurveNm  = [0  35   45   52   55    50     40] * (obj.maxEngineTorque / 55);
         end
         
-        function F_drive = computeDriveForce(obj, speed, throttle)
-            % Compute drive force at wheels
+        function wheelTorque = computeDriveTorque(obj, speed, throttle)
+            % Compute total driven-axle wheel torque.
             throttle = max(0, min(1, throttle));  % Clamp [0,1]
             
             if ~obj.state.motorSpeedInitialized
@@ -41,8 +41,8 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             
             % Engine braking if below idle (no drive force)
             if engineRPM < obj.idleRPM && throttle == 0
-                F_drive = 0;
-                obj.state.updateOutputs(throttle, 0, 0, F_drive, obj.drivetrainEfficiency);
+                wheelTorque = 0;
+                obj.state.updateOutputs(throttle, 0, 0, 0, obj.drivetrainEfficiency);
                 return;
             end
             
@@ -52,12 +52,19 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             % Interpolate torque from curve
             torque = interp1(obj.torqueCurveRPM, obj.torqueCurveNm, engineRPM, 'linear', 0);
             
-            % Drive force at wheels
-            F_drive = torque * obj.totalGearRatio * obj.drivetrainEfficiency * throttle / obj.wheelRadius;
-            wheelTorque = F_drive * obj.wheelRadius;
+            % Total torque delivered to the driven axle.
+            wheelTorque = torque * obj.totalGearRatio * obj.drivetrainEfficiency * throttle;
+            equivalentDriveForce = wheelTorque / max(obj.wheelRadius, eps);
             motorTorque = torque * throttle;
             obj.state.updateOutputs( ...
-                throttle, motorTorque, wheelTorque, F_drive, obj.drivetrainEfficiency);
+                throttle, motorTorque, wheelTorque, equivalentDriveForce, ...
+                obj.drivetrainEfficiency);
+        end
+
+        function F_drive = computeDriveForce(obj, speed, throttle)
+            % Compatibility helper: requested wheel torque as equivalent force.
+            wheelTorque = obj.computeDriveTorque(speed, throttle);
+            F_drive = wheelTorque / max(obj.wheelRadius, eps);
         end
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)

@@ -89,13 +89,13 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             obj.maxVehicleSpeed = max(obj.speedCurve);
         end
         
-        function F_drive = computeDriveForce(obj, speed, throttle)
-            % Compute wheel tractive force from current motor RPM.
+        function wheelTorque = computeDriveTorque(obj, speed, throttle)
+            % Compute total driven-axle wheel torque from current motor RPM.
             throttle = max(0, min(1, throttle));
             
             if throttle == 0
-                F_drive = 0;
-                obj.state.updateOutputs(throttle, 0, 0, F_drive, obj.drivetrainEfficiency);
+                wheelTorque = 0;
+                obj.state.updateOutputs(throttle, 0, 0, 0, obj.drivetrainEfficiency);
                 return;
             end
             
@@ -107,16 +107,16 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             motorRPM = obj.state.motorRPM;
             rpmLimitActive = obj.isRPMLimitActive(motorRPM);
             if rpmLimitActive
-                F_drive = 0;
-                obj.state.updateOutputs(throttle, 0, 0, F_drive, ...
+                wheelTorque = 0;
+                obj.state.updateOutputs(throttle, 0, 0, 0, ...
                     obj.drivetrainEfficiency, true);
                 return;
             end
             
             fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
             
-            F_drive = fullThrottleForce * throttle * obj.drivetrainEfficiency;
-            wheelTorque = F_drive * obj.wheelRadius;
+            equivalentDriveForce = fullThrottleForce * throttle * obj.drivetrainEfficiency;
+            wheelTorque = equivalentDriveForce * obj.wheelRadius;
             if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
                 motorTorque = wheelTorque / ...
                     (obj.totalGearRatio * obj.drivetrainEfficiency);
@@ -124,7 +124,14 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
                 motorTorque = 0;
             end
             obj.state.updateOutputs( ...
-                throttle, motorTorque, wheelTorque, F_drive, obj.drivetrainEfficiency, false);
+                throttle, motorTorque, wheelTorque, equivalentDriveForce, ...
+                obj.drivetrainEfficiency, false);
+        end
+
+        function F_drive = computeDriveForce(obj, speed, throttle)
+            % Compatibility helper: requested wheel torque as equivalent force.
+            wheelTorque = obj.computeDriveTorque(speed, throttle);
+            F_drive = wheelTorque / max(obj.wheelRadius, eps);
         end
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)

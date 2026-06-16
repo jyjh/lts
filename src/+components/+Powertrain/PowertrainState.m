@@ -36,7 +36,7 @@ classdef PowertrainState < handle
         % Wheel torque after gear ratio and efficiency [Nm]
         wheelTorque = 0
         
-        % Longitudinal drive force at the contact patches [N]
+        % Equivalent requested drive force for telemetry/backward compatibility [N]
         driveForce = 0
         
         % Gear/final drive ratio used for this state update [-]
