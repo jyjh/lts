@@ -8,6 +8,9 @@ An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The p
 run_simulation
 ```
 
+Each run writes a MoTeC i2 import CSV to `exports/motec_<track>_<timestamp>.csv`.
+Set `exportMoTeC = false` in `src/run_simulation.m` to disable this.
+
 Edit `trackType` in `src/run_simulation.m` to switch between:
 
 - `straight`
@@ -24,6 +27,7 @@ Edit `trackType` in `src/run_simulation.m` to switch between:
 - EMRAX 228 powertrain: `components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
 - Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
 - Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, and busstop layouts.
+- MoTeC telemetry export: `TelemetryExporter.writeToMoTeCFormat` writes simulation logs as MoTeC i2 import CSVs with channel names, units, and derived viewing channels.
 
 ## Documentation
 

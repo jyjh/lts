@@ -15,13 +15,16 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
 %  ====================================================================
-trackType = 'straight';
+trackType = 'autocross';
 
 %% ====================================================================
 %  DISPLAY OPTIONS
 %  Set to true to show all graphs in a single window
 %  ====================================================================
 singleWindow = false;
+
+% Export a MoTeC i2 CSV after the simulation completes.
+exportMoTeC = true;
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -145,6 +148,13 @@ simulator = Simulator(vehicle, driver, dt);
 
 initialState = VehicleState('s', 0, 'speed', 0.1);
 [stateLog, lapTime] = simulator.simulate(initialState, track);
+
+if exportMoTeC
+    scriptDir = fileparts(mfilename('fullpath'));
+    exportDir = fullfile(scriptDir, '..', 'exports');
+    exportFile = sprintf('motec_%s_%s.csv', trackType, datestr(now, 'yyyymmdd_HHMMSS'));
+    TelemetryExporter.writeToMoTeCFormat(stateLog, fullfile(exportDir, exportFile));
+end
 
 %% ====================================================================
 %  COMPUTE PER-COMPONENT AERO AT FINAL STATE (for reporting)

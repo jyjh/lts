@@ -56,7 +56,6 @@ classDiagram
     }
 
     class TelemetryExporter {
-        <<planned>>
         +writeToMoTeCFormat(stateLog, filepath)
     }
 
@@ -65,4 +64,4 @@ classDiagram
     TireTIRFile --> TireConstants : parsed by constructor
     TireConstants --> PacejkaTire : used by
     TrackDataLoader --> TestTrack : future external track input
-    TelemetryExporter <-- Simulator : future stateLog export
+    TelemetryExporter <-- Simulator : stateLog export

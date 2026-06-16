@@ -4,9 +4,9 @@ title: Data Ingestion
 permalink: /data-ingestion/
 ---
 
-## Data Ingestion Architecture
+## Data Ingestion And Export Architecture
 
-The current project already consumes two external data files directly through component constructors. Additional generic loader/exporter classes remain planned.
+The current project consumes external data files directly through component constructors and exports simulator telemetry for external review. Additional generic loader classes remain planned.
 
 > Maintainer note: The diagram below is generated from [`data_ingestion.mmd`](data_ingestion.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.
 
@@ -43,10 +43,14 @@ The current `stateLog` includes:
 - Tire channels: slip ratio, wheel angular velocity, tire longitudinal/lateral force.
 - Powertrain channels: drive force, motor RPM, motor torque, wheel torque, driven-wheel RPM, RPM limiter state.
 
-### Planned Interfaces
+`TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)` writes this data to a MoTeC i2 import CSV. The first row contains channel names, the second row contains units, and subsequent rows contain numeric samples. The exporter also adds convenience channels such as acceleration in g, steering/camber/toe in degrees, damper positions in millimeters, slip ratios in percent, and wheel speeds in rpm.
+
+`src/run_simulation.m` enables this by default and writes files to `exports/motec_<track>_<timestamp>.csv`.
+
+### Interfaces
 
 | Class | Purpose | Status |
 |-------|---------|--------|
 | `TrackDataLoader` | Load GPS/cone CSV data, smooth curvature, generate racing line | Planned |
-| `TelemetryExporter` | Export `stateLog` to MoTeC-compatible CSV | Planned |
+| `TelemetryExporter` | Export `stateLog` to MoTeC-compatible CSV | Implemented |
 | Generic aero map loader | Populate aero lookup tables from CFD data | Planned |
