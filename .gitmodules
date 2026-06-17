@@ -1,3 +1,3 @@
 [submodule "external/MotecLogGenerator"]
 	path = external/MotecLogGenerator
-	url = https://github.com/stevendaniluk/MotecLogGenerator.git
+	url = https://github.com/jyjh/MotecLogGenerator.git
