@@ -43,14 +43,29 @@ The current `stateLog` includes:
 - Tire channels: slip ratio, wheel angular velocity, tire longitudinal/lateral force.
 - Powertrain channels: drive force, motor RPM, motor torque, wheel torque, driven-wheel RPM, RPM limiter state.
 
-`TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)` writes this data to a MoTeC i2 import CSV. The first row contains channel names, the second row contains units, and subsequent rows contain numeric samples. The exporter also adds convenience channels such as acceleration in g, steering/camber/toe in degrees, damper positions in millimeters, slip ratios in percent, and wheel speeds in rpm.
+`TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)` writes this data to a CSV that follows the [`MotecLogGenerator`](https://github.com/stevendaniluk/MotecLogGenerator) CSV input requirements: the first row contains channel names, the first column is time, and remaining rows contain numeric samples. The exporter also adds convenience channels such as acceleration in g, steering/camber/toe in degrees, damper positions in millimeters, slip ratios in percent, and wheel speeds in rpm.
 
-`src/run_simulation.m` enables this by default and writes files to `exports/motec_<track>_<timestamp>.csv`.
+`TelemetryExporter.exportToMoTeCLog(stateLog, filepath)` writes the CSV and then invokes `external/MotecLogGenerator/motec_log_generator.py` to create a `.ld` file. `src/run_simulation.m` enables this by default and writes both `exports/motec_<track>_<timestamp>.csv` and `exports/motec_<track>_<timestamp>.ld`.
+
+Manual conversion is available from MATLAB through `TelemetryExporter`:
+
+```matlab
+addpath('src')
+TelemetryExporter.convertCsvToMoTeCLog( ...
+    'exports/motec_autocross_20260616_153000.csv', 'Frequency', 1000)
+```
+
+The submodule and Python dependencies are required for `.ld` conversion:
+
+```bash
+git submodule update --init --recursive
+python -m pip install cantools numpy
+```
 
 ### Interfaces
 
 | Class | Purpose | Status |
 |-------|---------|--------|
 | `TrackDataLoader` | Load GPS/cone CSV data, smooth curvature, generate racing line | Planned |
-| `TelemetryExporter` | Export `stateLog` to MoTeC-compatible CSV | Implemented |
+| `TelemetryExporter` | Export `stateLog` to MotecLogGenerator CSV and convert to MoTeC `.ld` | Implemented |
 | Generic aero map loader | Populate aero lookup tables from CFD data | Planned |

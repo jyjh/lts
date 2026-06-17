@@ -13,7 +13,7 @@ classdef TestTrack < components.Track
     methods
         function obj = TestTrack(trackType)
             % TESTTRACK Create a test track
-            %   trackType: 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
+            %   trackType: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
             %   Default is 'oval'
             
             if nargin < 1
@@ -21,6 +21,8 @@ classdef TestTrack < components.Track
             end
             
             switch lower(trackType)
+                case 'straight10'
+                    obj = buildStraight10(obj);
                 case 'straight'
                     obj = buildStraight(obj);
                 case 'oval'
@@ -60,6 +62,16 @@ classdef TestTrack < components.Track
     end
     
     methods (Access = private)
+        function obj = buildStraight10(obj)
+            % 10m straight for fast export/debug validation
+            ds = 0.5;  % 0.5m spacing
+            x = (0:ds:10)';
+            y = zeros(size(x));
+
+            obj.trackPoints = [x, y];
+            obj = finalizeTrack(obj, 1.2);
+        end
+
         function obj = buildStraight(obj)
             % 200m straight for top speed validation
             ds = 1;  % 1m spacing

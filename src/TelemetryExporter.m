@@ -1,15 +1,15 @@
 classdef TelemetryExporter
     % TELEMETRYEXPORTER Export simulation telemetry for external analysis.
     %
-    % The MoTeC export is a CSV intended for MoTeC i2's CSV import workflow:
-    % row 1 contains channel names, row 2 contains channel units, and the
-    % remaining rows contain numeric samples. The first channel is Time [s].
+    % The MoTeC export is a MotecLogGenerator-compatible CSV:
+    % row 1 contains channel names, and remaining rows contain numeric
+    % samples. The first channel is Time [s].
 
     methods (Static)
         function filepath = writeToMoTeCFormat(stateLog, filepath, varargin)
-            % WRITETOMOTECFORMAT Write stateLog to a MoTeC i2 import CSV.
+            % WRITETOMOTECFORMAT Write stateLog to a MotecLogGenerator CSV.
             %   filepath = TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)
-            %   writes a channel-name row, unit row, and numeric data rows.
+            %   writes one channel-name row followed by numeric data rows.
             %
             %   Optional name-value pairs:
             %     Channels       - cell array of stateLog field names to export
@@ -39,6 +39,103 @@ classdef TelemetryExporter
             TelemetryExporter.writeCsv(filepath, tableData);
 
             fprintf('MoTeC CSV exported: %s\n', filepath);
+        end
+
+        function [csvFile, ldFile] = exportToMoTeCLog(stateLog, csvFile, varargin)
+            % EXPORTTOMOTECLOG Write CSV and convert it to a MoTeC .ld file.
+            %   [csvFile, ldFile] = TelemetryExporter.exportToMoTeCLog(stateLog, csvFile)
+
+            parser = inputParser;
+            parser.KeepUnmatched = true;
+            parser.addParameter('Channels', {}, @(x) iscell(x) || isstring(x) || ischar(x));
+            parser.addParameter('IncludeDerived', true, @(x) islogical(x) || isnumeric(x));
+            parser.parse(varargin{:});
+
+            csvFile = TelemetryExporter.writeToMoTeCFormat( ...
+                stateLog, csvFile, ...
+                'Channels', parser.Results.Channels, ...
+                'IncludeDerived', parser.Results.IncludeDerived);
+
+            convertArgs = TelemetryExporter.nameValueStructToCell(parser.Unmatched);
+            ldFile = TelemetryExporter.convertCsvToMoTeCLog(csvFile, convertArgs{:});
+        end
+
+        function ldFile = convertCsvToMoTeCLog(csvFile, varargin)
+            % CONVERTCSVTOMOTECLOG Convert a MotecLogGenerator CSV to .ld.
+
+            parser = inputParser;
+            parser.addParameter('OutputFile', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('Frequency', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x) && x > 0));
+            parser.addParameter('PythonCommand', 'python', @(x) ischar(x) || isstring(x));
+            parser.addParameter('GeneratorPath', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('Driver', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('VehicleId', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('VehicleWeight', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x)));
+            parser.addParameter('VehicleType', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('VehicleComment', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('VenueName', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('EventName', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('EventSession', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('LongComment', '', @(x) ischar(x) || isstring(x));
+            parser.addParameter('ShortComment', '', @(x) ischar(x) || isstring(x));
+            parser.parse(varargin{:});
+
+            csvFile = char(csvFile);
+            if ~exist(csvFile, 'file')
+                error('TelemetryExporter:MissingCsv', ...
+                    'CSV file "%s" does not exist.', csvFile);
+            end
+
+            ldFile = char(parser.Results.OutputFile);
+            if isempty(ldFile)
+                [folder, name] = fileparts(csvFile);
+                ldFile = fullfile(folder, [name '.ld']);
+            end
+
+            generatorPath = char(parser.Results.GeneratorPath);
+            if isempty(generatorPath)
+                generatorPath = TelemetryExporter.defaultGeneratorPath();
+            end
+
+            if ~exist(generatorPath, 'file')
+                error('TelemetryExporter:MissingGenerator', ...
+                    ['MoTeC log generator was not found at "%s". ' ...
+                    'Run "git submodule update --init --recursive".'], generatorPath);
+            end
+
+            args = { ...
+                TelemetryExporter.quoteShellArg(generatorPath), ...
+                TelemetryExporter.quoteShellArg(csvFile), ...
+                'CSV', ...
+                '--output', TelemetryExporter.quoteShellArg(ldFile)};
+
+            if ~isempty(parser.Results.Frequency)
+                args(end + 1:end + 2) = {'--frequency', sprintf('%.9g', parser.Results.Frequency)};
+            end
+
+            args = TelemetryExporter.addOptionalCliArg(args, '--driver', parser.Results.Driver);
+            args = TelemetryExporter.addOptionalCliArg(args, '--vehicle_id', parser.Results.VehicleId);
+            if ~isempty(parser.Results.VehicleWeight)
+                args(end + 1:end + 2) = {'--vehicle_weight', sprintf('%.0f', parser.Results.VehicleWeight)};
+            end
+            args = TelemetryExporter.addOptionalCliArg(args, '--vehicle_type', parser.Results.VehicleType);
+            args = TelemetryExporter.addOptionalCliArg(args, '--vehicle_comment', parser.Results.VehicleComment);
+            args = TelemetryExporter.addOptionalCliArg(args, '--venue_name', parser.Results.VenueName);
+            args = TelemetryExporter.addOptionalCliArg(args, '--event_name', parser.Results.EventName);
+            args = TelemetryExporter.addOptionalCliArg(args, '--event_session', parser.Results.EventSession);
+            args = TelemetryExporter.addOptionalCliArg(args, '--long_comment', parser.Results.LongComment);
+            args = TelemetryExporter.addOptionalCliArg(args, '--short_comment', parser.Results.ShortComment);
+
+            command = strjoin([{char(parser.Results.PythonCommand)} args], ' ');
+            [status, output] = system(command);
+            if status ~= 0
+                error('TelemetryExporter:MoTeCConversionFailed', ...
+                    ['MoTeC log generator failed with status %d.\nCommand: %s\nOutput:\n%s\n' ...
+                    'Install dependencies with: python -m pip install cantools numpy'], ...
+                    status, command, output);
+            end
+
+            fprintf('MoTeC LD exported: %s\n', ldFile);
         end
     end
 
@@ -109,9 +206,9 @@ classdef TelemetryExporter
             tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 's', 'Distance', 'm', nSamples);
 
             if isfield(stateLog, 'speedKmh')
-                tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Speed', 'km/h', nSamples);
+                tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Vehicle Speed Value', 'km/h', nSamples);
             elseif isfield(stateLog, 'speed')
-                tableData = TelemetryExporter.addComputedChannel(tableData, 'speed', 'Speed', ...
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'speed', 'Vehicle Speed Value', ...
                     stateLog.speed(:) * 3.6, 'km/h', nSamples);
             end
 
@@ -120,17 +217,17 @@ classdef TelemetryExporter
             end
 
             if isfield(stateLog, 'ax')
-                tableData = TelemetryExporter.addComputedChannel(tableData, 'axG', 'Long Accel', ...
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'axG', 'G Sensor Front Acceleration Longitudinal', ...
                     stateLog.ax(:) / 9.81, 'G', nSamples);
             end
 
             if isfield(stateLog, 'ay')
-                tableData = TelemetryExporter.addComputedChannel(tableData, 'ayG', 'Lat Accel', ...
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'ayG', 'G Sensor Front Acceleration Lateral', ...
                     stateLog.ay(:) / 9.81, 'G', nSamples);
             end
 
             pctChannels = { ...
-                'throttle', 'Throttle'; ...
+                'throttle', 'Throttle Pedal'; ...
                 'brake', 'Brake'; ...
                 'brakeRequested', 'Brake Requested'; ...
                 'slipRatio_FL', 'Slip Ratio FL'; ...
@@ -170,10 +267,10 @@ classdef TelemetryExporter
             end
 
             mmChannels = { ...
-                'damperPos_FL', 'Damper Pos FL'; ...
-                'damperPos_FR', 'Damper Pos FR'; ...
-                'damperPos_RL', 'Damper Pos RL'; ...
-                'damperPos_RR', 'Damper Pos RR'; ...
+                'damperPos_FL', 'Damper Front Left Linear'; ...
+                'damperPos_FR', 'Damper Front Right Linear'; ...
+                'damperPos_RL', 'Damper Rear Left Linear'; ...
+                'damperPos_RR', 'Damper Rear Right Linear'; ...
                 'wheelTravel_FL', 'Wheel Travel FL'; ...
                 'wheelTravel_FR', 'Wheel Travel FR'; ...
                 'wheelTravel_RL', 'Wheel Travel RL'; ...
@@ -200,10 +297,10 @@ classdef TelemetryExporter
             end
 
             omegaChannels = { ...
-                'omega_FL', 'Wheel Speed FL'; ...
-                'omega_FR', 'Wheel Speed FR'; ...
-                'omega_RL', 'Wheel Speed RL'; ...
-                'omega_RR', 'Wheel Speed RR'};
+                'omega_FL', 'Wheel Speed Front Left Sensor Rotational'; ...
+                'omega_FR', 'Wheel Speed Front Right Sensor Rotational'; ...
+                'omega_RL', 'Wheel Speed Rear Left Sensor Rotational'; ...
+                'omega_RR', 'Wheel Speed Rear Right Sensor Rotational'};
             for i = 1:size(omegaChannels, 1)
                 field = omegaChannels{i, 1};
                 if isfield(stateLog, field)
@@ -227,7 +324,7 @@ classdef TelemetryExporter
             end
 
             values = double(values(:));
-            values(~isfinite(values)) = NaN;
+            values(~isfinite(values)) = 0;
 
             tableData.names{end + 1} = channelName;
             tableData.units{end + 1} = unit;
@@ -283,7 +380,7 @@ classdef TelemetryExporter
                 case 'speed'
                     name = 'Speed mps'; unit = 'm/s';
                 case 'speedKmh'
-                    name = 'Speed'; unit = 'km/h';
+                    name = 'Vehicle Speed Value'; unit = 'km/h';
                 case 'ax'
                     name = 'Long Accel Raw'; unit = 'm/s/s';
                 case 'ay'
@@ -301,7 +398,11 @@ classdef TelemetryExporter
                 case 'curvature'
                     name = 'Curvature'; unit = '1/m';
                 case 'motorRPM'
-                    name = 'Motor RPM'; unit = 'rpm';
+                    name = 'Engine RPM'; unit = 'rpm';
+                case 'motorTorque'
+                    name = 'Cascadia Cascadia Calculated Torque'; unit = 'Nm';
+                case 'F_brake'
+                    name = 'Brake Total Force'; unit = 'N';
                 case 'drivenWheelRPM'
                     name = 'Driven Wheel RPM'; unit = 'rpm';
                 case 'rpmLimitActive'
@@ -364,7 +465,6 @@ classdef TelemetryExporter
             cleanup = onCleanup(@() fclose(fid));
 
             fprintf(fid, '%s\n', TelemetryExporter.csvRow(tableData.names));
-            fprintf(fid, '%s\n', TelemetryExporter.csvRow(tableData.units));
 
             for row = 1:size(tableData.values, 1)
                 fprintf(fid, '%s\n', TelemetryExporter.numericCsvRow(tableData.values(row, :)));
@@ -399,6 +499,40 @@ classdef TelemetryExporter
 
             if contains(value, ',') || contains(value, '"') || contains(value, newline)
                 value = ['"' value '"'];
+            end
+        end
+
+        function generatorPath = defaultGeneratorPath()
+            srcDir = fileparts(mfilename('fullpath'));
+            repoRoot = fileparts(srcDir);
+            generatorPath = fullfile(repoRoot, 'external', 'MotecLogGenerator', ...
+                'motec_log_generator.py');
+        end
+
+        function args = addOptionalCliArg(args, flag, value)
+            value = char(value);
+            if isempty(value)
+                return;
+            end
+
+            args(end + 1:end + 2) = {flag, TelemetryExporter.quoteShellArg(value)};
+        end
+
+        function value = quoteShellArg(value)
+            value = char(value);
+            value = strrep(value, '"', '\"');
+            value = ['"' value '"'];
+        end
+
+        function values = nameValueStructToCell(valueStruct)
+            fields = fieldnames(valueStruct);
+            values = cell(1, numel(fields) * 2);
+
+            outIdx = 1;
+            for i = 1:numel(fields)
+                values{outIdx} = fields{i};
+                values{outIdx + 1} = valueStruct.(fields{i});
+                outIdx = outIdx + 2;
             end
         end
     end

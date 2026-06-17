@@ -52,6 +52,7 @@ run_simulation
 
 Change the track type by editing `trackType` in `src/run_simulation.m`:
 
+- `straight10` - 10 m straight for fast export/debug validation
 - `straight` - 200 m straight for acceleration and top-speed validation
 - `oval` - oval with straights and constant-radius turns
 - `skidpad` - FSAE skidpad circle

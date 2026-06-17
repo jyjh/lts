@@ -57,6 +57,13 @@ classDiagram
 
     class TelemetryExporter {
         +writeToMoTeCFormat(stateLog, filepath)
+        +exportToMoTeCLog(stateLog, filepath)
+        +convertCsvToMoTeCLog(filepath)
+    }
+
+    class MotecLogGenerator {
+        <<submodule>>
+        +motec_log_generator.py
     }
 
     EMRAXMatFile --> EMRAX228Powertrain : loaded by constructor
@@ -65,3 +72,4 @@ classDiagram
     TireConstants --> PacejkaTire : used by
     TrackDataLoader --> TestTrack : future external track input
     TelemetryExporter <-- Simulator : stateLog export
+    TelemetryExporter --> MotecLogGenerator : CSV to LD conversion

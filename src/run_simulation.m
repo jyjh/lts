@@ -13,17 +13,17 @@ clear; clc; close all;
 
 %% ====================================================================
 %  SELECT TRACK TYPE
-%  Options: 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
+%  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
 %  ====================================================================
-trackType = 'autocross';
+trackType = 'straight10';
 
 %% ====================================================================
 %  DISPLAY OPTIONS
 %  Set to true to show all graphs in a single window
 %  ====================================================================
-singleWindow = false;
+singleWindow = true;
 
-% Export a MoTeC i2 CSV after the simulation completes.
+% Export MoTeC CSV and .ld files after the simulation completes.
 exportMoTeC = true;
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
@@ -152,8 +152,16 @@ initialState = VehicleState('s', 0, 'speed', 0.1);
 if exportMoTeC
     scriptDir = fileparts(mfilename('fullpath'));
     exportDir = fullfile(scriptDir, '..', 'exports');
-    exportFile = sprintf('motec_%s_%s.csv', trackType, datestr(now, 'yyyymmdd_HHMMSS'));
-    TelemetryExporter.writeToMoTeCFormat(stateLog, fullfile(exportDir, exportFile));
+    exportBase = fullfile(exportDir, sprintf('motec_%s_%s', ...
+        trackType, datestr(now, 'yyyymmdd_HHMMSS')));
+    TelemetryExporter.exportToMoTeCLog( ...
+        stateLog, [exportBase '.csv'], ...
+        'OutputFile', [exportBase '.ld'], ...
+        'Frequency', 1 / dt, ...
+        'VehicleWeight', round(vehicle.totalMass), ...
+        'VenueName', trackType, ...
+        'EventName', 'FSAE LTS Simulation', ...
+        'VehicleType', 'FSAE');
 end
 
 %% ====================================================================
