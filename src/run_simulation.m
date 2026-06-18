@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
 %  ====================================================================
-trackType = 'straight10';
+trackType = 'autocross';
 
 %% ====================================================================
 %  DISPLAY OPTIONS

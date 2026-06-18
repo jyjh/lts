@@ -204,6 +204,7 @@ classdef TelemetryExporter
         function tableData = addDerivedChannels(tableData, stateLog, nSamples)
             tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 'time', 'Time', 's', nSamples);
             tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 's', 'Distance', 'm', nSamples);
+            tableData = TelemetryExporter.addFakeGpsChannels(tableData, stateLog, nSamples);
 
             if isfield(stateLog, 'speedKmh')
                 tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Vehicle Speed Value', 'km/h', nSamples);
@@ -310,6 +311,49 @@ classdef TelemetryExporter
             end
         end
 
+        function tableData = addFakeGpsChannels(tableData, stateLog, nSamples)
+            if ~isfield(stateLog, 's')
+                return;
+            end
+
+            [latitude, longitude] = TelemetryExporter.fakeGpsFromPosition(stateLog, nSamples);
+            tableData = TelemetryExporter.addComputedChannel(tableData, 'gpsLatitude', ...
+                'GPS Latitude', latitude, 'deg', nSamples);
+            tableData = TelemetryExporter.addComputedChannel(tableData, 'gpsLongitude', ...
+                'GPS Longitude', longitude, 'deg', nSamples);
+        end
+
+        function [latitude, longitude] = fakeGpsFromPosition(stateLog, nSamples)
+            originLatitude = 42.0;
+            originLongitude = -83.0;
+            earthRadiusM = 6378137.0;
+
+            distance = double(stateLog.s(:));
+            if numel(distance) ~= nSamples
+                latitude = zeros(nSamples, 1);
+                longitude = zeros(nSamples, 1);
+                return;
+            end
+
+            distance(~isfinite(distance)) = 0;
+            deltaDistance = [0; diff(distance)];
+            deltaDistance(deltaDistance < 0) = 0;
+
+            if isfield(stateLog, 'heading') && numel(stateLog.heading) == nSamples
+                heading = double(stateLog.heading(:));
+                heading(~isfinite(heading)) = 0;
+            else
+                heading = zeros(nSamples, 1);
+            end
+
+            eastMeters = cumsum(deltaDistance .* cos(heading));
+            northMeters = cumsum(deltaDistance .* sin(heading));
+
+            latitude = originLatitude + (northMeters / earthRadiusM) * (180 / pi);
+            longitude = originLongitude + ...
+                (eastMeters / (earthRadiusM * cos(originLatitude * pi / 180))) * (180 / pi);
+        end
+
         function tableData = addRawChannel(tableData, stateLog, field, channelName, unit, nSamples)
             values = stateLog.(field)(:);
             tableData = TelemetryExporter.addComputedChannel(tableData, field, channelName, values, unit, nSamples);
@@ -339,6 +383,7 @@ classdef TelemetryExporter
         function fields = defaultChannelOrder(stateLog)
             preferred = { ...
                 'time', 's', 'speedKmh', 'speed', 'ax', 'ay', ...
+                'gpsLatitude', 'gpsLongitude', ...
                 'throttle', 'brake', 'brakeRequested', 'steer', ...
                 'curvature', 'heading', 'controlS', 'controlTime', ...
                 'F_downforce', 'F_drag', 'F_drive', 'F_brake', 'F_tire_long', ...
@@ -381,6 +426,10 @@ classdef TelemetryExporter
                     name = 'Speed mps'; unit = 'm/s';
                 case 'speedKmh'
                     name = 'Vehicle Speed Value'; unit = 'km/h';
+                case 'gpsLatitude'
+                    name = 'GPS Latitude'; unit = 'deg';
+                case 'gpsLongitude'
+                    name = 'GPS Longitude'; unit = 'deg';
                 case 'ax'
                     name = 'Long Accel Raw'; unit = 'm/s/s';
                 case 'ay'

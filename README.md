@@ -14,10 +14,12 @@ It also uses the `external/MotecLogGenerator` submodule to create
 Set `exportMoTeC = false` in `src/run_simulation.m` to disable this.
 
 The CSV header includes units in MotecLogGenerator's `Channel Name (unit)`
-format, for example `Engine RPM (rpm)`. During `.ld` conversion the submodule
-writes MoTeC-compatible display-unit bytes and an M1/pro-enabled log header so
-i2 recognizes exported channels as real quantities for math channels rather than
-unitless display-only data.
+format, for example `Engine RPM (rpm)`. The exporter also creates fake
+`GPS Latitude (deg)` and `GPS Longitude (deg)` channels from the simulated
+position trace so MoTeC can show a map path. During `.ld` conversion the
+submodule writes MoTeC-compatible display-unit bytes and an M1/pro-enabled log
+header so i2 recognizes exported channels as real quantities for math channels
+rather than unitless display-only data.
 
 If the submodule is missing after cloning, initialize it with:
 
