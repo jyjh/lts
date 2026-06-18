@@ -19,6 +19,7 @@ classdef VehicleManager
         wheelbase     = 1.55     % Wheelbase [m]
         trackWidth    = 1.2      % Track width [m]
         cgHeight      = 0.28     % CG height [m]
+        yawInertia    = 130      % Yaw inertia about CG [kg*m^2]
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight = 0.45 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]

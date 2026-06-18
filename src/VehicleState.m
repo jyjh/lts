@@ -10,9 +10,20 @@ classdef VehicleState
         
         % Position along track [m]
         s           = 0
+
+        % World position [m]
+        x           = NaN
+        y           = NaN
+
+        % Vehicle yaw angle [rad]
+        yaw         = NaN
         
         % Vehicle speed [m/s]
         speed       = 0
+
+        % Body-frame velocity components [m/s]
+        vx          = NaN
+        vy          = 0
         
         % Longitudinal acceleration [m/s^2] (positive = forward)
         ax          = 0
@@ -25,9 +36,9 @@ classdef VehicleState
         
         % Yaw rate [rad/s]
         yawRate     = 0
-        
-        % Lateral velocity [m/s]
-        vy          = 0
+
+        % Yaw acceleration [rad/s^2]
+        yawAccel    = 0
         
         % Pitch angle [rad] (positive = nose up, e.g. under braking)
         pitchAngle  = 0
@@ -46,6 +57,12 @@ classdef VehicleState
         
         % Current track curvature [1/m]
         curvature   = 0
+
+        % Reference track projection telemetry
+        refS        = 0
+        refHeading  = 0
+        refCurvature = 0
+        lateralError = 0
         
         % Current surface friction coefficient
         mu          = 1.2
@@ -67,6 +84,17 @@ classdef VehicleState
                     end
                 end
             end
+
+            if isnan(obj.vx)
+                obj.vx = obj.speed;
+            elseif obj.speed <= 0
+                obj.speed = hypot(obj.vx, obj.vy);
+            end
+            if isnan(obj.yaw)
+                obj.yaw = obj.heading;
+            else
+                obj.heading = obj.yaw;
+            end
         end
         
         function obj = updateFromDynamics(obj, ax, ay, ds, dt, curvature, heading, mu)
@@ -83,9 +111,15 @@ classdef VehicleState
             obj.ay = ay;
             obj.s = obj.s + ds;
             obj.speed = max(0, obj.speed + ax * dt);
+            obj.vx = obj.speed;
+            obj.vy = 0;
             obj.curvature = curvature;
             obj.heading = heading;
+            obj.yaw = heading;
             obj.mu = mu;
+            obj.refS = obj.s;
+            obj.refHeading = heading;
+            obj.refCurvature = curvature;
             
             % Compute pitch angle from current dynamics
             obj.pitchAngle = obj.computePitch();
@@ -93,12 +127,37 @@ classdef VehicleState
             % Yaw rate from speed and curvature (bicycle model)
             if obj.speed > 0.1
                 obj.yawRate = obj.speed * curvature;
-                obj.vy = ay / obj.speed * 0;  % TODO: proper lateral dynamics
             else
                 obj.yawRate = 0;
-                obj.vy = 0;
             end
             
+            obj.time = obj.time + dt;
+        end
+
+        function obj = updateFromPlanarDynamics(obj, ax, ay, yawAccel, ...
+                vx, vy, yawRate, yaw, x, y, refS, refHeading, refCurvature, ...
+                lateralError, dt, mu)
+            % UPDATEFROMPLANARDYNAMICS Store a free planar 4-wheel state update.
+            obj.ax = ax;
+            obj.ay = ay;
+            obj.yawAccel = yawAccel;
+            obj.vx = vx;
+            obj.vy = vy;
+            obj.speed = hypot(vx, vy);
+            obj.yawRate = yawRate;
+            obj.yaw = yaw;
+            obj.heading = yaw;
+            obj.x = x;
+            obj.y = y;
+            obj.s = refS;
+            obj.refS = refS;
+            obj.refHeading = refHeading;
+            obj.refCurvature = refCurvature;
+            obj.curvature = refCurvature;
+            obj.lateralError = lateralError;
+            obj.mu = mu;
+
+            obj.pitchAngle = obj.computePitch();
             obj.time = obj.time + dt;
         end
         
@@ -122,16 +181,26 @@ classdef VehicleState
         function log = toLogStruct(obj)
             % TOLOGSTRUCT Convert state to a loggable struct
             log.s         = obj.s;
+            log.x         = obj.x;
+            log.y         = obj.y;
+            log.yaw       = obj.yaw;
             log.speed     = obj.speed;
             log.speedKmh  = obj.speed * 3.6;
+            log.vx        = obj.vx;
+            log.vy        = obj.vy;
             log.ax        = obj.ax;
             log.ay        = obj.ay;
             log.heading   = obj.heading;
             log.yawRate   = obj.yawRate;
+            log.yawAccel  = obj.yawAccel;
             log.throttle  = obj.throttle;
             log.brake     = obj.brake;
             log.steer     = obj.steer;
             log.curvature = obj.curvature;
+            log.refS      = obj.refS;
+            log.refHeading = obj.refHeading;
+            log.refCurvature = obj.refCurvature;
+            log.lateralError = obj.lateralError;
             log.mu        = obj.mu;
             log.time      = obj.time;
         end

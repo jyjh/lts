@@ -33,6 +33,9 @@ classdef PacejkaTire < components.Tire.TireModel
         % Wheel rotational inertia per corner [kg·m^2]
         % (wheel + tire + brake disc rotating assembly)
         wheelInertia = 0.5
+
+        % Cache peak-mu scans by rounded load/camber.
+        peakMuCache
     end
     
     methods
@@ -51,6 +54,7 @@ classdef PacejkaTire < components.Tire.TireModel
             obj.FR = components.Tire.TireState();
             obj.RL = components.Tire.TireState();
             obj.RR = components.Tire.TireState();
+            obj.peakMuCache = containers.Map('KeyType', 'char', 'ValueType', 'double');
             
             fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
         end
@@ -73,6 +77,9 @@ classdef PacejkaTire < components.Tire.TireModel
             
             % Store inputs
             cornerState.normalForce = normalLoad;
+            slipAngle = max(-0.3, min(0.3, slipAngle));
+            slipRatio = max(-1, min(1, slipRatio));
+
             cornerState.slipAngle   = slipAngle;
             cornerState.slipRatio   = slipRatio;
             cornerState.camberAngle = camberAngle;
@@ -102,7 +109,7 @@ classdef PacejkaTire < components.Tire.TireModel
             % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
             outputs = mfeval(params, inputsMF, 111);
             
-            rawPeakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
+            rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
 
             % Store outputs capped by the current surface friction coefficient.
@@ -172,7 +179,7 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            peakMu = obj.computePeakMuInternal(normalLoad, 0, ...
+            peakMu = obj.getCachedPeakMu(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
         end
         
@@ -324,10 +331,55 @@ classdef PacejkaTire < components.Tire.TireModel
                 camber_RR = 0;
             end
 
-            obj.updateCorner(obj.FL, Fz_FL, slipAngle_FL, kappa_FL, camber_FL, mu);
-            obj.updateCorner(obj.FR, Fz_FR, slipAngle_FR, kappa_FR, camber_FR, mu);
-            obj.updateCorner(obj.RL, Fz_RL, slipAngle_RL, kappa_RL, camber_RL, mu);
-            obj.updateCorner(obj.RR, Fz_RR, slipAngle_RR, kappa_RR, camber_RR, mu);
+            Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
+            alpha = max(-0.3, min(0.3, ...
+                [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR]));
+            kappa = max(-1, min(1, [kappa_FL; kappa_FR; kappa_RL; kappa_RR]));
+            gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
+            states = {obj.FL, obj.FR, obj.RL, obj.RR};
+
+            for i = 1:4
+                states{i}.normalForce = Fz(i);
+                states{i}.slipAngle = alpha(i);
+                states{i}.slipRatio = kappa(i);
+                states{i}.camberAngle = gamma(i);
+            end
+
+            active = Fz > 0;
+            if any(active)
+                P = obj.tireConstants.nomPressure;
+                V = obj.tireConstants.refVelocity;
+                params = obj.tireConstants.params;
+                nActive = nnz(active);
+                inputsMF = [Fz(active), kappa(active), alpha(active), ...
+                    gamma(active), zeros(nActive, 1), ...
+                    repmat(V, nActive, 1), repmat(P, nActive, 1)];
+                outputs = mfeval(params, inputsMF, 111);
+
+                activeIdx = find(active);
+                for j = 1:numel(activeIdx)
+                    i = activeIdx(j);
+                    rawPeakMu = obj.getCachedPeakMu(Fz(i), gamma(i), P, params);
+                    surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
+                    states{i}.Fx = outputs(j,1) * surfaceScale;
+                    states{i}.Fy = outputs(j,2) * surfaceScale;
+                    states{i}.Mx = outputs(j,4) * surfaceScale;
+                    states{i}.My = outputs(j,5) * surfaceScale;
+                    states{i}.Mz = outputs(j,6) * surfaceScale;
+                    states{i}.peakMu = rawPeakMu * surfaceScale;
+                end
+            end
+
+            inactiveIdx = find(~active);
+            for j = 1:numel(inactiveIdx)
+                i = inactiveIdx(j);
+                states{i}.Fx = 0;
+                states{i}.Fy = 0;
+                states{i}.Mx = 0;
+                states{i}.My = 0;
+                states{i}.Mz = 0;
+                states{i}.peakMu = 0;
+            end
         end
         
         function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
@@ -418,6 +470,19 @@ classdef PacejkaTire < components.Tire.TireModel
             else
                 surfaceScale = min(1, surfaceMu / rawPeakMu);
             end
+        end
+
+        function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params)
+            FzKey = round(Fz / 10) * 10;
+            gammaKey = round(gamma * 1000) / 1000;
+            key = sprintf('%.0f_%.3f_%.0f', FzKey, gammaKey, P);
+            if isKey(obj.peakMuCache, key)
+                peakMu = obj.peakMuCache(key);
+                return;
+            end
+
+            peakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
+            obj.peakMuCache(key) = peakMu;
         end
         
         function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params)

@@ -5,7 +5,7 @@ classdef Simulator
     % state from one timestep to the next (copy-in → copy-out).
     %
     % Two modes of use:
-    %   1. Single step:  [newState, forces] = sim.step(state, throttle, brake, curKappa, curMu, curHeading, steer)
+    %   1. Single step:  [newState, forces] = sim.step(state, input, ref)
     %   2. Full lap:     [stateLog, lapTime] = sim.simulate(initialState, track)
     %
     % The Simulator composes a VehicleManager (physics components) and a
@@ -42,30 +42,30 @@ classdef Simulator
             end
         end
         
-        function [newState, forces] = step(obj, state, throttle, brake, curKappa, curMu, curHeading, steer)
+        function [newState, forces] = step(obj, state, input, ref)
             % STEP Progress vehicle state by one timestep
-            %   [newState, forces] = step(state, throttle, brake, curKappa, curMu, curHeading, steer)
+            %   [newState, forces] = step(state, input, ref)
             %
-            %   Given a VehicleState snapshot and driver inputs, compute the
-            %   next VehicleState. The input state is NOT mutated.
-            %
-            %   Inputs:
-            %     state       - current VehicleState (not modified)
-            %     throttle    - throttle position [0-1]
-            %     brake       - brake pressure [0-1]
-            %     curKappa    - track curvature at current position [1/m]
-            %     curMu       - surface friction at current position
-            %     curHeading  - track heading at current position [rad]
-            %     steer       - steering input [rad]
-            %
-            %   Outputs:
-            %     newState    - VehicleState at next timestep
-            %     forces      - struct with F_downforce, F_drag, F_drive
+            % Driver inputs are open-loop controls sampled from the reference
+            % profile. Track curvature is reference telemetry only; planar
+            % motion comes from summed tire forces and yaw moment.
             
             vm = obj.vehicleManager;
-            v = state.speed;
-            if nargin < 8
-                steer = state.steer;
+            throttle = max(0, min(1, input.throttle));
+            brake = max(0, min(1, input.brake));
+            steer = input.steer;
+            curMu = ref.mu;
+
+            if isnan(state.vx)
+                state.vx = state.speed;
+            end
+            if isnan(state.yaw)
+                state.yaw = ref.heading;
+                state.heading = ref.heading;
+            end
+            if isnan(state.x)
+                state.x = ref.x;
+                state.y = ref.y;
             end
             
             % Copy state (will be mutated by updateFromDynamics)
@@ -92,28 +92,7 @@ classdef Simulator
             % --- POWERTRAIN STATE & DRIVE TORQUE ---
             vm.powertrain.updateStateFromDrivenWheels( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
-            totalDriveTorque = vm.powertrain.computeDriveTorque(v, throttle);
-
-            % --- COMBINED TIRE GRIP LIMIT ---
-            totalNormalLoad = W + F_downforce;
-            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            effectiveMu = min(max(peakMu, 0), max(curMu, 0));
-            maxTireAccel = max(0.1, effectiveMu * totalNormalLoad / vm.totalMass);
-
-            % --- LATERAL DYNAMICS ---
-            if abs(curKappa) > 1e-6 && v > 0.5
-                ayDemand = v^2 * curKappa;
-            else
-                ayDemand = 0;
-            end
-
-            ay = max(-maxTireAccel, min(ayDemand, maxTireAccel));
-            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
-                ay = sign(ayDemand) * maxTireAccel * 0.995;
-            end
-
-            lateralUsage = min(abs(ay) / maxTireAccel, 1);
-            availableLongAccel = maxTireAccel * sqrt(max(0, 1 - lateralUsage^2));
+            totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
 
             % --- WHEEL TORQUE SETUP ---
             % RWD assumption: drive torque only on rear wheels.
@@ -128,28 +107,8 @@ classdef Simulator
             brakeBiasRear = 1 - brakeBiasFront;
             % Existing brakeForceCoefficient is preserved as an equivalent
             % total brake force capacity, then converted to wheel torque.
+            totalNormalLoad = W + F_downforce;
             brakeForceCapacity = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
-
-            longGripScale = sqrt(max(0, 1 - lateralUsage^2));
-            mu_FL = min(max(vm.tire.getPeakFriction(cornerLoads.FL), 0), max(curMu, 0));
-            mu_FR = min(max(vm.tire.getPeakFriction(cornerLoads.FR), 0), max(curMu, 0));
-            mu_RL = min(max(vm.tire.getPeakFriction(cornerLoads.RL), 0), max(curMu, 0));
-            mu_RR = min(max(vm.tire.getPeakFriction(cornerLoads.RR), 0), max(curMu, 0));
-            longGrip_FL = mu_FL * max(cornerLoads.FL, 0) * longGripScale;
-            longGrip_FR = mu_FR * max(cornerLoads.FR, 0) * longGripScale;
-            longGrip_RL = mu_RL * max(cornerLoads.RL, 0) * longGripScale;
-            longGrip_RR = mu_RR * max(cornerLoads.RR, 0) * longGripScale;
-
-            brakeGripLimit = inf;
-            if brakeBiasFront > eps
-                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_FL / brakeBiasFront);
-                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_FR / brakeBiasFront);
-            end
-            if brakeBiasRear > eps
-                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RL / brakeBiasRear);
-                brakeGripLimit = min(brakeGripLimit, 2 * longGrip_RR / brakeBiasRear);
-            end
-
             wheelLockLimit = inf;
             maxBrakeForce = brakeForceCapacity;
             brakeForceMag = brakeCommand * brakeForceCapacity;
@@ -178,38 +137,54 @@ classdef Simulator
             vm.powertrain.updateStateFromDrivenWheels( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
 
-            % Evaluate tire forces with computed per-corner slip ratios
+            % First tire-force pass with previous load-transfer state.
             tireInputState = state;
             tireInputState.steer = steer;
-            tireInputState.curvature = curKappa;
-            tireInputState.mu = curMu;
-            vm.tire.updateAllFromState(tireInputState, vm, cornerLoads, curMu);
-            % --- LONGITUDINAL FORCE BALANCE ---
-            F_tire_long = vm.tire.FL.Fx + vm.tire.FR.Fx + ...
-                vm.tire.RL.Fx + vm.tire.RR.Fx;
+            tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, curMu);
+            dynamics = obj.computePlanarDynamics(state, tireData, F_drag, W + F_downforce);
+
+            % One predictor/corrector pass for load transfer using current
+            % force-derived body accelerations.
+            correctedLoadState = state;
+            correctedLoadState.steer = steer;
+            correctedLoadState.ax = dynamics.ax;
+            correctedLoadState.ay = dynamics.ay;
+            cornerLoads = vm.suspension.computeCornerLoads( ...
+                correctedLoadState, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
+            tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, curMu);
+            dynamics = obj.computePlanarDynamics(state, tireData, F_drag, W + F_downforce);
+
+            F_tire_long = tireData.sumFxBody;
             F_drive = max(0, F_tire_long);
             F_brake = min(0, F_tire_long);
-            F_net_long = F_tire_long - F_drag;
             F_rollResist = 0.015 * (W + F_downforce);
-            F_net_long = F_net_long - sign(v) * F_rollResist;
-            
-            axDemand = F_net_long / vm.totalMass;
-            ax = max(-availableLongAccel, min(axDemand, availableLongAccel));
 
-            if abs(ayDemand) > maxTireAccel && abs(curKappa) > 1e-6
-                vMaxCorner = sqrt(maxTireAccel / abs(curKappa));
-                excessSpeed = max(v - vMaxCorner, 0);
-                correctiveBrakeAccel = min(excessSpeed / max(obj.dt, eps) * 0.5, availableLongAccel);
-                ax = min(ax, -correctiveBrakeAccel);
-            end
-            
             % --- INTEGRATE STATE ---
-            ds = max(0, v * obj.dt + 0.5 * ax * obj.dt^2);
+            vx0 = state.vx;
+            vy0 = state.vy;
+            yaw0 = state.yaw;
+            yawRate0 = state.yawRate;
+
+            vxNew = vx0 + (dynamics.ax + yawRate0 * vy0) * obj.dt;
+            vyNew = vy0 + (dynamics.ay - yawRate0 * vx0) * obj.dt;
+            yawRateNew = yawRate0 + dynamics.yawAccel * obj.dt;
+            yawNew = yaw0 + yawRateNew * obj.dt;
+
+            vxWorld = vxNew * cos(yawNew) - vyNew * sin(yawNew);
+            vyWorld = vxNew * sin(yawNew) + vyNew * cos(yawNew);
+            xNew = state.x + vxWorld * obj.dt;
+            yNew = state.y + vyWorld * obj.dt;
+
+            nextRef = obj.projectToReference(xNew, yNew, ref.trackData, ref.idx);
             
             newState.throttle = throttle;
             newState.brake = effectiveBrakeCommand;
             newState.steer = steer;
-            newState = newState.updateFromDynamics(ax, ay, ds, obj.dt, curKappa, curHeading, curMu);
+            newState = newState.updateFromPlanarDynamics( ...
+                dynamics.ax, dynamics.ay, dynamics.yawAccel, ...
+                vxNew, vyNew, yawRateNew, yawNew, xNew, yNew, ...
+                nextRef.s, nextRef.heading, nextRef.curvature, ...
+                nextRef.lateralError, obj.dt, nextRef.mu);
             
             % Sanity check: warn once if speed exceeds maxSpeed
             if newState.speed > vm.maxSpeed && ~obj.warnedMaxSpeed
@@ -234,13 +209,13 @@ classdef Simulator
             forces.brakeCommand = brakeCommand;
             forces.brake = effectiveBrakeCommand;
             forces.brakeLimit = maxBrakeForce;
-            forces.brakeGripLimit = brakeGripLimit;
+            forces.brakeGripLimit = inf;
             forces.brakeWheelLockLimit = wheelLockLimit;
             forces.brakeForceCapacity = brakeForceCapacity;
-            forces.brakeGrip_FL = longGrip_FL;
-            forces.brakeGrip_FR = longGrip_FR;
-            forces.brakeGrip_RL = longGrip_RL;
-            forces.brakeGrip_RR = longGrip_RR;
+            forces.brakeGrip_FL = max(vm.tire.FL.peakMu, 0) * max(cornerLoads.FL, 0);
+            forces.brakeGrip_FR = max(vm.tire.FR.peakMu, 0) * max(cornerLoads.FR, 0);
+            forces.brakeGrip_RL = max(vm.tire.RL.peakMu, 0) * max(cornerLoads.RL, 0);
+            forces.brakeGrip_RR = max(vm.tire.RR.peakMu, 0) * max(cornerLoads.RR, 0);
             forces.driveTorqueTotal = totalDriveTorque;
             forces.driveTorque_RL = T_drive_rear;
             forces.driveTorque_RR = T_drive_rear;
@@ -262,6 +237,10 @@ classdef Simulator
             end
             forces.aeroFz_front = aeroForces.Fz_front;
             forces.aeroFz_rear  = aeroForces.Fz_rear;
+            forces.F_tire_lat = tireData.sumFyBody;
+            forces.yawMoment = tireData.yawMoment;
+            forces.yawAccel = dynamics.yawAccel;
+            forces.rollResistance = F_rollResist;
         end
         
         function [stateLog, lapTime] = simulate(obj, initialState, track)
@@ -289,19 +268,40 @@ classdef Simulator
             dy = diff(trackPts(:,2));
             segLen = sqrt(dx.^2 + dy.^2);
             arcLen = [0; cumsum(segLen)];
+            trackData = struct( ...
+                'points', trackPts, ...
+                'arcLen', arcLen, ...
+                'curvature', curvature(:), ...
+                'mu', mu(:), ...
+                'heading', heading(:), ...
+                'length', trackLen, ...
+                'nPts', nPts);
+            initialState = obj.initializePlanarState(initialState, trackData);
+            inputProfile = obj.buildOpenLoopInputProfile(initialState, trackData);
             
             % Pre-allocate telemetry log
-            maxSteps = round(trackLen / (initialState.speed * obj.dt) * 5);
+            maxSteps = round(trackLen / (max(initialState.speed, 5) * obj.dt) * 5);
             maxSteps = max(maxSteps, 100000);
             stateLog = struct( ...
                 'time',        zeros(maxSteps, 1), ...
                 's',           zeros(maxSteps, 1), ...
                 'controlS',    zeros(maxSteps, 1), ...
+                'x',           zeros(maxSteps, 1), ...
+                'y',           zeros(maxSteps, 1), ...
+                'yaw',         zeros(maxSteps, 1), ...
+                'vx',          zeros(maxSteps, 1), ...
+                'vy',          zeros(maxSteps, 1), ...
                 'speed',       zeros(maxSteps, 1), ...
                 'speedKmh',    zeros(maxSteps, 1), ...
                 'controlTime', zeros(maxSteps, 1), ...
                 'ax',          zeros(maxSteps, 1), ...
                 'ay',          zeros(maxSteps, 1), ...
+                'yawRate',     zeros(maxSteps, 1), ...
+                'yawAccel',    zeros(maxSteps, 1), ...
+                'refS',        zeros(maxSteps, 1), ...
+                'refHeading',  zeros(maxSteps, 1), ...
+                'refCurvature', zeros(maxSteps, 1), ...
+                'lateralError', zeros(maxSteps, 1), ...
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
                 'brakeRequested', zeros(maxSteps, 1), ...
@@ -313,6 +313,9 @@ classdef Simulator
                 'F_drive',     zeros(maxSteps, 1), ...
                 'F_brake',     zeros(maxSteps, 1), ...
                 'F_tire_long', zeros(maxSteps, 1), ...
+                'F_tire_lat',  zeros(maxSteps, 1), ...
+                'yawMoment',   zeros(maxSteps, 1), ...
+                'rollResistance', zeros(maxSteps, 1), ...
                 'F_brake_front', zeros(maxSteps, 1), ...
                 'F_brake_rear', zeros(maxSteps, 1), ...
                 'F_brake_FL',  zeros(maxSteps, 1), ...
@@ -387,55 +390,70 @@ classdef Simulator
             % Working state (will be updated each step)
             currentState = initialState;
             obj.initializeWheelSpeeds(currentState.speed);
+            currentRef = obj.projectToReference(currentState.x, currentState.y, trackData, 1);
             
             step = 0;
             fprintf('Starting simulation...\n');
             fprintf('Track length: %.1f m\n', trackLen);
             
-            while currentState.s < trackLen && currentState.onTrack
+            finishTolerance = 1e-6;
+            while currentState.s < trackLen - finishTolerance && currentState.onTrack
                 step = step + 1;
                 
-                % Find current track index by nearest arc-length
-                idx = find(arcLen <= currentState.s, 1, 'last');
-                idx = max(1, min(idx, nPts));
-                
-                % Current track properties
-                curKappa   = curvature(idx);
-                curMu      = mu(idx);
-                curHeading = heading(idx);
-                
-                % Set current track properties on state (for DriverModel)
-                currentState.curvature = curKappa;
-                currentState.mu        = curMu;
-                
-                % --- DRIVER MODEL: Compute throttle and brake ---
-                [throttle, brake, steer] = obj.driverModel.computeInputs(currentState);
+                % Project the free vehicle pose onto the reference centerline.
+                currentRef = obj.projectToReference( ...
+                    currentState.x, currentState.y, trackData, currentRef.idx);
+                currentState.s = currentRef.s;
+                currentState.refS = currentRef.s;
+                currentState.refHeading = currentRef.heading;
+                currentState.refCurvature = currentRef.curvature;
+                currentState.curvature = currentRef.curvature;
+                currentState.lateralError = currentRef.lateralError;
+                currentState.mu = currentRef.mu;
+
+                % --- OPEN-LOOP DRIVER PROFILE ---
+                input = obj.sampleInputProfile(inputProfile, currentRef.idx);
+                ref = currentRef;
+                ref.trackData = trackData;
                 
                 % --- PHYSICS STEP ---
-                [newState, forces] = obj.step( ...
-                    currentState, throttle, brake, curKappa, curMu, curHeading, steer);
+                [newState, forces] = obj.step(currentState, input, ref);
                 
                 % --- LOG TELEMETRY ---
                 if step <= maxSteps
                     stateLog.time(step)        = newState.time;
                     stateLog.s(step)           = newState.s;
                     stateLog.controlS(step)    = currentState.s;
+                    stateLog.x(step)           = newState.x;
+                    stateLog.y(step)           = newState.y;
+                    stateLog.yaw(step)         = newState.yaw;
+                    stateLog.vx(step)          = newState.vx;
+                    stateLog.vy(step)          = newState.vy;
                     stateLog.speed(step)       = newState.speed;
                     stateLog.speedKmh(step)    = newState.speed * 3.6;
                     stateLog.controlTime(step) = currentState.time;
                     stateLog.ax(step)          = newState.ax;
                     stateLog.ay(step)          = newState.ay;
-                    stateLog.throttle(step)    = throttle;
+                    stateLog.yawRate(step)     = newState.yawRate;
+                    stateLog.yawAccel(step)    = newState.yawAccel;
+                    stateLog.refS(step)        = newState.refS;
+                    stateLog.refHeading(step)  = newState.refHeading;
+                    stateLog.refCurvature(step) = newState.refCurvature;
+                    stateLog.lateralError(step) = newState.lateralError;
+                    stateLog.throttle(step)    = input.throttle;
                     stateLog.brake(step)       = forces.brake;
                     stateLog.brakeRequested(step) = forces.brakeCommand;
-                    stateLog.steer(step)       = steer;
-                    stateLog.curvature(step)   = curKappa;
-                    stateLog.heading(step)     = curHeading;
+                    stateLog.steer(step)       = input.steer;
+                    stateLog.curvature(step)   = newState.refCurvature;
+                    stateLog.heading(step)     = newState.heading;
                     stateLog.F_downforce(step) = forces.F_downforce;
                     stateLog.F_drag(step)      = forces.F_drag;
                     stateLog.F_drive(step)     = forces.F_drive;
                     stateLog.F_brake(step)     = forces.F_brake;
                     stateLog.F_tire_long(step) = forces.F_tire_long;
+                    stateLog.F_tire_lat(step)  = forces.F_tire_lat;
+                    stateLog.yawMoment(step)   = forces.yawMoment;
+                    stateLog.rollResistance(step) = forces.rollResistance;
                     stateLog.F_brake_front(step) = forces.F_brake_front;
                     stateLog.F_brake_rear(step) = forces.F_brake_rear;
                     stateLog.F_brake_FL(step)  = forces.F_brake_FL;
@@ -542,6 +560,309 @@ classdef Simulator
             fprintf('Track Length: %.1f m\n', currentState.s);
             fprintf('Max Speed:  %.1f km/h\n', max(stateLog.speedKmh));
             fprintf('Steps:      %d\n', step);
+        end
+
+        function state = initializePlanarState(~, state, trackData)
+            firstPoint = trackData.points(1, :);
+            if isnan(state.x)
+                state.x = firstPoint(1);
+            end
+            if isnan(state.y)
+                state.y = firstPoint(2);
+            end
+            if isnan(state.yaw)
+                state.yaw = trackData.heading(1);
+                state.heading = state.yaw;
+            end
+            if isnan(state.vx)
+                state.vx = max(state.speed, 0);
+            end
+            state.speed = hypot(state.vx, state.vy);
+            state.refS = state.s;
+            state.refHeading = trackData.heading(1);
+            state.refCurvature = trackData.curvature(1);
+            state.curvature = state.refCurvature;
+            state.mu = trackData.mu(1);
+        end
+
+        function profile = buildOpenLoopInputProfile(obj, initialState, trackData)
+            vm = obj.vehicleManager;
+            n = trackData.nPts;
+            curvature = trackData.curvature(:);
+            mu = trackData.mu(:);
+            vTarget = vm.maxSpeed * ones(n, 1);
+
+            % Iterating lets the speed-dependent aero estimate influence the
+            % GGV cornering envelope without solving an optimization problem.
+            for iter = 1:3
+                for i = 1:n
+                    if abs(curvature(i)) > 1e-6
+                        limits = obj.estimateGGVLimits(vTarget(i), mu(i), initialState);
+                        vTarget(i) = min(vm.maxSpeed, ...
+                            sqrt(max(limits.maxLatAccel, 0.1) / abs(curvature(i))));
+                    else
+                        vTarget(i) = vm.maxSpeed;
+                    end
+                end
+            end
+
+            maxBrakeAccel = zeros(n, 1);
+            for i = 1:n
+                limits = obj.estimateGGVLimits(vTarget(i), mu(i), initialState);
+                maxBrakeAccel(i) = limits.maxBrakeAccel;
+            end
+
+            for i = n-1:-1:1
+                ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
+                reachableSpeed = sqrt(vTarget(i+1)^2 + 2 * maxBrakeAccel(i+1) * ds);
+                vTarget(i) = min(vTarget(i), reachableSpeed);
+            end
+
+            speedPlan = vTarget;
+            speedPlan(1) = min(max(initialState.speed, 0), vTarget(1));
+            maxDriveAccel = 5.0;
+            for i = 1:n-1
+                ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
+                reachableSpeed = sqrt(speedPlan(i)^2 + 2 * maxDriveAccel * ds);
+                speedPlan(i+1) = min(vTarget(i+1), reachableSpeed);
+            end
+
+            axRef = zeros(n, 1);
+            for i = 1:n-1
+                ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
+                axRef(i) = (speedPlan(i+1)^2 - speedPlan(i)^2) / (2 * ds);
+            end
+            axRef(n) = axRef(max(n-1, 1));
+
+            maxSteer = 0.6;
+            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'maxSteeringAngle')
+                maxSteer = obj.driverModel.maxSteeringAngle;
+            end
+            steerRef = atan(vm.wheelbase * curvature);
+            steerRef = max(-maxSteer, min(maxSteer, steerRef));
+
+            brakeRef = zeros(n, 1);
+            throttleRef = ones(n, 1);
+            for i = 1:n
+                if axRef(i) < 0
+                    brakeRef(i) = min(1, -axRef(i) / max(maxBrakeAccel(i), eps));
+                    throttleRef(i) = 0;
+                end
+            end
+
+            profile = struct( ...
+                's', trackData.arcLen, ...
+                'vTarget', speedPlan, ...
+                'vLimit', vTarget, ...
+                'axRef', axRef, ...
+                'throttle', throttleRef, ...
+                'brake', brakeRef, ...
+                'steer', steerRef);
+        end
+
+        function limits = estimateGGVLimits(obj, speed, mu, templateState)
+            vm = obj.vehicleManager;
+            tempState = templateState;
+            tempState.vehicleManager = vm;
+            tempState.speed = max(speed, 0);
+            tempState.vx = tempState.speed;
+            tempState.vy = 0;
+
+            aeroForces = vm.aero.computeForces(tempState);
+            totalNormalLoad = vm.totalMass * 9.81 + aeroForces.Fz_front + aeroForces.Fz_rear;
+            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
+            effectiveMu = min(max(peakMu, 0), max(mu, 0));
+            tireAccel = effectiveMu * totalNormalLoad / vm.totalMass;
+
+            brakeForce = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
+            rollingResistance = 0.015 * totalNormalLoad;
+            brakeAccel = (brakeForce + aeroForces.F_drag + rollingResistance) / vm.totalMass;
+
+            limits.maxLatAccel = max(0.1, 0.98 * tireAccel);
+            limits.maxBrakeAccel = max(0.1, 0.98 * min(tireAccel, brakeAccel));
+        end
+
+        function input = sampleInputProfile(~, profile, idx)
+            idx = max(1, min(idx, numel(profile.throttle)));
+            input = struct( ...
+                'throttle', profile.throttle(idx), ...
+                'brake', profile.brake(idx), ...
+                'steer', profile.steer(idx), ...
+                'targetSpeed', profile.vTarget(idx), ...
+                'axRef', profile.axRef(idx));
+        end
+
+        function ref = projectToReference(~, x, y, trackData, previousIdx)
+            if nargin < 5 || isempty(previousIdx) || previousIdx < 1
+                previousIdx = 1;
+            end
+
+            searchStart = max(1, previousIdx);
+            searchEnd = min(trackData.nPts, previousIdx + 300);
+            if searchStart > searchEnd
+                searchStart = trackData.nPts;
+                searchEnd = trackData.nPts;
+            end
+
+            pts = trackData.points(searchStart:searchEnd, :);
+            dist2 = (pts(:,1) - x).^2 + (pts(:,2) - y).^2;
+            [~, localIdx] = min(dist2);
+            idx = searchStart + localIdx - 1;
+
+            refPoint = trackData.points(idx, :);
+            refHeading = trackData.heading(idx);
+            refS = trackData.arcLen(idx);
+            if idx >= trackData.nPts
+                refS = trackData.length;
+            end
+            dx = x - refPoint(1);
+            dy = y - refPoint(2);
+            lateralError = dx * (-sin(refHeading)) + dy * cos(refHeading);
+
+            ref = struct( ...
+                'idx', idx, ...
+                's', refS, ...
+                'x', refPoint(1), ...
+                'y', refPoint(2), ...
+                'heading', refHeading, ...
+                'curvature', trackData.curvature(idx), ...
+                'mu', trackData.mu(idx), ...
+                'lateralError', lateralError);
+        end
+
+        function tireData = updatePlanarTireForces(obj, state, cornerLoads, mu)
+            vm = obj.vehicleManager;
+            kin = obj.getCornerKinematics(state.steer);
+            corners = {'FL', 'FR', 'RL', 'RR'};
+
+            tireData.sumFxBody = 0;
+            tireData.sumFyBody = 0;
+            tireData.yawMoment = 0;
+            slipAngles = struct();
+            slipRatios = struct();
+            wheelHeadings = struct();
+
+            for i = 1:numel(corners)
+                corner = corners{i};
+                tireState = vm.tire.(corner);
+                cornerKin = kin.(corner);
+
+                vxCorner = state.vx - state.yawRate * cornerKin.yPosition;
+                vyCorner = state.vy + state.yawRate * cornerKin.xPosition;
+                wheelHeading = cornerKin.steerAngle + cornerKin.toeAngle;
+
+                alpha = wheelHeading - atan2(vyCorner, max(vxCorner, eps));
+                longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
+                kappa = obj.computeLocalSlipRatio(tireState, longSpeed);
+
+                slipAngles.(corner) = alpha;
+                slipRatios.(corner) = kappa;
+                wheelHeadings.(corner) = wheelHeading;
+            end
+
+            if ismethod(vm.tire, 'updateAllCorners')
+                vm.tire.updateAllCorners( ...
+                    cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
+                    slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
+                    slipRatios.FL, slipRatios.FR, slipRatios.RL, slipRatios.RR, mu, ...
+                    kin.FL.camberAngle, kin.FR.camberAngle, ...
+                    kin.RL.camberAngle, kin.RR.camberAngle);
+            else
+                for i = 1:numel(corners)
+                    corner = corners{i};
+                    tireState = vm.tire.(corner);
+                    cornerKin = kin.(corner);
+                    vm.tire.updateCorner(tireState, cornerLoads.(corner), ...
+                        slipAngles.(corner), slipRatios.(corner), ...
+                        cornerKin.camberAngle, mu);
+                end
+            end
+
+            for i = 1:numel(corners)
+                corner = corners{i};
+                tireState = vm.tire.(corner);
+                cornerKin = kin.(corner);
+                wheelHeading = wheelHeadings.(corner);
+
+                FxBody = tireState.Fx * cos(wheelHeading) - tireState.Fy * sin(wheelHeading);
+                FyBody = tireState.Fx * sin(wheelHeading) + tireState.Fy * cos(wheelHeading);
+
+                tireData.(sprintf('FxBody_%s', corner)) = FxBody;
+                tireData.(sprintf('FyBody_%s', corner)) = FyBody;
+                tireData.sumFxBody = tireData.sumFxBody + FxBody;
+                tireData.sumFyBody = tireData.sumFyBody + FyBody;
+                tireData.yawMoment = tireData.yawMoment + ...
+                    cornerKin.xPosition * FyBody - cornerKin.yPosition * FxBody;
+            end
+        end
+
+        function dynamics = computePlanarDynamics(obj, state, tireData, F_drag, totalNormalLoad)
+            vm = obj.vehicleManager;
+            rollingResistance = 0.015 * totalNormalLoad;
+            forwardSign = sign(state.vx);
+            if forwardSign == 0
+                forwardSign = 1;
+            end
+
+            netFx = tireData.sumFxBody ...
+                - forwardSign * F_drag ...
+                - forwardSign * rollingResistance;
+            netFy = tireData.sumFyBody;
+
+            dynamics.ax = netFx / vm.totalMass;
+            dynamics.ay = netFy / vm.totalMass;
+            dynamics.yawAccel = tireData.yawMoment / max(vm.yawInertia, eps);
+        end
+
+        function kin = getCornerKinematics(obj, steer)
+            vm = obj.vehicleManager;
+            if ~isempty(vm.suspension) && ismethod(vm.suspension, 'getCornerKinematics')
+                kin = vm.suspension.getCornerKinematics();
+            else
+                kin = struct();
+                kin.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steer);
+                kin.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steer);
+                kin.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+                kin.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+            end
+
+            [kin.FL.xPosition, kin.FL.yPosition] = obj.getWheelPosition('FL');
+            [kin.FR.xPosition, kin.FR.yPosition] = obj.getWheelPosition('FR');
+            [kin.RL.xPosition, kin.RL.yPosition] = obj.getWheelPosition('RL');
+            [kin.RR.xPosition, kin.RR.yPosition] = obj.getWheelPosition('RR');
+        end
+
+        function [x, y] = getWheelPosition(obj, corner)
+            vm = obj.vehicleManager;
+            frontArm = vm.wheelbase * (1 - vm.staticFrontWeight);
+            rearArm = vm.wheelbase * vm.staticFrontWeight;
+            halfTrack = vm.trackWidth / 2;
+
+            switch upper(corner)
+                case 'FL'
+                    x = frontArm;
+                    y = halfTrack;
+                case 'FR'
+                    x = frontArm;
+                    y = -halfTrack;
+                case 'RL'
+                    x = -rearArm;
+                    y = halfTrack;
+                otherwise
+                    x = -rearArm;
+                    y = -halfTrack;
+            end
+        end
+
+        function kappa = computeLocalSlipRatio(~, cornerState, longitudinalSpeed)
+            wheelSpeed = cornerState.angularVelocity * cornerState.wheelRadius;
+            denom = max(abs(wheelSpeed), abs(longitudinalSpeed));
+            if denom < 0.1
+                kappa = 0;
+            else
+                kappa = (wheelSpeed - longitudinalSpeed) / denom;
+            end
+            kappa = max(-1, min(1, kappa));
         end
 
         function brakeLimit = computeWheelLockBrakeLimit(obj, vm, vehicleSpeed, ...

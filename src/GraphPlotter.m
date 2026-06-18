@@ -112,8 +112,15 @@ classdef GraphPlotter
             if isempty(startIdx), subplot(2,2,2); else, subplot(6,4,startIdx+1); end
             trackPts = track.getTrackPoints();
             arcLen = [0; cumsum(sqrt(diff(trackPts(:,1)).^2 + diff(trackPts(:,2)).^2))];
-            xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
-            yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
+            if isfield(stateLog, 'x') && isfield(stateLog, 'y')
+                xFit = stateLog.x;
+                yFit = stateLog.y;
+                plot(trackPts(:,1), trackPts(:,2), 'Color', [0.75 0.75 0.75], 'LineWidth', 1);
+                hold on;
+            else
+                xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
+                yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
+            end
             scatter(xFit, yFit, 10, combinedG, 'filled');
             cb = colorbar;
             cb.Label.String = 'Combined G Load [g]';
