@@ -464,7 +464,7 @@ classdef TelemetryExporter
             end
             cleanup = onCleanup(@() fclose(fid));
 
-            fprintf(fid, '%s\n', TelemetryExporter.csvRow(tableData.names));
+            fprintf(fid, '%s\n', TelemetryExporter.csvRow(TelemetryExporter.motecHeaderNames(tableData)));
 
             for row = 1:size(tableData.values, 1)
                 fprintf(fid, '%s\n', TelemetryExporter.numericCsvRow(tableData.values(row, :)));
@@ -489,6 +489,16 @@ classdef TelemetryExporter
                 cells{i} = TelemetryExporter.csvEscape(values{i});
             end
             row = strjoin(cells, ',');
+        end
+
+        function names = motecHeaderNames(tableData)
+            names = tableData.names;
+            for i = 1:numel(names)
+                unit = char(tableData.units{i});
+                if ~isempty(unit)
+                    names{i} = sprintf('%s (%s)', names{i}, unit);
+                end
+            end
         end
 
         function value = csvEscape(value)
