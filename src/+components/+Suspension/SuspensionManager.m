@@ -65,19 +65,23 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % Pull static weight distribution from VehicleManager
             obj.staticFrontWeight = vehicleManager.staticFrontWeight;
             obj.geometry = geometry;
+
+            totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
+            frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
+            rearSprungMass = max(totalSprungMass * (1 - obj.staticFrontWeight) / 2, eps);
             
             % Create front corners (share front parameters, each has own state)
             obj.frontLeft = components.Suspension.SimpleSuspension( ...
                 vehicleManager, frontRollStiffDist, ...
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass);
+                tireSpringRate, unsprungMass, frontSprungMass);
             
             obj.frontRight = components.Suspension.SimpleSuspension( ...
                 vehicleManager, frontRollStiffDist, ...
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass);
+                tireSpringRate, unsprungMass, frontSprungMass);
             
             % Create rear corners (share rear parameters, each has own state)
             % Rear roll stiffness distribution = 1 - front
@@ -86,13 +90,13 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 vehicleManager, rearRollStiffDist, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass);
+                tireSpringRate, unsprungMass, rearSprungMass);
             
             obj.rearRight = components.Suspension.SimpleSuspension( ...
                 vehicleManager, rearRollStiffDist, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass);
+                tireSpringRate, unsprungMass, rearSprungMass);
         end
         
         %% ---- Warmup: settle suspension to static equilibrium ----
@@ -101,17 +105,17 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % WARMUP Settle suspension state to static equilibrium
             %   warmup(totalMass, dt)
             %
-            %   Iterates the per-corner suspension model with static weight
-            %   (no aero, no load transfer) until the transient response
-            %   converges. This prevents the "all-zeros" initial state from
-            %   causing a large force spike at simulation start.
+            %   Initializes deterministic per-corner static load and
+            %   deflection state. Dynamic displacement states are measured
+            %   from this equilibrium.
             %
             %   totalMass - Total vehicle mass [kg]
-            %   dt        - Timestep [s] (default: 0.001)
+            %   dt        - Unused, kept for interface compatibility
             
             if nargin < 3
                 dt = 0.001;
             end
+            %#ok<NASGU>
 
             W = totalMass * 9.81;
             
@@ -122,35 +126,12 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             demanded_FR = Fz_static_front / 2;
             demanded_RL = Fz_static_rear  / 2;
             demanded_RR = Fz_static_rear  / 2;
-            
-            % Use dt for convergence iterations
-            
-            maxIter = 10000;
-            velTolerance = 1e-6;  % [m/s]
-            
-            for iter = 1:maxIter
-                obj.frontLeft.updateCorner( obj.frontLeft.state,  demanded_FL, dt);
-                obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
-                obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
-                obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
-                obj.updateGeometry(0);
-                
-                % Check convergence: max absolute damper velocity across corners
-                maxVel = max(abs([
-                    obj.frontLeft.state.damperVelocity
-                    obj.frontRight.state.damperVelocity
-                    obj.rearLeft.state.damperVelocity
-                    obj.rearRight.state.damperVelocity
-                ]));
-                
-                if maxVel < velTolerance
-                    fprintf('Suspension warmup: converged in %d iterations\n', iter);
-                    return;
-                end
-            end
-            
-            warning('Suspension warmup: did not converge after %d iterations (maxVel=%.2e m/s)', ...
-                maxIter, maxVel);
+
+            obj.frontLeft.initializeStaticLoad( obj.frontLeft.state,  demanded_FL);
+            obj.frontRight.initializeStaticLoad(obj.frontRight.state, demanded_FR);
+            obj.rearLeft.initializeStaticLoad(  obj.rearLeft.state,   demanded_RL);
+            obj.rearRight.initializeStaticLoad( obj.rearRight.state,  demanded_RR);
+            obj.updateGeometry(0);
         end
         
         %% ---- Per-corner transient computation ----
@@ -241,6 +222,54 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             obj.updateCornerGeometry(obj.rearRight,  'RR', steerInput);
         end
 
+        function loads = estimateCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass)
+            % ESTIMATECORNERLOADS Compute load-transfer demands without
+            % advancing suspension state.
+
+            W = totalMass * 9.81;
+            ax = state.ax;
+            ay = state.ay;
+
+            tw = obj.frontLeft.trackWidth;
+            wb = obj.frontLeft.wheelbase;
+            cgH = obj.frontLeft.cgHeight;
+            frontWeightFrac = obj.staticFrontWeight;
+            rollStiffDist = obj.frontLeft.rollStiffDist;
+
+            Fz_static_front = W * frontWeightFrac;
+            Fz_static_rear  = W * (1 - frontWeightFrac);
+            Fz_static_FL = Fz_static_front / 2;
+            Fz_static_FR = Fz_static_front / 2;
+            Fz_static_RL = Fz_static_rear  / 2;
+            Fz_static_RR = Fz_static_rear  / 2;
+
+            Fz_aero_FL = Fz_aero_front / 2;
+            Fz_aero_FR = Fz_aero_front / 2;
+            Fz_aero_RL = Fz_aero_rear  / 2;
+            Fz_aero_RR = Fz_aero_rear  / 2;
+
+            totalLatTransfer = totalMass * abs(ay) * cgH / tw;
+            frontLatTransfer = totalLatTransfer * rollStiffDist;
+            rearLatTransfer  = totalLatTransfer * (1 - rollStiffDist);
+
+            sign_ay = sign(ay);
+            Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
+            Fz_lat_FR =  sign_ay * frontLatTransfer / 2;
+            Fz_lat_RL = -sign_ay * rearLatTransfer / 2;
+            Fz_lat_RR =  sign_ay * rearLatTransfer / 2;
+
+            totalLongTransfer = totalMass * ax * cgH / wb;
+            Fz_long_FL = -totalLongTransfer / 2;
+            Fz_long_FR = -totalLongTransfer / 2;
+            Fz_long_RL =  totalLongTransfer / 2;
+            Fz_long_RR =  totalLongTransfer / 2;
+
+            loads.FL = max(Fz_static_FL + Fz_aero_FL + Fz_lat_FL + Fz_long_FL, 0);
+            loads.FR = max(Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR, 0);
+            loads.RL = max(Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL, 0);
+            loads.RR = max(Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR, 0);
+        end
+
         function updateCornerGeometry(obj, cornerUnit, cornerName, steerInput)
             cornerState = cornerUnit.state;
             wheelTravel = cornerState.damperPosition / max(cornerUnit.motionRatio, eps);
@@ -262,26 +291,28 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         end
         
         function pitchAngle = computePitchAngle(obj)
-            % COMPUTEPITCHANGLE Compute pitch angle from suspension compression
+            % COMPUTEPITCHANGLE Compute dynamic body pitch from sprung motion
             %   pitchAngle = computePitchAngle()
             %
-            %   Uses the average front and rear damper positions (compression
-            %   from static equilibrium) to determine the body pitch angle.
+            %   Uses average front and rear sprung-mass positions measured
+            %   from static equilibrium. Static rake or undertray ride-height
+            %   offsets are treated as the zero-pitch reference after warmup.
             %
             %   Positive pitch = nose up (e.g. rear compresses more under
             %   acceleration squat).
             %   Negative pitch = nose down (e.g. front compresses more under
             %   braking dive).
             %
-            %   Geometry is trivialized to:
-            %     pitchAngle = atan2(avgRearCompress - avgFrontCompress, wheelbase)
+            %   Geometry is simplified to:
+            %     pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, wheelbase)
             
-            avgFrontCompress = (obj.frontLeft.state.damperPosition + ...
-                                obj.frontRight.state.damperPosition) / 2;
-            avgRearCompress  = (obj.rearLeft.state.damperPosition + ...
-                                obj.rearRight.state.damperPosition) / 2;
+            avgFrontSprungDown = (obj.frontLeft.state.sprungPosition + ...
+                                  obj.frontRight.state.sprungPosition) / 2;
+            avgRearSprungDown  = (obj.rearLeft.state.sprungPosition + ...
+                                  obj.rearRight.state.sprungPosition) / 2;
             
-            pitchAngle = atan2(avgRearCompress - avgFrontCompress, obj.frontLeft.wheelbase);
+            pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, ...
+                obj.frontLeft.wheelbase);
         end
     end
 

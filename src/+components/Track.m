@@ -17,6 +17,9 @@ classdef (Abstract) Track
         
         % Get heading angle at each waypoint [rad]
         heading = getHeading(obj)
+
+        % Get total fixed track width [m]
+        width = getTrackWidth(obj)
     end
     
     methods (Static)

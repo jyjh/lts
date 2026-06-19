@@ -147,14 +147,8 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         end
         
         function maxOmega = getMaxDrivenWheelAngularVelocity(obj)
-            % Maximum driven-wheel angular velocity from the motor RPM cap.
+            % Driven-wheel angular velocity corresponding to the motor RPM cap.
             maxOmega = obj.rpmLimitRPM / obj.totalGearRatio * 2 * pi / 60;
-        end
-        
-        function drivenWheelAngularVelocity = limitDrivenWheelAngularVelocity(obj, drivenWheelAngularVelocity)
-            % Clamp driven-wheel speed so the direct-coupled motor stays capped.
-            maxOmega = obj.getMaxDrivenWheelAngularVelocity();
-            drivenWheelAngularVelocity = min(max(0, drivenWheelAngularVelocity), maxOmega);
         end
         
         function fullThrottleForce = lookupTractiveForceByRPM(obj, motorRPM)

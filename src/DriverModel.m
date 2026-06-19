@@ -1,4 +1,4 @@
-classdef DriverModel
+classdef DriverModel < handle
     % DRIVERMODEL Decides throttle and brake inputs from a racing speed profile
     %
     % The driver builds a local backward speed envelope from upcoming
@@ -17,8 +17,8 @@ classdef DriverModel
         lookaheadTime    = 2.0    % Minimum seconds ahead to inspect
         minLookaheadDist = 15     % Minimum lookahead distance [m]
         hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
-        corneringUsage   = 0.99   % Fraction of lateral grip used for speed targets
-        brakingUsage     = 0.98   % Fraction of braking capability used in planning
+        corneringUsage   = 0.15   % Fraction of lateral grip used for speed targets
+        brakingUsage     = 0.75   % Fraction of braking capability used in planning
         minBrakeCommand  = 0.85   % Minimum brake command once braking is required
         brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
         throttleBand     = 0.15   % Speed band [m/s] around target before switching
@@ -28,10 +28,49 @@ classdef DriverModel
         maxSteeringAngle = 0.6    % Steering angle limit [rad]
         minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
         apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
+        stanleyGain      = 1.5    % Cross-track correction gain
+        stanleySoftening = 1.5    % Low-speed softening term [m/s]
+        headingGain      = 1.0    % Heading-error steering correction gain
+        edgeSlowdownMargin = 0.75 % Start slowing this far from track edge [m]
+        edgeBrakeCommand = 0.45   % Brake added near/outside track edge
+        edgeSteeringMargin = 0.75 % Start steering away this far from track edge [m]
+        edgeSteeringGain = 0.40   % Track-edge steering correction gain [rad]
+        correctionSlowdownThreshold = 0.65 % Steering correction use before slowing
+        correctionBrakeCommand = 0.15      % Brake added for large path corrections
+        throttleRampTime = 0.10   % Time from 0 to 100% throttle [s]
+        brakeRampTime    = 0.10   % Time from 0 to 100% brake [s]
+        steeringRampTime = 0.10   % Time from center to full steering command [s]
+        pedalSwitchHoldTime = 0.10    % Opposite pedal request must persist [s]
+        immediateBrakeSwitchThreshold = 0.50 % Brake command that bypasses switch dwell
+        pedalReductionHoldTime = 0.15 % Reduction must persist before pedal follows [s]
+        pedalReleaseFilterTime = 0.20 % Smooth brief same-pedal reductions [s]
+        pedalTargetDeadband = 0.04    % Ignore small same-pedal target changes
+        launchSpeedThreshold = 0.5 % Below this, do not correction-brake under target speed [m/s]
+        cornerOutsideBiasFraction = 0.35 % Fraction of half-width targeted outside in corners
+        cornerOutsideBiasMax = 0.7 % Max outside target offset from centerline [m]
 
         % Cached track geometry
         trackArcLen      = []
         trackCurvature   = []
+
+        % Planned lap controls owned by the driver/controller layer
+        inputPlanner     = []
+        inputProfile     = []
+
+        % Driver actuator state
+        inputDt          = 0.001
+        lastThrottle     = 0
+        lastBrake        = 0
+        lastSteer        = 0
+        filteredThrottleTarget = 0
+        filteredBrakeTarget = 0
+        pendingThrottleReductionTarget = NaN
+        pendingThrottleReductionTime = 0
+        pendingBrakeReductionTarget = NaN
+        pendingBrakeReductionTime = 0
+        pendingPedalSwitchTarget = ""
+        pendingPedalSwitchTime = 0
+        inputStateInitialized = false
     end
 
     methods
@@ -39,6 +78,52 @@ classdef DriverModel
             % DRIVERMODEL Construct with a VehicleManager reference
             obj.vehicleManager = vehicleManager;
             obj = obj.cacheTrackGeometry();
+        end
+
+        function obj = prepareForSimulation(obj, initialState, trackData, dt)
+            % PREPAREFORSIMULATION Build the driver's feedforward lap plan.
+            if nargin >= 4 && isfinite(dt) && dt > 0
+                obj.inputDt = dt;
+            end
+            [obj.lastThrottle, obj.lastBrake] = ...
+                obj.resolvePedalTargets(initialState.throttle, initialState.brake);
+            obj.lastSteer = obj.clampSteer(initialState.steer);
+            obj.filteredThrottleTarget = obj.lastThrottle;
+            obj.filteredBrakeTarget = obj.lastBrake;
+            obj.resetPedalReductionMemory();
+            obj.clearPendingPedalSwitch();
+            obj.inputStateInitialized = true;
+            obj.inputPlanner = DriverInputPlanner(obj.vehicleManager, obj);
+            obj.inputProfile = obj.inputPlanner.buildOpenLoopProfile( ...
+                initialState, trackData);
+        end
+
+        function input = computeInput(obj, state, observation)
+            % COMPUTEINPUT Return throttle, brake, and steer for this state.
+            % The simulator supplies observation telemetry; all control
+            % policy and path correction lives in the driver layer.
+            if nargin < 3 || isempty(observation)
+                observation = obj.defaultObservationFromState(state);
+            else
+                observation = obj.completeObservation(observation, state);
+            end
+
+            if isempty(obj.inputProfile) || isempty(obj.inputPlanner)
+                [throttle, brake, steer] = obj.computeInputs(state);
+                input = struct( ...
+                    'throttle', throttle, ...
+                    'brake', brake, ...
+                    'steer', steer, ...
+                    'targetSpeed', NaN, ...
+                    'axRef', NaN);
+                input = obj.applyInputSlew(input, state);
+                return;
+            end
+
+            input = obj.inputPlanner.sampleAtProgress( ...
+                obj.inputProfile, observation.s, state.speed);
+            input = obj.correctPlannedInput(input, state, observation);
+            input = obj.applyInputSlew(input, state);
         end
 
         function [throttle, brake, steer] = computeInputs(obj, state)
@@ -115,9 +200,433 @@ classdef DriverModel
             throttle = throttle * longitudinalCommandScale;
             brake = brake * longitudinalCommandScale;
         end
+
+        function input = correctPlannedInput(obj, plannedInput, state, ref)
+            % CORRECTPLANNEDINPUT Add path-following corrections to centerline feedforward input.
+            input = plannedInput;
+            if ~isfield(input, 'throttle')
+                input.throttle = 0;
+            end
+            if ~isfield(input, 'brake')
+                input.brake = 0;
+            end
+            if ~isfield(input, 'steer')
+                input.steer = 0;
+            end
+
+            headingError = obj.wrapAngle(ref.heading - state.yaw);
+            targetLateralError = obj.computeTargetLateralError(ref);
+            lateralTrackingError = ref.lateralError - targetLateralError;
+            crossTrackCorrection = atan2( ...
+                -obj.stanleyGain * lateralTrackingError, ...
+                max(state.speed, 0) + obj.stanleySoftening);
+            plannedSteer = input.steer;
+            steeringCorrection = obj.headingGain * headingError + crossTrackCorrection;
+            steeringCorrection = steeringCorrection + ...
+                obj.computeEdgeSteeringCorrection(ref);
+            steer = plannedSteer + steeringCorrection;
+            input.steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
+            input.targetLateralError = targetLateralError;
+
+            correctionUse = abs(steeringCorrection) / max(obj.maxSteeringAngle, eps);
+            correctionUse = max(0, min(1, correctionUse));
+            if correctionUse > obj.correctionSlowdownThreshold
+                slowdownUse = (correctionUse - obj.correctionSlowdownThreshold) / ...
+                    max(1 - obj.correctionSlowdownThreshold, eps);
+                slowdownUse = max(0, min(1, slowdownUse));
+                input.throttle = input.throttle * (1 - 0.40 * slowdownUse);
+                input.brake = max(input.brake, obj.correctionBrakeCommand * slowdownUse);
+            end
+
+            if isfield(ref, 'trackHalfWidth') && isfinite(ref.trackHalfWidth)
+                margin = ref.trackHalfWidth - abs(ref.lateralError);
+                if margin < obj.edgeSlowdownMargin
+                    edgeUse = (obj.edgeSlowdownMargin - margin) / ...
+                        max(obj.edgeSlowdownMargin, eps);
+                    edgeUse = max(0, min(1, edgeUse));
+                    input.throttle = input.throttle * (1 - 0.85 * edgeUse);
+                    input.brake = max(input.brake, obj.edgeBrakeCommand * edgeUse);
+                end
+            end
+
+            input.throttle = max(0, min(1, input.throttle));
+            input.brake = max(0, min(1, input.brake));
+            if state.speed < obj.launchSpeedThreshold && ...
+                    obj.isAtOrBelowTargetSpeed(state.speed, input)
+                input.brake = 0;
+                input.throttle = max(input.throttle, 1);
+            end
+            input = obj.enforcePedalExclusivity(input);
+        end
     end
 
     methods (Access = private)
+        function input = applyInputSlew(obj, input, state)
+            if ~obj.inputStateInitialized
+                [obj.lastThrottle, obj.lastBrake] = ...
+                    obj.resolvePedalTargets(state.throttle, state.brake);
+                obj.lastSteer = obj.clampSteer(state.steer);
+                obj.filteredThrottleTarget = obj.lastThrottle;
+                obj.filteredBrakeTarget = obj.lastBrake;
+                obj.resetPedalReductionMemory();
+                obj.clearPendingPedalSwitch();
+                obj.inputStateInitialized = true;
+            end
+
+            [targetThrottle, targetBrake] = obj.resolvePedalTargets( ...
+                input.throttle, input.brake);
+            [targetThrottle, targetBrake] = obj.filterPedalTargets( ...
+                targetThrottle, targetBrake);
+            targetSteer = obj.clampSteer(input.steer);
+
+            if targetBrake > 0 && obj.lastThrottle > 0
+                input.throttle = obj.slewCommand( ...
+                    obj.lastThrottle, 0, obj.throttleRampTime);
+                input.brake = 0;
+            elseif targetThrottle > 0 && obj.lastBrake > 0
+                input.throttle = 0;
+                input.brake = obj.slewCommand( ...
+                    obj.lastBrake, 0, obj.brakeRampTime);
+            elseif targetThrottle > 0
+                input.throttle = obj.slewCommand( ...
+                    obj.lastThrottle, targetThrottle, obj.throttleRampTime);
+                input.brake = 0;
+            elseif targetBrake > 0
+                input.throttle = 0;
+                input.brake = obj.slewCommand( ...
+                    obj.lastBrake, targetBrake, obj.brakeRampTime);
+            elseif obj.lastBrake > 0
+                input.throttle = 0;
+                input.brake = obj.slewCommand( ...
+                    obj.lastBrake, 0, obj.brakeRampTime);
+            else
+                input.throttle = obj.slewCommand( ...
+                    obj.lastThrottle, 0, obj.throttleRampTime);
+                input.brake = 0;
+            end
+
+            obj.lastThrottle = input.throttle;
+            obj.lastBrake = input.brake;
+
+            input.steer = obj.slewSteeringCommand(obj.lastSteer, targetSteer);
+            obj.lastSteer = input.steer;
+        end
+
+        function [targetThrottle, targetBrake] = filterPedalTargets(obj, targetThrottle, targetBrake)
+            [targetThrottle, targetBrake] = obj.applyPedalSwitchDwell( ...
+                targetThrottle, targetBrake);
+
+            if targetBrake > 0
+                obj.filteredThrottleTarget = 0;
+                obj.filteredBrakeTarget = obj.filterSamePedalReduction( ...
+                    "brake", obj.filteredBrakeTarget, targetBrake);
+            elseif targetThrottle > 0
+                obj.filteredBrakeTarget = 0;
+                obj.filteredThrottleTarget = obj.filterSamePedalReduction( ...
+                    "throttle", obj.filteredThrottleTarget, targetThrottle);
+            else
+                obj.filteredThrottleTarget = obj.filterSamePedalReduction( ...
+                    "throttle", obj.filteredThrottleTarget, 0);
+                obj.filteredBrakeTarget = obj.filterSamePedalReduction( ...
+                    "brake", obj.filteredBrakeTarget, 0);
+            end
+
+            [targetThrottle, targetBrake] = obj.resolvePedalTargets( ...
+                obj.filteredThrottleTarget, obj.filteredBrakeTarget);
+        end
+
+        function [targetThrottle, targetBrake] = applyPedalSwitchDwell(obj, targetThrottle, targetBrake)
+            activeThrottle = max(obj.lastThrottle, obj.filteredThrottleTarget);
+            activeBrake = max(obj.lastBrake, obj.filteredBrakeTarget);
+
+            if targetBrake > 0 && activeThrottle > obj.pedalTargetDeadband
+                if targetBrake >= obj.immediateBrakeSwitchThreshold
+                    obj.clearPendingPedalSwitch();
+                elseif ~obj.pedalSwitchHasPersisted("brake")
+                    targetThrottle = activeThrottle;
+                    targetBrake = 0;
+                end
+            elseif targetThrottle > 0 && activeBrake > obj.pedalTargetDeadband
+                if ~obj.pedalSwitchHasPersisted("throttle")
+                    targetThrottle = 0;
+                    targetBrake = activeBrake;
+                end
+            else
+                obj.clearPendingPedalSwitch();
+            end
+        end
+
+        function persisted = pedalSwitchHasPersisted(obj, targetPedal)
+            if obj.pedalSwitchHoldTime <= 0 || ~isfinite(obj.pedalSwitchHoldTime)
+                persisted = true;
+                return;
+            end
+
+            if obj.pendingPedalSwitchTarget ~= targetPedal
+                obj.pendingPedalSwitchTarget = targetPedal;
+                obj.pendingPedalSwitchTime = 0;
+                persisted = false;
+                return;
+            end
+
+            obj.pendingPedalSwitchTime = obj.pendingPedalSwitchTime + obj.inputDt;
+            persisted = obj.pendingPedalSwitchTime >= obj.pedalSwitchHoldTime;
+        end
+
+        function clearPendingPedalSwitch(obj)
+            obj.pendingPedalSwitchTarget = "";
+            obj.pendingPedalSwitchTime = 0;
+        end
+
+        function value = filterSamePedalReduction(obj, pedalName, previousValue, targetValue)
+            targetValue = max(0, min(1, targetValue));
+            previousValue = max(0, min(1, previousValue));
+
+            if targetValue >= previousValue
+                obj.clearPendingPedalReduction(pedalName);
+                value = targetValue;
+                return;
+            end
+
+            if previousValue - targetValue <= obj.pedalTargetDeadband
+                obj.clearPendingPedalReduction(pedalName);
+                value = previousValue;
+                return;
+            end
+
+            if ~obj.reductionTargetHasPersisted(pedalName, targetValue)
+                value = previousValue;
+                return;
+            end
+
+            if obj.pedalReleaseFilterTime <= 0 || ~isfinite(obj.pedalReleaseFilterTime)
+                value = targetValue;
+                return;
+            end
+
+            alpha = obj.inputDt / max(obj.pedalReleaseFilterTime + obj.inputDt, eps);
+            value = previousValue + alpha * (targetValue - previousValue);
+            if value < obj.pedalTargetDeadband && targetValue <= obj.pedalTargetDeadband
+                value = 0;
+            end
+        end
+
+        function persisted = reductionTargetHasPersisted(obj, pedalName, targetValue)
+            if obj.pedalReductionHoldTime <= 0 || ~isfinite(obj.pedalReductionHoldTime)
+                persisted = true;
+                return;
+            end
+
+            [targetField, timeField] = obj.getPendingPedalReductionFields(pedalName);
+            pendingTarget = obj.(targetField);
+            if ~isfinite(pendingTarget) || ...
+                    abs(pendingTarget - targetValue) > obj.pedalTargetDeadband
+                obj.(targetField) = targetValue;
+                obj.(timeField) = 0;
+                persisted = false;
+                return;
+            end
+
+            obj.(timeField) = obj.(timeField) + obj.inputDt;
+            persisted = obj.(timeField) >= obj.pedalReductionHoldTime;
+        end
+
+        function clearPendingPedalReduction(obj, pedalName)
+            [targetField, timeField] = obj.getPendingPedalReductionFields(pedalName);
+            obj.(targetField) = NaN;
+            obj.(timeField) = 0;
+        end
+
+        function resetPedalReductionMemory(obj)
+            obj.clearPendingPedalReduction("throttle");
+            obj.clearPendingPedalReduction("brake");
+        end
+
+        function [targetField, timeField] = getPendingPedalReductionFields(~, pedalName)
+            if strcmp(string(pedalName), "brake")
+                targetField = 'pendingBrakeReductionTarget';
+                timeField = 'pendingBrakeReductionTime';
+            else
+                targetField = 'pendingThrottleReductionTarget';
+                timeField = 'pendingThrottleReductionTime';
+            end
+        end
+
+        function input = enforcePedalExclusivity(obj, input)
+            [input.throttle, input.brake] = obj.resolvePedalTargets( ...
+                input.throttle, input.brake);
+        end
+
+        function [throttle, brake] = resolvePedalTargets(~, throttle, brake)
+            throttle = max(0, min(1, throttle));
+            brake = max(0, min(1, brake));
+
+            if brake > 0
+                throttle = 0;
+            elseif throttle > 0
+                brake = 0;
+            end
+        end
+
+        function atOrBelow = isAtOrBelowTargetSpeed(~, speed, input)
+            atOrBelow = true;
+            if isfield(input, 'targetSpeed') && isfinite(input.targetSpeed)
+                atOrBelow = speed <= input.targetSpeed;
+            end
+        end
+
+        function steer = clampSteer(obj, steer)
+            steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
+        end
+
+        function steer = slewSteeringCommand(obj, previousSteer, targetSteer)
+            if obj.steeringRampTime <= 0 || ~isfinite(obj.steeringRampTime)
+                steer = targetSteer;
+                return;
+            end
+
+            maxDelta = obj.maxSteeringAngle * obj.inputDt / ...
+                max(obj.steeringRampTime, eps);
+            delta = targetSteer - previousSteer;
+            delta = max(-maxDelta, min(maxDelta, delta));
+            steer = obj.clampSteer(previousSteer + delta);
+        end
+
+        function value = slewCommand(obj, previousValue, targetValue, rampTime)
+            if rampTime <= 0 || ~isfinite(rampTime)
+                value = targetValue;
+                return;
+            end
+
+            maxDelta = obj.inputDt / rampTime;
+            delta = targetValue - previousValue;
+            delta = max(-maxDelta, min(maxDelta, delta));
+            value = previousValue + delta;
+            value = max(0, min(1, value));
+        end
+
+        function targetLateralError = computeTargetLateralError(obj, ref)
+            targetLateralError = 0;
+            if ~isfield(ref, 'curvature') || abs(ref.curvature) <= obj.curvatureTol
+                return;
+            end
+            if ~isfield(ref, 'trackHalfWidth') || ~isfinite(ref.trackHalfWidth) || ...
+                    ref.trackHalfWidth <= 0
+                return;
+            end
+
+            usableOffset = max(ref.trackHalfWidth - ...
+                max(obj.edgeSlowdownMargin, obj.edgeSteeringMargin), 0);
+            outsideBias = obj.cornerOutsideBiasFraction * ref.trackHalfWidth;
+            outsideBias = min([outsideBias, obj.cornerOutsideBiasMax, usableOffset]);
+
+            [arcLen, ~] = obj.getTrackGeometry();
+            if isfield(ref, 'idx') && isfinite(ref.idx)
+                idx = max(1, min(round(ref.idx), numel(arcLen)));
+            elseif isfield(ref, 's') && isfinite(ref.s)
+                idx = find(arcLen <= ref.s, 1, 'last');
+                if isempty(idx)
+                    idx = 1;
+                end
+            else
+                targetLateralError = -sign(ref.curvature) * outsideBias;
+                return;
+            end
+
+            [segmentStart, segmentEnd, turnSign, found] = obj.findCornerSegment(idx);
+            if ~found || turnSign == 0
+                targetLateralError = -sign(ref.curvature) * outsideBias;
+                return;
+            end
+
+            segmentStartS = arcLen(segmentStart);
+            segmentEndS = arcLen(segmentEnd);
+            segmentLength = max(segmentEndS - segmentStartS, eps);
+            if isfield(ref, 's') && isfinite(ref.s)
+                cornerS = ref.s;
+            else
+                cornerS = arcLen(idx);
+            end
+            phase = (cornerS - segmentStartS) / segmentLength;
+            phase = max(0, min(1, phase));
+            apexPhaseClamped = obj.getClampedApexPhase();
+
+            if phase <= apexPhaseClamped
+                blend = phase / max(apexPhaseClamped, eps);
+                targetLateralError = -turnSign * outsideBias * cos(pi * blend);
+            else
+                blend = (phase - apexPhaseClamped) / ...
+                    max(1 - apexPhaseClamped, eps);
+                targetLateralError = turnSign * outsideBias * cos(pi * blend);
+            end
+        end
+
+        function correction = computeEdgeSteeringCorrection(obj, ref)
+            correction = 0;
+            if ~isfield(ref, 'trackHalfWidth') || ~isfinite(ref.trackHalfWidth) || ...
+                    ref.trackHalfWidth <= 0
+                return;
+            end
+            if ~isfield(ref, 'lateralError') || ~isfinite(ref.lateralError) || ...
+                    abs(ref.lateralError) <= eps
+                return;
+            end
+
+            margin = ref.trackHalfWidth - abs(ref.lateralError);
+            if margin >= obj.edgeSteeringMargin
+                return;
+            end
+
+            edgeUse = (obj.edgeSteeringMargin - margin) / ...
+                max(obj.edgeSteeringMargin, eps);
+            edgeUse = max(0, min(1, edgeUse));
+
+            % Positive lateral error is left of the reference line, so a
+            % negative correction steers back right; negative error is the
+            % opposite.
+            correction = -sign(ref.lateralError) * obj.edgeSteeringGain * edgeUse;
+        end
+
+        function observation = defaultObservationFromState(~, state)
+            refHeading = state.refHeading;
+            if ~isfinite(refHeading)
+                refHeading = state.heading;
+            end
+            refCurvature = state.refCurvature;
+            if ~isfinite(refCurvature)
+                refCurvature = state.curvature;
+            end
+
+            observation = struct( ...
+                'idx', 1, ...
+                's', state.s, ...
+                'x', state.x, ...
+                'y', state.y, ...
+                'heading', refHeading, ...
+                'curvature', refCurvature, ...
+                'mu', state.mu, ...
+                'lateralError', state.lateralError, ...
+                'trackWidth', NaN, ...
+                'trackHalfWidth', NaN, ...
+                'trackLimitMargin', NaN, ...
+                'onTrack', state.onTrack);
+        end
+
+        function observation = completeObservation(obj, observation, state)
+            defaults = obj.defaultObservationFromState(state);
+            fields = fieldnames(defaults);
+            for i = 1:numel(fields)
+                field = fields{i};
+                if ~isfield(observation, field) || isempty(observation.(field))
+                    observation.(field) = defaults.(field);
+                end
+            end
+        end
+
+        function angle = wrapAngle(~, angle)
+            angle = atan2(sin(angle), cos(angle));
+        end
+
         function obj = cacheTrackGeometry(obj)
             track = obj.vehicleManager.track;
             trackPts = track.getTrackPoints();

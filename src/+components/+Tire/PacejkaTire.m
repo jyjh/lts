@@ -113,7 +113,7 @@ classdef PacejkaTire < components.Tire.TireModel
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
 
             % Store outputs capped by the current surface friction coefficient.
-            cornerState.Fy = outputs(:,2) * surfaceScale;
+            cornerState.Fy = -outputs(:,2) * surfaceScale;
             cornerState.Fx = outputs(:,1) * surfaceScale;
             cornerState.Mx = outputs(:,4) * surfaceScale;
             cornerState.My = outputs(:,5) * surfaceScale;
@@ -142,7 +142,7 @@ classdef PacejkaTire < components.Tire.TireModel
             rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fy = outputs(:,2) * surfaceScale;
+            Fy = -outputs(:,2) * surfaceScale;
         end
         
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -253,12 +253,18 @@ classdef PacejkaTire < components.Tire.TireModel
             
             wheelSpeed = omega * R;
             denom = max(abs(wheelSpeed), abs(V));
-            
-            if denom < 0.1
-                % At very low speed, slip ratio is ill-defined
-                kappa = 0;
+
+            slipSpeedFloor = 1.0;
+            rawKappa = (wheelSpeed - V) / max(denom, slipSpeedFloor);
+            if denom < slipSpeedFloor
+                previousKappa = cornerState.slipRatio;
+                if ~isfinite(previousKappa)
+                    previousKappa = rawKappa;
+                end
+                blend = denom / slipSpeedFloor;
+                kappa = (1 - blend) * previousKappa + blend * rawKappa;
             else
-                kappa = (wheelSpeed - V) / denom;
+                kappa = rawKappa;
             end
             
             % Clamp to [-1, 1]
@@ -362,7 +368,7 @@ classdef PacejkaTire < components.Tire.TireModel
                     rawPeakMu = obj.getCachedPeakMu(Fz(i), gamma(i), P, params);
                     surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
                     states{i}.Fx = outputs(j,1) * surfaceScale;
-                    states{i}.Fy = outputs(j,2) * surfaceScale;
+                    states{i}.Fy = -outputs(j,2) * surfaceScale;
                     states{i}.Mx = outputs(j,4) * surfaceScale;
                     states{i}.My = outputs(j,5) * surfaceScale;
                     states{i}.Mz = outputs(j,6) * surfaceScale;
@@ -460,7 +466,9 @@ classdef PacejkaTire < components.Tire.TireModel
             vxCorner = vx - yawRate * y;
             vyCorner = vy + yawRate * x;
             wheelHeading = kin.steerAngle + kin.toeAngle;
-            alpha = wheelHeading - atan2(vyCorner, max(vxCorner, eps));
+            longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
+            latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
+            alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
         end
         function surfaceScale = computeSurfaceScale(obj, rawPeakMu, surfaceMu)
             % COMPUTESURFACESCALE Scale tire forces so surface mu is an absolute cap.

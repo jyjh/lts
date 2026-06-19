@@ -18,6 +18,31 @@ classdef SuspensionState < handle
         
         % Tire vertical deflection [m]
         tireDeflection   = 0
+
+        % Sprung mass displacement from static equilibrium [m]
+        % Positive = body moving downward
+        sprungPosition   = 0
+
+        % Sprung mass velocity [m/s]
+        % Positive = body moving downward
+        sprungVelocity   = 0
+
+        % Unsprung mass displacement from static equilibrium [m]
+        % Positive = wheel center moving downward / tire compression
+        unsprungPosition = 0
+
+        % Unsprung mass velocity [m/s]
+        % Positive = wheel center moving downward
+        unsprungVelocity = 0
+
+        % Static tire normal load for this corner [N]
+        staticLoad       = 0
+
+        % Static suspension compression at this corner [m]
+        staticSuspensionCompression = 0
+
+        % Static tire deflection at this corner [m]
+        staticTireDeflection = 0
         
         % Normal force at tire contact patch [N]
         tireNormalForce  = 0
@@ -51,6 +76,13 @@ classdef SuspensionState < handle
             obj.damperPosition  = 0;
             obj.damperVelocity  = 0;
             obj.tireDeflection  = 0;
+            obj.sprungPosition  = 0;
+            obj.sprungVelocity  = 0;
+            obj.unsprungPosition = 0;
+            obj.unsprungVelocity = 0;
+            obj.staticLoad      = 0;
+            obj.staticSuspensionCompression = 0;
+            obj.staticTireDeflection = 0;
             obj.tireNormalForce = 0;
             obj.wheelTravel     = 0;
             obj.camberAngle     = 0;
@@ -66,6 +98,13 @@ classdef SuspensionState < handle
             obj.damperPosition  = 0;
             obj.damperVelocity  = 0;
             obj.tireDeflection  = 0;
+            obj.sprungPosition  = 0;
+            obj.sprungVelocity  = 0;
+            obj.unsprungPosition = 0;
+            obj.unsprungVelocity = 0;
+            obj.staticLoad      = 0;
+            obj.staticSuspensionCompression = 0;
+            obj.staticTireDeflection = 0;
             obj.tireNormalForce = 0;
             obj.wheelTravel     = 0;
             obj.camberAngle     = 0;

@@ -24,6 +24,9 @@ classdef VehicleState
         % Body-frame velocity components [m/s]
         vx          = NaN
         vy          = 0
+
+        % Body slip angle [rad], positive when velocity points left of body x-axis
+        bodySlipAngle = 0
         
         % Longitudinal acceleration [m/s^2] (positive = forward)
         ax          = 0
@@ -40,7 +43,7 @@ classdef VehicleState
         % Yaw acceleration [rad/s^2]
         yawAccel    = 0
         
-        % Pitch angle [rad] (positive = nose up, e.g. under braking)
+        % Pitch angle [rad] (positive = nose up, e.g. acceleration squat)
         pitchAngle  = 0
         
         % Ride height deviation from nominal [m] (positive = higher, e.g. over a crest)
@@ -95,6 +98,7 @@ classdef VehicleState
             else
                 obj.heading = obj.yaw;
             end
+            obj.bodySlipAngle = obj.computeBodySlipAngle();
         end
         
         function obj = updateFromDynamics(obj, ax, ay, ds, dt, curvature, heading, mu)
@@ -113,6 +117,7 @@ classdef VehicleState
             obj.speed = max(0, obj.speed + ax * dt);
             obj.vx = obj.speed;
             obj.vy = 0;
+            obj.bodySlipAngle = obj.computeBodySlipAngle();
             obj.curvature = curvature;
             obj.heading = heading;
             obj.yaw = heading;
@@ -144,6 +149,7 @@ classdef VehicleState
             obj.vx = vx;
             obj.vy = vy;
             obj.speed = hypot(vx, vy);
+            obj.bodySlipAngle = obj.computeBodySlipAngle();
             obj.yawRate = yawRate;
             obj.yaw = yaw;
             obj.heading = yaw;
@@ -167,8 +173,8 @@ classdef VehicleState
             %   negative = nose down (e.g. braking dive)
             %
             % Delegates to SuspensionManager which uses the differential
-            % front/rear damper positions and a trivialized geometry:
-            %   pitchAngle = atan2(avgRearCompress - avgFrontCompress, wheelbase)
+            % front/rear sprung-body positions from static equilibrium:
+            %   pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, wheelbase)
             
             if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.suspension)
                 pitchAngle = 0;
@@ -176,6 +182,16 @@ classdef VehicleState
             end
             
             pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
+        end
+
+        function bodySlipAngle = computeBodySlipAngle(obj)
+            % COMPUTEBODYSLIPANGLE Compute body sideslip from body-frame velocity.
+            if hypot(obj.vx, obj.vy) <= eps
+                bodySlipAngle = 0;
+                return;
+            end
+
+            bodySlipAngle = atan2(obj.vy, obj.vx);
         end
         
         function log = toLogStruct(obj)
@@ -188,6 +204,7 @@ classdef VehicleState
             log.speedKmh  = obj.speed * 3.6;
             log.vx        = obj.vx;
             log.vy        = obj.vy;
+            log.bodySlipAngle = obj.bodySlipAngle;
             log.ax        = obj.ax;
             log.ay        = obj.ay;
             log.heading   = obj.heading;
@@ -201,6 +218,7 @@ classdef VehicleState
             log.refHeading = obj.refHeading;
             log.refCurvature = obj.refCurvature;
             log.lateralError = obj.lateralError;
+            log.onTrack = obj.onTrack;
             log.mu        = obj.mu;
             log.time      = obj.time;
         end

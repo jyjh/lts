@@ -16,11 +16,8 @@ classdef (Abstract) PowertrainComponent
         % Fallback update for callers that only have vehicle speed [m/s]
         updateStateFromVehicleSpeed(obj, vehicleSpeed)
 
-        % Maximum driven-wheel angular velocity allowed by the motor [rad/s]
+        % Driven-wheel angular velocity corresponding to the motor RPM limit [rad/s]
         maxOmega = getMaxDrivenWheelAngularVelocity(obj)
-
-        % Clamp driven-wheel angular velocity to the powertrain speed limit
-        drivenWheelAngularVelocity = limitDrivenWheelAngularVelocity(obj, drivenWheelAngularVelocity)
         
         % Maximum engine torque [Nm] at given engine speed [rpm]
         maxTorque = getMaxTorque(obj, engineSpeed)

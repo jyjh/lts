@@ -8,6 +8,7 @@ classdef TestTrack < components.Track
         trackHeading   = []  % Heading at each point [rad]
         trackMu        = []  % Surface friction at each point
         trackLength    = 0   % Total length [m]
+        trackWidth     = 3   % Fixed total track width [m]
     end
     
     methods
@@ -58,6 +59,10 @@ classdef TestTrack < components.Track
         
         function heading = getHeading(obj)
             heading = obj.trackHeading;
+        end
+
+        function width = getTrackWidth(obj)
+            width = obj.trackWidth;
         end
     end
     
