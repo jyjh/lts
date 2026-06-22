@@ -63,8 +63,13 @@ classdef SuspensionState < handle
         % Effective installation motion ratio from geometry [-]
         motionRatioEffective = 1
         
-        % Net spring + damper force acting on sprung mass [N]
+        % Net suspension force acting on sprung mass [N]
+        % Includes spring, damper, bump stop, and anti-roll bar terms.
         suspensionForce  = 0
+
+        % Anti-roll bar force contribution at this corner [N]
+        % Positive increases suspension force / tire load.
+        antiRollBarForce = 0
         
         % Total demanded load on this corner (before suspension filtering) [N]
         demandedLoad     = 0
@@ -90,6 +95,7 @@ classdef SuspensionState < handle
             obj.steerAngle      = 0;
             obj.motionRatioEffective = 1;
             obj.suspensionForce = 0;
+            obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;
         end
         
@@ -112,6 +118,7 @@ classdef SuspensionState < handle
             obj.steerAngle      = 0;
             obj.motionRatioEffective = 1;
             obj.suspensionForce = 0;
+            obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;
         end
     end

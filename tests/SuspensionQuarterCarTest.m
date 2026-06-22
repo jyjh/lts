@@ -32,6 +32,31 @@ loadDelta = norm(loadVector(loadsBase) - loadVector(loadsStiff));
 verifyGreaterThan(testCase, loadDelta, 1e-3);
 end
 
+function testAntiRollBarCouplesLeftRightWheelTravel(testCase)
+[vehicle, suspension] = createSuspension(1, 100000, 60000);
+state = createState(0, 8, 0.1);
+
+for idx = 1:80
+    suspension.computeCornerLoads(state, 0, 0, vehicle.totalMass, 0.001);
+end
+
+frontForces = [
+    suspension.frontLeft.state.antiRollBarForce
+    suspension.frontRight.state.antiRollBarForce
+];
+rearForces = [
+    suspension.rearLeft.state.antiRollBarForce
+    suspension.rearRight.state.antiRollBarForce
+];
+
+verifyLessThan(testCase, frontForces(1), 0);
+verifyGreaterThan(testCase, frontForces(2), 0);
+verifyLessThan(testCase, rearForces(1), 0);
+verifyGreaterThan(testCase, rearForces(2), 0);
+verifyEqual(testCase, sum(frontForces), 0, 'AbsTol', 1e-9);
+verifyEqual(testCase, sum(rearForces), 0, 'AbsTol', 1e-9);
+end
+
 function testPitchUsesSprungBodyPositionNotDamperDeflection(testCase)
 [vehicle, suspension] = createSuspension(1);
 
@@ -135,6 +160,7 @@ header = string(readlines(csvFile));
 header = header(1);
 
 verifyTrue(testCase, contains(header, "Suspension Force FL (N)"));
+verifyTrue(testCase, contains(header, "Anti Roll Bar Force FL (N)"));
 verifyTrue(testCase, contains(header, "Suspension Demand FR (N)"));
 verifyTrue(testCase, contains(header, "Tire Deflection RL (mm)"));
 verifyTrue(testCase, contains(header, "Sprung Position RR (mm)"));
@@ -144,7 +170,14 @@ verifyTrue(testCase, contains(header, "Unsprung Vel RL (mm/s)"));
 verifyTrue(testCase, contains(header, "Body Slip Angle (deg)"));
 end
 
-function [vehicle, suspension] = createSuspension(rateScale)
+function [vehicle, suspension] = createSuspension(rateScale, frontAntiRollBarRate, rearAntiRollBarRate)
+if nargin < 2
+    frontAntiRollBarRate = 0;
+end
+if nargin < 3
+    rearAntiRollBarRate = 0;
+end
+
 vehicle = VehicleManager([], [], [], [], []);
 geometry = components.Suspension.SuspensionGeometry.fromPreset('baseline', vehicle);
 suspension = components.Suspension.SuspensionManager( ...
@@ -157,7 +190,9 @@ suspension = components.Suspension.SuspensionManager( ...
     200000, ...
     200000, ...
     25, ...
-    geometry);
+    geometry, ...
+    frontAntiRollBarRate, ...
+    rearAntiRollBarRate);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
 end
@@ -189,6 +224,7 @@ corners = {'FL', 'FR', 'RL', 'RR'};
 for idx = 1:numel(corners)
     corner = corners{idx};
     stateLog.(sprintf('suspensionForce_%s', corner)) = (idx:idx+n-1)' * 100;
+    stateLog.(sprintf('antiRollBarForce_%s', corner)) = (idx:idx+n-1)' * 10;
     stateLog.(sprintf('suspensionDemand_%s', corner)) = (idx:idx+n-1)' * 110;
     stateLog.(sprintf('tireDeflection_%s', corner)) = (idx:idx+n-1)' * 0.001;
     stateLog.(sprintf('damperPos_%s', corner)) = (idx:idx+n-1)' * 0.002;

@@ -15,7 +15,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn'
 %  ====================================================================
-trackType = 'autocross';
+trackType = 'skidpad';
 
 %% ====================================================================
 %  DISPLAY OPTIONS
@@ -129,6 +129,10 @@ geometry = components.Suspension.SuspensionGeometry.fromPreset(geometryPreset, v
 fprintf('Suspension Geometry: %s (Ackermann %.0f%%)\n', ...
     geometryPreset, geometry.ackermann * 100);
 
+% Anti-roll bar wheel rates [N/m of left/right wheel-travel difference]
+frontAntiRollBarRate = 18000;
+rearAntiRollBarRate = 14000;
+
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...
     vehicle, ...                    % vehicleManager handle
@@ -140,10 +144,14 @@ suspension = components.Suspension.SuspensionManager( ...
     200000, ...                     % bumpStopRate [N/m]
     200000, ...                     % tireSpringRate [N/m]
     unsprungMass, ...               % unsprungMass per corner [kg]
-    geometry ...                    % suspension/steering geometry preset
+    geometry, ...                   % suspension/steering geometry preset
+    frontAntiRollBarRate, ...       % frontAntiRollBarRate [N/m]
+    rearAntiRollBarRate ...         % rearAntiRollBarRate [N/m]
 );
 vehicle.suspension = suspension;
-fprintf('Suspension: SuspensionManager (4-corner transient + geometry)\n');
+fprintf(['Suspension: SuspensionManager ' ...
+    '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m)\n'], ...
+    frontAntiRollBarRate, rearAntiRollBarRate);
 
 % Warmup suspension to static equilibrium (prevents zero-state startup transient)
 suspension.warmup(vehicle.totalMass, dt);
@@ -153,6 +161,16 @@ simulator = Simulator(vehicle, driver, dt);
 
 initialState = VehicleState('s', 0, 'speed', 0.1);
 [stateLog, lapTime] = simulator.simulate(initialState, track);
+
+hasRecordedTelemetry = isstruct(stateLog) && isfield(stateLog, 'time') && ...
+    ~isempty(stateLog.time);
+if ~hasRecordedTelemetry
+    warning('run_simulation:NoRecordedTelemetry', ...
+        ['No recorded telemetry was produced for track "%s". ' ...
+        'The car likely stopped or left the track before the timed lap window. ' ...
+        'Skipping export, plots, and summary.'], trackType);
+    return;
+end
 
 if exportMoTeC
     scriptDir = fileparts(mfilename('fullpath'));

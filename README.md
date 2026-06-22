@@ -44,6 +44,9 @@ Edit `trackType` in `src/run_simulation.m` to switch between:
 - `slalom`
 - `90turn`
 
+`skidpad` simulates one warmup lap before the timed lap; returned plots and
+MoTeC exports contain only the second lap.
+
 ## Current Model
 
 - Multi-element aero system: `FrontWing`, `RearWing`, and `UnderbodyFloor` aggregated by `components.Aero.AeroManager`.

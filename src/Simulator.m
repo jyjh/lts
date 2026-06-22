@@ -280,19 +280,40 @@ classdef Simulator
             initialState.vehicleManager = vm;
             
             % Get track data
-            trackPts   = track.getTrackPoints();
-            curvature  = track.getCurvature();
-            mu         = track.getSurfaceFriction();
-            heading    = track.getHeading();
-            trackLen   = track.getTotalLength();
-            trackWidth = track.getTrackWidth();
-            nPts       = size(trackPts, 1);
+            trackPtsBase  = track.getTrackPoints();
+            curvatureBase = track.getCurvature();
+            muBase        = track.getSurfaceFriction();
+            headingBase   = track.getHeading();
+            baseTrackLen  = track.getTotalLength();
+            trackWidth    = track.getTrackWidth();
+
+            warmupLaps = obj.getTrackWarmupLaps(track);
+            recordedLaps = obj.getTrackRecordedLaps(track);
+            totalLaps = warmupLaps + recordedLaps;
+
+            if totalLaps > 1
+                if ~obj.isClosedLoopTrack(track, trackPtsBase)
+                    error('Simulator:WarmupRequiresClosedLoop', ...
+                        'Track warmup/recorded laps require a closed-loop track.');
+                end
+                [trackPts, curvature, mu, heading] = obj.repeatClosedTrack( ...
+                    trackPtsBase, curvatureBase, muBase, headingBase, totalLaps);
+            else
+                trackPts = trackPtsBase;
+                curvature = curvatureBase;
+                mu = muBase;
+                heading = headingBase;
+            end
+            nPts = size(trackPts, 1);
             
             % Compute arc-length parameterization
             dx = diff(trackPts(:,1));
             dy = diff(trackPts(:,2));
             segLen = sqrt(dx.^2 + dy.^2);
             arcLen = [0; cumsum(segLen)];
+            trackLen = arcLen(end);
+            recordStartS = warmupLaps * baseTrackLen;
+            recordEndS = min(trackLen, recordStartS + recordedLaps * baseTrackLen);
             trackData = struct( ...
                 'points', trackPts, ...
                 'arcLen', arcLen, ...
@@ -387,6 +408,10 @@ classdef Simulator
                 'suspensionForce_FR', zeros(maxSteps, 1), ...
                 'suspensionForce_RL', zeros(maxSteps, 1), ...
                 'suspensionForce_RR', zeros(maxSteps, 1), ...
+                'antiRollBarForce_FL', zeros(maxSteps, 1), ...
+                'antiRollBarForce_FR', zeros(maxSteps, 1), ...
+                'antiRollBarForce_RL', zeros(maxSteps, 1), ...
+                'antiRollBarForce_RR', zeros(maxSteps, 1), ...
                 'suspensionDemand_FL', zeros(maxSteps, 1), ...
                 'suspensionDemand_FR', zeros(maxSteps, 1), ...
                 'suspensionDemand_RL', zeros(maxSteps, 1), ...
@@ -464,6 +489,10 @@ classdef Simulator
             step = 0;
             fprintf('Starting simulation...\n');
             fprintf('Track length: %.1f m\n', trackLen);
+            if warmupLaps > 0
+                fprintf('Telemetry: dropping %d warmup lap(s), recording %d lap(s)\n', ...
+                    warmupLaps, recordedLaps);
+            end
             
             finishTolerance = 1e-6;
             while currentState.s < trackLen - finishTolerance && currentState.onTrack
@@ -571,6 +600,10 @@ classdef Simulator
                     stateLog.suspensionForce_FR(step) = susp.frontRight.state.suspensionForce;
                     stateLog.suspensionForce_RL(step) = susp.rearLeft.state.suspensionForce;
                     stateLog.suspensionForce_RR(step) = susp.rearRight.state.suspensionForce;
+                    stateLog.antiRollBarForce_FL(step) = susp.frontLeft.state.antiRollBarForce;
+                    stateLog.antiRollBarForce_FR(step) = susp.frontRight.state.antiRollBarForce;
+                    stateLog.antiRollBarForce_RL(step) = susp.rearLeft.state.antiRollBarForce;
+                    stateLog.antiRollBarForce_RR(step) = susp.rearRight.state.antiRollBarForce;
                     stateLog.suspensionDemand_FL(step) = susp.frontLeft.state.demandedLoad;
                     stateLog.suspensionDemand_FR(step) = susp.frontRight.state.demandedLoad;
                     stateLog.suspensionDemand_RL(step) = susp.rearLeft.state.demandedLoad;
@@ -656,19 +689,30 @@ classdef Simulator
                 end
             end
             
+            simulationSteps = step;
+
             % Trim logs
             fields = fieldnames(stateLog);
             for i = 1:numel(fields)
                 stateLog.(fields{i}) = stateLog.(fields{i})(1:step);
             end
-            
-            lapTime = currentState.time;
+
+            [stateLog, lapTime, recordedSteps] = obj.applyTelemetryLapWindow( ...
+                stateLog, recordStartS, recordEndS);
+            if recordedSteps > 0
+                maxSpeedKmh = max(stateLog.speedKmh);
+                recordedLength = max(stateLog.s);
+            else
+                maxSpeedKmh = 0;
+                recordedLength = 0;
+            end
             
             fprintf('\n=== Simulation Complete ===\n');
             fprintf('Lap Time:   %.3f s\n', lapTime);
-            fprintf('Track Length: %.1f m\n', currentState.s);
-            fprintf('Max Speed:  %.1f km/h\n', max(stateLog.speedKmh));
-            fprintf('Steps:      %d\n', step);
+            fprintf('Track Length: %.1f m\n', recordedLength);
+            fprintf('Max Speed:  %.1f km/h\n', maxSpeedKmh);
+            fprintf('Steps:      %d simulated, %d recorded\n', ...
+                simulationSteps, recordedSteps);
         end
 
         function state = initializePlanarState(~, state, trackData)
@@ -692,6 +736,106 @@ classdef Simulator
             state.refCurvature = trackData.curvature(1);
             state.curvature = state.refCurvature;
             state.mu = trackData.mu(1);
+        end
+
+        function laps = getTrackWarmupLaps(~, track)
+            laps = 0;
+            if ismethod(track, 'getWarmupLaps')
+                laps = track.getWarmupLaps();
+            elseif isprop(track, 'warmupLaps')
+                laps = track.warmupLaps;
+            end
+            laps = max(0, round(laps));
+        end
+
+        function laps = getTrackRecordedLaps(~, track)
+            laps = 1;
+            if ismethod(track, 'getRecordedLaps')
+                laps = track.getRecordedLaps();
+            elseif isprop(track, 'recordedLaps')
+                laps = track.recordedLaps;
+            end
+            laps = max(1, round(laps));
+        end
+
+        function closed = isClosedLoopTrack(~, track, points)
+            closed = norm(points(1, :) - points(end, :)) <= 0.05;
+            if ismethod(track, 'isClosedLoop')
+                closed = track.isClosedLoop();
+            elseif isprop(track, 'closedLoop')
+                closed = track.closedLoop;
+            end
+            closed = logical(closed);
+        end
+
+        function [points, curvature, mu, heading] = repeatClosedTrack(~, ...
+                points, curvature, mu, heading, lapCount)
+            curvature = curvature(:);
+            mu = mu(:);
+            heading = heading(:);
+            if lapCount <= 1
+                return;
+            end
+
+            basePoints = points;
+            baseCurvature = curvature;
+            baseMu = mu;
+            baseHeading = heading;
+
+            repeatStartIdx = 1;
+            if norm(basePoints(1, :) - basePoints(end, :)) <= 0.05
+                repeatStartIdx = 2;
+            end
+
+            for lapIdx = 2:lapCount %#ok<NASGU>
+                points = [points; basePoints(repeatStartIdx:end, :)]; %#ok<AGROW>
+                curvature = [curvature; baseCurvature(repeatStartIdx:end)]; %#ok<AGROW>
+                mu = [mu; baseMu(repeatStartIdx:end)]; %#ok<AGROW>
+                heading = [heading; baseHeading(repeatStartIdx:end)]; %#ok<AGROW>
+            end
+        end
+
+        function [stateLog, lapTime, recordedSteps] = applyTelemetryLapWindow(~, ...
+                stateLog, recordStartS, recordEndS)
+            if isempty(stateLog.time)
+                lapTime = 0;
+                recordedSteps = 0;
+                return;
+            end
+
+            keep = stateLog.s >= recordStartS - 1e-9 & ...
+                stateLog.s <= recordEndS + 1e-9;
+            fields = fieldnames(stateLog);
+            for i = 1:numel(fields)
+                stateLog.(fields{i}) = stateLog.(fields{i})(keep);
+            end
+
+            recordedSteps = nnz(keep);
+            if recordedSteps == 0
+                warning('Simulator:NoRecordedTelemetry', ...
+                    ['No telemetry samples fell inside the recorded lap window ' ...
+                    '(%.1f m to %.1f m). Simulation ended before the timed lap ' ...
+                    'started or completed.'], recordStartS, recordEndS);
+                lapTime = 0;
+                return;
+            end
+
+            if recordStartS > 0
+                stateLog.time = stateLog.time - stateLog.time(1);
+                if isfield(stateLog, 'controlTime')
+                    stateLog.controlTime = stateLog.controlTime - stateLog.controlTime(1);
+                end
+
+                distanceFields = {'s', 'controlS', 'refS'};
+                for i = 1:numel(distanceFields)
+                    field = distanceFields{i};
+                    if isfield(stateLog, field)
+                        stateLog.(field) = max(0, stateLog.(field) - recordStartS);
+                    end
+                end
+            end
+
+            lapTime = stateLog.time(end);
         end
 
         function input = computeDriverInput(obj, state, observation)

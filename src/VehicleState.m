@@ -80,10 +80,15 @@ classdef VehicleState
     methods
         function obj = VehicleState(varargin)
             % VEHICLESTATE Construct with optional name-value pairs
+            specifiedYaw = false;
+            specifiedHeading = false;
             if nargin > 0
                 for i = 1:2:nargin
                     if isprop(obj, varargin{i})
                         obj.(varargin{i}) = varargin{i+1};
+                        propertyName = char(varargin{i});
+                        specifiedYaw = specifiedYaw || strcmp(propertyName, 'yaw');
+                        specifiedHeading = specifiedHeading || strcmp(propertyName, 'heading');
                     end
                 end
             end
@@ -93,10 +98,10 @@ classdef VehicleState
             elseif obj.speed <= 0
                 obj.speed = hypot(obj.vx, obj.vy);
             end
-            if isnan(obj.yaw)
-                obj.yaw = obj.heading;
-            else
+            if specifiedYaw
                 obj.heading = obj.yaw;
+            elseif specifiedHeading
+                obj.yaw = obj.heading;
             end
             obj.bodySlipAngle = obj.computeBodySlipAngle();
         end

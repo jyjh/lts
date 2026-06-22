@@ -9,6 +9,9 @@ classdef TestTrack < components.Track
         trackMu        = []  % Surface friction at each point
         trackLength    = 0   % Total length [m]
         trackWidth     = 3   % Fixed total track width [m]
+        closedLoop     = false % True when the track can be repeated lap-to-lap
+        warmupLaps     = 0   % Complete laps simulated before telemetry starts
+        recordedLaps   = 1   % Complete laps retained in returned telemetry
     end
     
     methods
@@ -66,6 +69,18 @@ classdef TestTrack < components.Track
         function width = getTrackWidth(obj)
             width = obj.trackWidth;
         end
+
+        function closed = isClosedLoop(obj)
+            closed = obj.closedLoop;
+        end
+
+        function laps = getWarmupLaps(obj)
+            laps = obj.warmupLaps;
+        end
+
+        function laps = getRecordedLaps(obj)
+            laps = obj.recordedLaps;
+        end
     end
     
     methods (Access = private)
@@ -122,6 +137,7 @@ classdef TestTrack < components.Track
                 x_top(2:end), y_top(2:end);
                 x_left(2:end), y_left(2:end)
             ];
+            obj.closedLoop = true;
             
             obj = finalizeTrack(obj, 1.2);
         end
@@ -129,7 +145,7 @@ classdef TestTrack < components.Track
         function obj = buildSkidpad(obj)
             % FSAE Skidpad: two pairs of concentric circles
             % We simulate one circle (8.125m radius per FSAE rules)
-            radius = 8.125;  % [m] FSAE skidpad radius
+            radius = 9.125;  % [m] FSAE skidpad radius
             ds = 0.5;        % spacing [m]
             
             nPts = round(2 * pi * radius / ds);
@@ -139,6 +155,9 @@ classdef TestTrack < components.Track
             y = radius * sin(theta);
             
             obj.trackPoints = [x, y];
+            obj.closedLoop = true;
+            obj.warmupLaps = 1;
+            obj.recordedLaps = 1;
             obj = finalizeTrack(obj, 1.2);
         end
         
@@ -173,6 +192,7 @@ classdef TestTrack < components.Track
             y_fine = spline(t_ctrl, controlPts(:,2), t_fine);
             
             obj.trackPoints = [x_fine(:), y_fine(:)];
+            obj.closedLoop = true;
             obj = finalizeTrack(obj, 1.2);
         end
         

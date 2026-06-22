@@ -58,7 +58,7 @@ Change the track type by editing `trackType` in `src/run_simulation.m`:
 - `straight10` - 10 m straight for fast export/debug validation
 - `straight` - 200 m straight for acceleration and top-speed validation
 - `oval` - oval with straights and constant-radius turns
-- `skidpad` - FSAE skidpad circle
+- `skidpad` - FSAE skidpad circle; one warmup lap is simulated before the recorded lap
 - `autocross` - mixed low-speed course
 - `busstop` - open chicane layout
 - `slalom` - short launch straight into alternating slalom offsets

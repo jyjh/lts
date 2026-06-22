@@ -22,6 +22,10 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         % Static front weight distribution (from VehicleManager)
         staticFrontWeight = 0.48  % [0-1]
 
+        % Anti-roll bar wheel rates by axle [N/m of wheel-travel difference]
+        frontAntiRollBarRate = 0
+        rearAntiRollBarRate = 0
+
         % Suspension and steering kinematic model
         geometry
     end
@@ -32,7 +36,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, geometry)
+                tireSpringRate, unsprungMass, geometry, ...
+                frontAntiRollBarRate, rearAntiRollBarRate)
             % SUSPENSIONMANAGER Construct with front/rear suspension parameters
             %   SuspensionManager(vehicleManager, ...
             %       frontRollStiffDist, ...
@@ -54,6 +59,9 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   bumpStopRate        - Bump stop stiffness [N/m] (shared)
             %   tireSpringRate      - Tire vertical stiffness [N/m] (shared)
             %   unsprungMass        - Per-corner unsprung mass [kg] (shared)
+            %   geometry            - SuspensionGeometry object (optional)
+            %   frontAntiRollBarRate - Front anti-roll bar wheel rate [N/m] (optional)
+            %   rearAntiRollBarRate  - Rear anti-roll bar wheel rate [N/m] (optional)
             
             if nargin < 14 || isempty(geometry)
                 geometry = components.Suspension.SuspensionGeometry.fromPreset( ...
@@ -65,6 +73,12 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % Pull static weight distribution from VehicleManager
             obj.staticFrontWeight = vehicleManager.staticFrontWeight;
             obj.geometry = geometry;
+            if nargin >= 15 && ~isempty(frontAntiRollBarRate)
+                obj.frontAntiRollBarRate = max(frontAntiRollBarRate, 0);
+            end
+            if nargin >= 16 && ~isempty(rearAntiRollBarRate)
+                obj.rearAntiRollBarRate = max(rearAntiRollBarRate, 0);
+            end
 
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
@@ -200,11 +214,20 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             demanded_RL = Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL;
             demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
             
+            frontAntiRoll = obj.computeAntiRollBarForces( ...
+                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarRate);
+            rearAntiRoll = obj.computeAntiRollBarForces( ...
+                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarRate);
+
             % --- Update each corner's transient state ---
-            obj.frontLeft.updateCorner( obj.frontLeft.state,  demanded_FL, dt);
-            obj.frontRight.updateCorner(obj.frontRight.state, demanded_FR, dt);
-            obj.rearLeft.updateCorner(  obj.rearLeft.state,   demanded_RL, dt);
-            obj.rearRight.updateCorner( obj.rearRight.state,  demanded_RR, dt);
+            obj.frontLeft.updateCorner( ...
+                obj.frontLeft.state, demanded_FL, dt, frontAntiRoll.left);
+            obj.frontRight.updateCorner( ...
+                obj.frontRight.state, demanded_FR, dt, frontAntiRoll.right);
+            obj.rearLeft.updateCorner( ...
+                obj.rearLeft.state, demanded_RL, dt, rearAntiRoll.left);
+            obj.rearRight.updateCorner( ...
+                obj.rearRight.state, demanded_RR, dt, rearAntiRoll.right);
             obj.updateGeometry(state.steer);
             
             % --- Return per-corner tire normal forces ---
@@ -276,14 +299,23 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             displacement = cornerMotion.displacement;
             velocity = cornerMotion.velocity;
 
+            frontAntiRoll = obj.computeAntiRollBarForces( ...
+                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarRate);
+            rearAntiRoll = obj.computeAntiRollBarForces( ...
+                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarRate);
+
             obj.frontLeft.updateCornerFromChassis( ...
-                obj.frontLeft.state, displacement.FL, velocity.FL, dt);
+                obj.frontLeft.state, displacement.FL, velocity.FL, dt, ...
+                frontAntiRoll.left);
             obj.frontRight.updateCornerFromChassis( ...
-                obj.frontRight.state, displacement.FR, velocity.FR, dt);
+                obj.frontRight.state, displacement.FR, velocity.FR, dt, ...
+                frontAntiRoll.right);
             obj.rearLeft.updateCornerFromChassis( ...
-                obj.rearLeft.state, displacement.RL, velocity.RL, dt);
+                obj.rearLeft.state, displacement.RL, velocity.RL, dt, ...
+                rearAntiRoll.left);
             obj.rearRight.updateCornerFromChassis( ...
-                obj.rearRight.state, displacement.RR, velocity.RR, dt);
+                obj.rearRight.state, displacement.RR, velocity.RR, dt, ...
+                rearAntiRoll.right);
             obj.updateGeometry(steerInput);
 
             loads.FL = obj.frontLeft.state.tireNormalForce;
@@ -336,6 +368,16 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, ...
                 obj.frontLeft.wheelbase);
         end
+
+        function setAntiRollBarRates(obj, frontRate, rearRate)
+            % SETANTIROLLBARRATES Configure front/rear anti-roll bar rates [N/m].
+            if nargin >= 2 && ~isempty(frontRate)
+                obj.frontAntiRollBarRate = max(frontRate, 0);
+            end
+            if nargin >= 3 && ~isempty(rearRate)
+                obj.rearAntiRollBarRate = max(rearRate, 0);
+            end
+        end
     end
 
     methods (Static, Access = private)
@@ -345,6 +387,39 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             kin.toeAngle = state.toeAngle;
             kin.steerAngle = state.steerAngle;
             kin.motionRatio = state.motionRatioEffective;
+        end
+    end
+
+    methods (Access = private)
+        function forces = computeAntiRollBarForces(obj, leftUnit, rightUnit, rate)
+            forces = struct('left', 0, 'right', 0);
+            rate = max(rate, 0);
+            if rate <= 0
+                return;
+            end
+
+            leftTravel = obj.computeAntiRollBarTravel(leftUnit);
+            rightTravel = obj.computeAntiRollBarTravel(rightUnit);
+            force = rate * (rightTravel - leftTravel);
+            if ~isfinite(force)
+                force = 0;
+            end
+
+            forces.left = -force;
+            forces.right = force;
+        end
+
+        function wheelTravel = computeAntiRollBarTravel(~, cornerUnit)
+            cornerState = cornerUnit.state;
+            motionRatio = cornerUnit.motionRatio;
+            if isprop(cornerState, 'motionRatioEffective') && ...
+                    cornerState.motionRatioEffective > 0
+                motionRatio = cornerState.motionRatioEffective;
+            end
+            wheelTravel = cornerState.damperPosition / max(motionRatio, eps);
+            if ~isfinite(wheelTravel)
+                wheelTravel = 0;
+            end
         end
     end
 end

@@ -93,6 +93,8 @@ classdef DriverModel < handle
             obj.resetPedalReductionMemory();
             obj.clearPendingPedalSwitch();
             obj.inputStateInitialized = true;
+            obj.trackArcLen = trackData.arcLen(:);
+            obj.trackCurvature = trackData.curvature(:);
             obj.inputPlanner = DriverInputPlanner(obj.vehicleManager, obj);
             obj.inputProfile = obj.inputPlanner.buildOpenLoopProfile( ...
                 initialState, trackData);
