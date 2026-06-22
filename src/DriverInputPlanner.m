@@ -9,6 +9,10 @@ classdef DriverInputPlanner
         vehicleManager
         driverModel
         maxSteeringAngle = 0.6
+        maxDriveAccel = 5.0
+        speedFeedbackDeadband = 0.20
+        speedFeedbackThrottleBand = 1.0
+        speedFeedbackBrakeBand = 1.0
     end
 
     methods
@@ -22,6 +26,17 @@ classdef DriverInputPlanner
                     obj.driverModel = driverModelOrMaxSteer;
                     if isprop(driverModelOrMaxSteer, 'maxSteeringAngle')
                         obj.maxSteeringAngle = driverModelOrMaxSteer.maxSteeringAngle;
+                    end
+                    if isprop(driverModelOrMaxSteer, 'throttleBand')
+                        obj.speedFeedbackDeadband = max( ...
+                            obj.speedFeedbackDeadband, ...
+                            driverModelOrMaxSteer.throttleBand);
+                    end
+                    if isprop(driverModelOrMaxSteer, 'brakeBlendSpeed')
+                        blendSpeed = driverModelOrMaxSteer.brakeBlendSpeed;
+                        if isfinite(blendSpeed) && blendSpeed > 0
+                            obj.speedFeedbackBrakeBand = blendSpeed;
+                        end
                     end
                 end
             else
@@ -64,7 +79,7 @@ classdef DriverInputPlanner
 
             speedPlan = vTarget;
             speedPlan(1) = min(max(initialState.speed, 0), vTarget(1));
-            maxDriveAccel = 5.0;
+            maxDriveAccel = obj.maxDriveAccel;
             for i = 1:n-1
                 ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
                 reachableSpeed = sqrt(speedPlan(i)^2 + 2 * maxDriveAccel * ds);
@@ -83,11 +98,12 @@ classdef DriverInputPlanner
             steerRef = max(-maxSteer, min(maxSteer, steerRef));
 
             brakeRef = zeros(n, 1);
-            throttleRef = ones(n, 1);
+            throttleRef = zeros(n, 1);
             for i = 1:n
                 if axRef(i) < 0
                     brakeRef(i) = min(1, -axRef(i) / max(maxBrakeAccel(i), eps));
-                    throttleRef(i) = 0;
+                elseif axRef(i) > 0
+                    throttleRef(i) = min(1, axRef(i) / max(maxDriveAccel, eps));
                 end
             end
 
@@ -136,20 +152,40 @@ classdef DriverInputPlanner
     end
 
     methods (Access = private)
-        function input = applySpeedFeedback(~, input, actualSpeed)
+        function input = applySpeedFeedback(obj, input, actualSpeed)
+            if ~isfield(input, 'targetSpeed') || ~isfinite(input.targetSpeed)
+                return;
+            end
+            if ~isfield(input, 'axRef') || ~isfinite(input.axRef)
+                input.axRef = 0;
+            end
+
             speedError = actualSpeed - input.targetSpeed;
+            deadband = max(0, obj.speedFeedbackDeadband);
             if actualSpeed < 0.5 && speedError <= 0
                 input.brake = 0;
                 input.throttle = 1;
-            elseif speedError < -0.25
+            elseif speedError < -deadband
                 input.brake = 0;
-                input.throttle = 1;
-            elseif speedError > 0.5
+                throttleCorrection = (-speedError - deadband) / ...
+                    max(obj.speedFeedbackThrottleBand, eps);
+                input.throttle = max(input.throttle, min(1, throttleCorrection));
+            elseif speedError > deadband
                 input.throttle = 0;
-                input.brake = max(input.brake, min(1, speedError / 2.0));
-            elseif speedError <= 0.25
-                input.brake = 0;
+                brakeCorrection = (speedError - deadband) / ...
+                    max(obj.speedFeedbackBrakeBand, eps);
+                input.brake = max(input.brake, min(1, brakeCorrection));
+            else
+                if input.axRef >= 0
+                    input.brake = 0;
+                end
+                if input.axRef <= 0
+                    input.throttle = 0;
+                end
             end
+
+            input.throttle = max(0, min(1, input.throttle));
+            input.brake = max(0, min(1, input.brake));
         end
 
         function limits = estimateGGVLimits(obj, speed, mu, templateState)

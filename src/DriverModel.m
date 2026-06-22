@@ -17,7 +17,7 @@ classdef DriverModel < handle
         lookaheadTime    = 2.0    % Minimum seconds ahead to inspect
         minLookaheadDist = 15     % Minimum lookahead distance [m]
         hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
-        corneringUsage   = 0.15   % Fraction of lateral grip used for speed targets
+        corneringUsage   = 0.50   % Fraction of lateral grip used for speed targets
         brakingUsage     = 0.75   % Fraction of braking capability used in planning
         minBrakeCommand  = 0.85   % Minimum brake command once braking is required
         brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
