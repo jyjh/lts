@@ -1,10 +1,8 @@
 classdef SimpleChassis < components.Chassis.ChassisComponent
     % SIMPLECHASSIS Lumped sprung-mass heave/pitch/roll chassis model
     %
-    % This is the first transient chassis implementation. It provides a
-    % stable body-attitude state and derived corner kinematics. The current
-    % simulator does not consume it yet; the next integration step can use
-    % these corner displacement/velocity outputs to drive suspension loads.
+    % Provides body-attitude state and derived corner kinematics consumed by
+    % SuspensionManager for chassis-driven tire normal loads.
 
     properties
         state  % components.Chassis.ChassisState
@@ -72,15 +70,20 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             % UPDATEFROMACCELERATIONS Integrate heave, pitch, and roll
             % ax > 0 creates nose-up pitch. ay > 0 creates right-side-down roll.
             if nargin < 4 || isempty(aeroForces)
-                aeroForces = struct('Fz_front', 0, 'Fz_rear', 0);
+                aeroForces = struct('Fz_front', 0, 'Fz_rear', 0, ...
+                    'F_drag', 0, 'dragHeight', 0);
             end
 
             FzFront = obj.getStructField(aeroForces, 'Fz_front', 0);
             FzRear = obj.getStructField(aeroForces, 'Fz_rear', 0);
+            Fdrag = obj.getStructField(aeroForces, 'F_drag', 0);
+            dragHeight = obj.getStructField(aeroForces, 'dragHeight', 0);
 
             frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
             rearArm = obj.wheelbase * obj.staticFrontWeight;
-            aeroPitchMoment = FzRear * rearArm - FzFront * frontArm;
+            downforcePitchMoment = FzRear * rearArm - FzFront * frontArm;
+            dragPitchMoment = Fdrag * dragHeight;
+            aeroPitchMoment = downforcePitchMoment + dragPitchMoment;
 
             heaveForce = FzFront + FzRear ...
                 - obj.heaveStiffness * obj.state.heave ...
@@ -110,6 +113,8 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 obj.totalMass * ax * obj.cgHeight / max(obj.wheelbase, eps);
             obj.state.lateralLoadTransfer = ...
                 obj.totalMass * ay * obj.cgHeight / max(obj.trackWidth, eps);
+            obj.state.downforcePitchMoment = downforcePitchMoment;
+            obj.state.dragPitchMoment = dragPitchMoment;
             obj.state.aeroPitchMoment = aeroPitchMoment;
 
             obj.state.updateCornerKinematics( ...

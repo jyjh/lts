@@ -34,7 +34,7 @@ classdef PacejkaTire < components.Tire.TireModel
         % (wheel + tire + brake disc rotating assembly)
         wheelInertia = 0.5
 
-        % Cache peak-mu scans by rounded load/camber.
+        % Cache peak-mu scans by rounded load/camber/speed.
         peakMuCache
     end
     
@@ -61,7 +61,7 @@ classdef PacejkaTire < components.Tire.TireModel
         
         %% ---- Per-corner evaluation ----
         
-        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
+        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu, longitudinalSpeed)
             % UPDATECORNER Evaluate MFeval for one corner and update its state
             %   updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
             %
@@ -75,6 +75,10 @@ classdef PacejkaTire < components.Tire.TireModel
             %   In this codebase, mu is treated as an absolute surface grip cap.
             %   Mutates cornerState in-place with computed forces and moments.
             
+            if nargin < 8 || isempty(longitudinalSpeed)
+                longitudinalSpeed = obj.tireConstants.refVelocity;
+            end
+
             % Store inputs
             cornerState.normalForce = normalLoad;
             slipAngle = max(-0.3, min(0.3, slipAngle));
@@ -94,31 +98,15 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
             
-            % Unpack for MFeval call
-            kappa = slipRatio;
-            alpha = slipAngle;
-            Fz    = normalLoad;
-            gamma = camberAngle;
-            V     = obj.tireConstants.refVelocity;
-            P     = obj.tireConstants.nomPressure;
-            params = obj.tireConstants.params;
-            
-            % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
-            inputsMF = [Fz, kappa, alpha, gamma, 0, V, P];
-            
-            % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
-            outputs = mfeval(params, inputsMF, 111);
-            
-            rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params);
-            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
+            [Fx, Fy, Mx, My, Mz, peakMu] = obj.evaluateForces( ...
+                normalLoad, slipAngle, slipRatio, camberAngle, mu, longitudinalSpeed);
 
-            % Store outputs capped by the current surface friction coefficient.
-            cornerState.Fy = -outputs(:,2) * surfaceScale;
-            cornerState.Fx = outputs(:,1) * surfaceScale;
-            cornerState.Mx = outputs(:,4) * surfaceScale;
-            cornerState.My = outputs(:,5) * surfaceScale;
-            cornerState.Mz = outputs(:,6) * surfaceScale;
-            cornerState.peakMu = rawPeakMu * surfaceScale;
+            cornerState.Fy = Fy;
+            cornerState.Fx = Fx;
+            cornerState.Mx = Mx;
+            cornerState.My = My;
+            cornerState.Mz = Mz;
+            cornerState.peakMu = peakMu;
         end
         
         %% ---- TireModel interface methods ----
@@ -300,7 +288,8 @@ classdef PacejkaTire < components.Tire.TireModel
             
             % Net torque: drive accelerates, brake and tire Fx decelerate
             % Fx > 0 means driving force → reaction torque opposes wheel spin
-            netTorque = driveTorque - sign(omega) * brakeTorque - Fx * R;
+            brakeSign = obj.computeBrakeTorqueSign(omega, omega * R, driveTorque);
+            netTorque = driveTorque - brakeSign * brakeTorque - Fx * R;
             
             % Angular acceleration
             alpha = netTorque / I;
@@ -315,13 +304,76 @@ classdef PacejkaTire < components.Tire.TireModel
             
             cornerState.angularVelocity = omega_new;
         end
+
+        function solveWheelContact(obj, cornerState, normalLoad, slipAngle, ...
+                camberAngle, mu, longitudinalSpeed, driveTorque, brakeTorque, dt)
+            % SOLVEWHEELCONTACT Semi-implicitly couple wheel speed and tire Fx.
+            %   I*domega/dt = T_drive - T_brake - Fx(kappa(omega))*R
+
+            if nargin < 10 || isempty(dt)
+                dt = 0.001;
+            end
+
+            omegaOld = max(cornerState.angularVelocity, 0);
+            omegaNew = omegaOld;
+            R = max(cornerState.wheelRadius, eps);
+            I = max(obj.wheelInertia, eps);
+            dt = max(dt, 0);
+            slipAngle = max(-0.3, min(0.3, slipAngle));
+
+            finalFx = 0;
+            finalFy = 0;
+            finalMx = 0;
+            finalMy = 0;
+            finalMz = 0;
+            finalPeakMu = 0;
+            finalKappa = cornerState.slipRatio;
+
+            for iter = 1:5 %#ok<NASGU>
+                finalKappa = obj.computeSlipRatioFromOmega( ...
+                    cornerState, omegaNew, longitudinalSpeed);
+                [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
+                    obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
+                    camberAngle, mu, longitudinalSpeed);
+
+                brakeSign = obj.computeBrakeTorqueSign( ...
+                    omegaNew, longitudinalSpeed, driveTorque);
+                netTorque = driveTorque - brakeSign * brakeTorque - finalFx * R;
+                omegaCandidate = max(0, omegaOld + (netTorque / I) * dt);
+
+                if abs(omegaCandidate - omegaNew) < 1e-4
+                    omegaNew = omegaCandidate;
+                    break;
+                end
+                omegaNew = omegaCandidate;
+            end
+
+            finalKappa = obj.computeSlipRatioFromOmega( ...
+                cornerState, omegaNew, longitudinalSpeed);
+            [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
+                obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
+                camberAngle, mu, longitudinalSpeed);
+
+            cornerState.normalForce = normalLoad;
+            cornerState.slipAngle = slipAngle;
+            cornerState.slipRatio = finalKappa;
+            cornerState.camberAngle = camberAngle;
+            cornerState.angularVelocity = omegaNew;
+            cornerState.Fx = finalFx;
+            cornerState.Fy = finalFy;
+            cornerState.Mx = finalMx;
+            cornerState.My = finalMy;
+            cornerState.Mz = finalMz;
+            cornerState.peakMu = finalPeakMu;
+        end
         
         %% ---- All-corners batch update ----
         
         function updateAllCorners(obj, Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
                 slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
                 kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu, ...
-                camber_FL, camber_FR, camber_RL, camber_RR)
+                camber_FL, camber_FR, camber_RL, camber_RR, ...
+                longSpeed_FL, longSpeed_FR, longSpeed_RL, longSpeed_RR)
             % UPDATEALLCORNERS Evaluate all four corners at once
             %   updateAllCorners(Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
             %       slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
@@ -336,12 +388,19 @@ classdef PacejkaTire < components.Tire.TireModel
                 camber_RL = 0;
                 camber_RR = 0;
             end
+            if nargin < 19
+                longSpeed_FL = obj.tireConstants.refVelocity;
+                longSpeed_FR = obj.tireConstants.refVelocity;
+                longSpeed_RL = obj.tireConstants.refVelocity;
+                longSpeed_RR = obj.tireConstants.refVelocity;
+            end
 
             Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
             alpha = max(-0.3, min(0.3, ...
                 [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR]));
             kappa = max(-1, min(1, [kappa_FL; kappa_FR; kappa_RL; kappa_RR]));
             gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
+            longSpeed = [longSpeed_FL; longSpeed_FR; longSpeed_RL; longSpeed_RR];
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
 
             for i = 1:4
@@ -354,18 +413,19 @@ classdef PacejkaTire < components.Tire.TireModel
             active = Fz > 0;
             if any(active)
                 P = obj.tireConstants.nomPressure;
-                V = obj.tireConstants.refVelocity;
                 params = obj.tireConstants.params;
                 nActive = nnz(active);
+                Vx = obj.computeMFevalSpeed(longSpeed(active));
                 inputsMF = [Fz(active), kappa(active), alpha(active), ...
                     gamma(active), zeros(nActive, 1), ...
-                    repmat(V, nActive, 1), repmat(P, nActive, 1)];
+                    Vx, repmat(P, nActive, 1)];
                 outputs = mfeval(params, inputsMF, 111);
 
                 activeIdx = find(active);
                 for j = 1:numel(activeIdx)
                     i = activeIdx(j);
-                    rawPeakMu = obj.getCachedPeakMu(Fz(i), gamma(i), P, params);
+                    rawPeakMu = obj.getCachedPeakMu( ...
+                        Fz(i), gamma(i), P, params, longSpeed(i));
                     surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
                     states{i}.Fx = outputs(j,1) * surfaceScale;
                     states{i}.Fy = -outputs(j,2) * surfaceScale;
@@ -480,25 +540,101 @@ classdef PacejkaTire < components.Tire.TireModel
             end
         end
 
-        function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params)
+        function kappa = computeSlipRatioFromOmega(~, cornerState, omega, longitudinalSpeed)
+            wheelSpeed = omega * cornerState.wheelRadius;
+            denom = max(abs(wheelSpeed), abs(longitudinalSpeed));
+            slipSpeedFloor = 1.0;
+            rawKappa = (wheelSpeed - longitudinalSpeed) / max(denom, slipSpeedFloor);
+            if denom < slipSpeedFloor
+                previousKappa = cornerState.slipRatio;
+                if ~isfinite(previousKappa)
+                    previousKappa = rawKappa;
+                end
+                blend = denom / slipSpeedFloor;
+                kappa = (1 - blend) * previousKappa + blend * rawKappa;
+            else
+                kappa = rawKappa;
+            end
+            kappa = max(-1, min(1, kappa));
+        end
+
+        function brakeSign = computeBrakeTorqueSign(~, omega, longitudinalSpeed, driveTorque)
+            if abs(omega) > 1e-6
+                brakeSign = sign(omega);
+            elseif abs(longitudinalSpeed) > 1e-6
+                brakeSign = sign(longitudinalSpeed);
+            elseif abs(driveTorque) > 1e-6
+                brakeSign = sign(driveTorque);
+            else
+                brakeSign = 0;
+            end
+        end
+
+        function [Fx, Fy, Mx, My, Mz, peakMu] = evaluateForces(obj, ...
+                Fz, alpha, kappa, gamma, surfaceMu, longitudinalSpeed)
+            if Fz <= 0
+                Fx = 0;
+                Fy = 0;
+                Mx = 0;
+                My = 0;
+                Mz = 0;
+                peakMu = 0;
+                return;
+            end
+
+            alpha = max(-0.3, min(0.3, alpha));
+            kappa = max(-1, min(1, kappa));
+            P = obj.tireConstants.nomPressure;
+            params = obj.tireConstants.params;
+            Vx = obj.computeMFevalSpeed(longitudinalSpeed);
+            inputsMF = [Fz, kappa, alpha, gamma, 0, Vx, P];
+            outputs = mfeval(params, inputsMF, 111);
+
+            rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longitudinalSpeed);
+            surfaceScale = obj.computeSurfaceScale(rawPeakMu, surfaceMu);
+            Fx = outputs(:,1) * surfaceScale;
+            Fy = -outputs(:,2) * surfaceScale;
+            Mx = outputs(:,4) * surfaceScale;
+            My = outputs(:,5) * surfaceScale;
+            Mz = outputs(:,6) * surfaceScale;
+            peakMu = rawPeakMu * surfaceScale;
+        end
+
+        function Vx = computeMFevalSpeed(obj, longitudinalSpeed)
+            lowSpeedLimit = 0.1;
+            if isfield(obj.tireConstants.params, 'VXLOW')
+                lowSpeedLimit = max(lowSpeedLimit, obj.tireConstants.params.VXLOW);
+            end
+            lowSpeedLimit = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
+            Vx = max(abs(longitudinalSpeed), lowSpeedLimit);
+        end
+
+        function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params, longitudinalSpeed)
+            if nargin < 6 || isempty(longitudinalSpeed)
+                longitudinalSpeed = obj.tireConstants.refVelocity;
+            end
+            Vx = obj.computeMFevalSpeed(longitudinalSpeed);
             FzKey = round(Fz / 10) * 10;
             gammaKey = round(gamma * 1000) / 1000;
-            key = sprintf('%.0f_%.3f_%.0f', FzKey, gammaKey, P);
+            VxKey = round(Vx * 10) / 10;
+            key = sprintf('%.0f_%.3f_%.0f_%.1f', FzKey, gammaKey, P, VxKey);
             if isKey(obj.peakMuCache, key)
                 peakMu = obj.peakMuCache(key);
                 return;
             end
 
-            peakMu = obj.computePeakMuInternal(Fz, gamma, P, params);
+            peakMu = obj.computePeakMuInternal(Fz, gamma, P, params, Vx);
             obj.peakMuCache(key) = peakMu;
         end
         
-        function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params)
+        function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params, Vx)
             % COMPUTEPEAKMUINTERNAL Scan lateral curve to find peak mu
             %   Vectorized: builds a matrix of 50 input rows, single mfeval call
             
             alphaScan = linspace(-0.21, 0.21, 50);  % ±12 deg in rad
-            V = obj.tireConstants.refVelocity;
+            if nargin < 6 || isempty(Vx)
+                Vx = obj.tireConstants.refVelocity;
+            end
             nScan = numel(alphaScan);
             
             % Build inputs matrix: each row = [Fz, kappa, alpha, gamma, phit, Vx, P]
@@ -507,7 +643,7 @@ classdef PacejkaTire < components.Tire.TireModel
                         alphaScan(:), ...             % alpha scan
                         repmat(gamma, nScan, 1), ...  % gamma
                         zeros(nScan, 1), ...          % phit = 0
-                        repmat(V, nScan, 1), ...      % Vx
+                        repmat(Vx, nScan, 1), ...     % Vx
                         repmat(P, nScan, 1)];         % P
             
             outputs = mfeval(params, inputsMF, 111);

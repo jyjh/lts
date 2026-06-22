@@ -14,7 +14,7 @@ classdef TestTrack < components.Track
     methods
         function obj = TestTrack(trackType)
             % TESTTRACK Create a test track
-            %   trackType: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop'
+            %   trackType: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn'
             %   Default is 'oval'
             
             if nargin < 1
@@ -34,6 +34,8 @@ classdef TestTrack < components.Track
                     obj = buildAutocross(obj);
                 case 'busstop'
                     obj = buildBusstop(obj);
+                case 'slalom'
+                    obj = buildSlalom(obj);
                 case '90turn'
                     obj = buildNinetyTurn(obj);
                 otherwise
@@ -237,6 +239,57 @@ classdef TestTrack < components.Track
                 x_exit(2:end),     y_exit(2:end)
             ];
             
+            obj = finalizeTrack(obj, 1.2);
+        end
+
+        function obj = buildSlalom(obj)
+            % SLALOM open test track with a launch straight and cone weave.
+            %
+            % Layout:
+            %   1. Entry straight - 35 m, heading East
+            %   2. Tapered slalom - 7 alternating offsets, 15 m spacing
+            %   3. Exit straight  - 15 m, heading East
+
+            ds = 0.5;             % point spacing [m]
+            entryLen = 35;        % short straight to build speed [m]
+            exitLen = 15;         % settle after final weave [m]
+            coneSpacing = 15;     % distance between alternating offsets [m]
+            numOffsets = 7;       % number of left/right slalom offsets
+            lateralOffset = 2.5;  % peak centerline offset [m]
+            rampLen = coneSpacing;
+
+            slalomLen = numOffsets * coneSpacing;
+            period = 2 * coneSpacing;
+
+            % Segment 1: entry straight.
+            nEntry = round(entryLen / ds) + 1;
+            x_entry = linspace(0, entryLen, nEntry)';
+            y_entry = zeros(nEntry, 1);
+
+            % Segment 2: smooth slalom. The envelope ramps the sine wave in
+            % and out so heading is continuous at the straight sections.
+            u = (0:ds:slalomLen)';
+            rampIn = min(max(u / rampLen, 0), 1);
+            rampOut = min(max((slalomLen - u) / rampLen, 0), 1);
+            smoothIn = rampIn.^2 .* (3 - 2 * rampIn);
+            smoothOut = rampOut.^2 .* (3 - 2 * rampOut);
+            envelope = smoothIn .* smoothOut;
+
+            x_slalom = entryLen + u;
+            y_slalom = lateralOffset * envelope .* sin(2 * pi * u / period);
+
+            % Segment 3: exit straight.
+            nExit = round(exitLen / ds) + 1;
+            x_exit = linspace(entryLen + slalomLen, ...
+                entryLen + slalomLen + exitLen, nExit)';
+            y_exit = zeros(nExit, 1);
+
+            obj.trackPoints = [
+                x_entry, y_entry;
+                x_slalom(2:end), y_slalom(2:end);
+                x_exit(2:end), y_exit(2:end)
+            ];
+
             obj = finalizeTrack(obj, 1.2);
         end
 

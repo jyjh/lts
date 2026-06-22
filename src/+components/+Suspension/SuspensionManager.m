@@ -270,6 +270,28 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             loads.RR = max(Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR, 0);
         end
 
+        function loads = computeCornerLoadsFromChassis(obj, chassis, steerInput, dt)
+            % COMPUTECORNERLOADSFROMCHASSIS Advance tire loads from chassis motion.
+            cornerMotion = chassis.computeCornerKinematics();
+            displacement = cornerMotion.displacement;
+            velocity = cornerMotion.velocity;
+
+            obj.frontLeft.updateCornerFromChassis( ...
+                obj.frontLeft.state, displacement.FL, velocity.FL, dt);
+            obj.frontRight.updateCornerFromChassis( ...
+                obj.frontRight.state, displacement.FR, velocity.FR, dt);
+            obj.rearLeft.updateCornerFromChassis( ...
+                obj.rearLeft.state, displacement.RL, velocity.RL, dt);
+            obj.rearRight.updateCornerFromChassis( ...
+                obj.rearRight.state, displacement.RR, velocity.RR, dt);
+            obj.updateGeometry(steerInput);
+
+            loads.FL = obj.frontLeft.state.tireNormalForce;
+            loads.FR = obj.frontRight.state.tireNormalForce;
+            loads.RL = obj.rearLeft.state.tireNormalForce;
+            loads.RR = obj.rearRight.state.tireNormalForce;
+        end
+
         function updateCornerGeometry(obj, cornerUnit, cornerName, steerInput)
             cornerState = cornerUnit.state;
             wheelTravel = cornerState.damperPosition / max(cornerUnit.motionRatio, eps);

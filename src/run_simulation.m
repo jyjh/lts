@@ -13,7 +13,7 @@ clear; clc; close all;
 
 %% ====================================================================
 %  SELECT TRACK TYPE
-%  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', '90turn'
+%  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn'
 %  ====================================================================
 trackType = 'autocross';
 
@@ -113,9 +113,14 @@ fprintf('\n');
 
 % Simulation timestep [s]
 dt = 0.001;
+unsprungMass = 25;  % Unsprung mass per corner [kg]
 
 % VehicleManager is created first so SuspensionManager can reference it
 vehicle = VehicleManager(aero, [], powertrain, tire, track);
+vehicle.chassis = components.Chassis.SimpleChassis( ...
+    vehicle, max(vehicle.totalMass - 4 * unsprungMass, eps));
+fprintf('Chassis: SimpleChassis (sprung mass %.0f kg)\n', ...
+    vehicle.chassis.sprungMass);
 
 % --- Suspension geometry ---
 % Options: 'neutral', 'baseline', 'high-camber-gain', 'pro-ackermann'
@@ -134,7 +139,7 @@ suspension = components.Suspension.SuspensionManager( ...
     0.025, ...                      % bumpStopLength [m]
     200000, ...                     % bumpStopRate [N/m]
     200000, ...                     % tireSpringRate [N/m]
-    25, ...                         % unsprungMass per corner [kg]
+    unsprungMass, ...               % unsprungMass per corner [kg]
     geometry ...                    % suspension/steering geometry preset
 );
 vehicle.suspension = suspension;

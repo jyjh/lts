@@ -128,6 +128,7 @@ classdef VehicleState
             
             % Compute pitch angle from current dynamics
             obj.pitchAngle = obj.computePitch();
+            obj.rideHeight = obj.computeRideHeight();
             
             % Yaw rate from speed and curvature (bicycle model)
             if obj.speed > 0.1
@@ -164,6 +165,7 @@ classdef VehicleState
             obj.mu = mu;
 
             obj.pitchAngle = obj.computePitch();
+            obj.rideHeight = obj.computeRideHeight();
             obj.time = obj.time + dt;
         end
         
@@ -176,12 +178,32 @@ classdef VehicleState
             % front/rear sprung-body positions from static equilibrium:
             %   pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, wheelbase)
             
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.suspension)
+            if isempty(obj.vehicleManager)
+                pitchAngle = 0;
+                return;
+            end
+
+            if ~isempty(obj.vehicleManager.chassis)
+                pitchAngle = obj.vehicleManager.chassis.getPitchAngle();
+                return;
+            end
+
+            if isempty(obj.vehicleManager.suspension)
                 pitchAngle = 0;
                 return;
             end
             
             pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
+        end
+
+        function rideHeight = computeRideHeight(obj)
+            % COMPUTERIDEHEIGHT Chassis heave converted to aero ride height.
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis)
+                rideHeight = obj.rideHeight;
+                return;
+            end
+
+            rideHeight = -obj.vehicleManager.chassis.getHeave();
         end
 
         function bodySlipAngle = computeBodySlipAngle(obj)

@@ -41,15 +41,18 @@ Edit `trackType` in `src/run_simulation.m` to switch between:
 - `skidpad`
 - `autocross`
 - `busstop`
+- `slalom`
+- `90turn`
 
 ## Current Model
 
 - Multi-element aero system: `FrontWing`, `RearWing`, and `UnderbodyFloor` aggregated by `components.Aero.AeroManager`.
+- Transient chassis platform: `components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
 - Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
 - Table-based suspension and steering geometry: `components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, and Ackermann steering presets. Switch `geometryPreset` in `src/run_simulation.m` between `neutral`, `baseline`, `high-camber-gain`, and `pro-ackermann`.
 - EMRAX 228 powertrain: `components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
-- Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
-- Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, and busstop layouts.
+- Supported Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles. `SimpleTire` is deprecated and retained only for legacy scripts.
+- Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.
 - MoTeC telemetry export: `TelemetryExporter.exportToMoTeCLog` writes simulation logs as MotecLogGenerator-compatible CSVs and converts them to MoTeC `.ld` files through the MotecLogGenerator submodule.
 
 ## Documentation

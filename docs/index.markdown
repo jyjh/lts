@@ -15,6 +15,8 @@ VehicleManager
 |   |-- FrontWing
 |   |-- RearWing
 |   `-- UnderbodyFloor
+|-- components.Chassis.SimpleChassis
+|   `-- ChassisState
 |-- components.Suspension.SuspensionManager
 |   |-- SimpleSuspension + SuspensionState (FL)
 |   |-- SimpleSuspension + SuspensionState (FR)
@@ -36,10 +38,11 @@ See the [class diagram](class-diagram/) for a fuller relationship map.
 
 - `DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
 - `AeroManager` resolves positioned aero elements into front/rear downforce and total drag.
-- `SuspensionManager` combines static load, aero load, lateral load transfer, and longitudinal load transfer, then updates each corner's transient suspension state.
+- `SimpleChassis` tracks heave, pitch, and roll from accelerations plus aero pitch moments.
+- `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
 - `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
-- `PacejkaTire` computes per-corner tire forces from slip ratio, slip angle, normal load, and surface friction.
+- `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction. `SimpleTire` is deprecated.
 - `VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
 ## Usage
@@ -58,6 +61,8 @@ Change the track type by editing `trackType` in `src/run_simulation.m`:
 - `skidpad` - FSAE skidpad circle
 - `autocross` - mixed low-speed course
 - `busstop` - open chicane layout
+- `slalom` - short launch straight into alternating slalom offsets
+- `90turn` - open 90-degree turn with straights before and after
 
 Tune the EMRAX powertrain after construction if needed:
 
@@ -77,7 +82,7 @@ src/VehicleState.m                           Vehicle dynamic state
 src/+components/+Aero/                       Aero components and manager
 src/+components/+Suspension/                 Four-corner transient suspension
 src/+components/+Powertrain/                 Simple and EMRAX powertrains
-src/+components/+Tire/                       Simple and Pacejka tire models
+src/+components/+Tire/                       Pacejka tire model and deprecated SimpleTire
 src/+components/TestTrack.m                  Built-in test tracks
 src/GraphPlotter.m                           Simulation dashboards
 ```

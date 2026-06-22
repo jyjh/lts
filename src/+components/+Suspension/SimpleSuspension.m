@@ -175,6 +175,50 @@ classdef SimpleSuspension
             cornerState.tireNormalForce = F_tire;
             cornerState.suspensionForce = F_suspension;
         end
+
+        function updateCornerFromChassis(obj, cornerState, sprungPosition, ...
+                sprungVelocity, dt)
+            % UPDATECORNERFROMCHASSIS Update unsprung/tire load from chassis motion.
+            % Sprung motion is imposed by the chassis heave/pitch/roll model.
+
+            if cornerState.staticLoad <= 0 && cornerState.tireNormalForce <= 0
+                obj.initializeStaticLoad(cornerState, 0);
+            end
+
+            z_u_prev = cornerState.unsprungPosition;
+            v_u_prev = cornerState.unsprungVelocity;
+
+            MR_eff = obj.getEffectiveMotionRatio(cornerState);
+            K_eff = obj.springRate * MR_eff^2;
+
+            suspensionDeflection = sprungPosition - z_u_prev;
+            suspensionVelocity = sprungVelocity - v_u_prev;
+            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
+                cornerState, suspensionDeflection, suspensionVelocity, K_eff, MR_eff);
+            F_tire = obj.computeTireNormalForce(cornerState, z_u_prev);
+
+            z_u_ddot = (F_suspension - F_tire) / max(obj.unsprungMass, eps);
+            v_u_new = v_u_prev + z_u_ddot * dt;
+            z_u_new = z_u_prev + v_u_new * dt;
+
+            suspensionDeflection = sprungPosition - z_u_new;
+            suspensionVelocity = sprungVelocity - v_u_new;
+            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
+                cornerState, suspensionDeflection, suspensionVelocity, K_eff, MR_eff);
+            F_tire = obj.computeTireNormalForce(cornerState, z_u_new);
+
+            cornerState.sprungPosition = sprungPosition;
+            cornerState.sprungVelocity = sprungVelocity;
+            cornerState.unsprungPosition = z_u_new;
+            cornerState.unsprungVelocity = v_u_new;
+            cornerState.damperPosition = suspensionDeflection;
+            cornerState.damperVelocity = suspensionVelocity;
+            cornerState.tireDeflection = max( ...
+                cornerState.staticTireDeflection + z_u_new, 0);
+            cornerState.tireNormalForce = F_tire;
+            cornerState.suspensionForce = F_suspension;
+            cornerState.demandedLoad = F_suspension;
+        end
     end
 
     methods (Access = private)

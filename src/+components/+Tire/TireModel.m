@@ -7,8 +7,8 @@ classdef (Abstract) TireModel
     %   - getPeakFriction(normalLoad) → peakMu [-]
     %
     % Concrete implementations:
-    %   - SimpleTire  — linear tire with constant friction
-    %   - PacejkaTire — Pacejka Magic Formula via MFeval (.tir file)
+    %   - PacejkaTire — supported Pacejka Magic Formula model via MFeval
+    %   - SimpleTire  — deprecated legacy linear tire
     
     properties (Abstract)
         FL  % components.Tire.TireState front-left

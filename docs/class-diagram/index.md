@@ -39,7 +39,8 @@ The simulation separates vehicle configuration from simulation execution:
 | `components.Aero.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor`, `SimpleAero` |
 | `components.Suspension.SuspensionComponent` | `SuspensionManager` |
 | `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain`, `SimplePowertrain` |
-| `components.Tire.TireModel` | `PacejkaTire`, `SimpleTire` |
+| `components.Chassis.ChassisComponent` | `SimpleChassis` |
+| `components.Tire.TireModel` | `PacejkaTire`; `SimpleTire` is deprecated |
 | `components.Track` | `TestTrack` |
 
 ### Composition
@@ -49,6 +50,7 @@ The simulation separates vehicle configuration from simulation execution:
 | `Simulator` | `vehicleManager` | `VehicleManager` |
 | `Simulator` | `driverModel` | `DriverModel` |
 | `VehicleManager` | `aero` | `AeroManager` |
+| `VehicleManager` | `chassis` | `SimpleChassis` |
 | `VehicleManager` | `suspension` | `SuspensionManager` |
 | `VehicleManager` | `powertrain` | `PowertrainComponent` |
 | `VehicleManager` | `tire` | `TireModel` |
@@ -65,9 +67,9 @@ The simulation separates vehicle configuration from simulation execution:
 1. Read current `VehicleState` and track curvature/friction/heading.
 2. Ask `DriverModel` for throttle and brake.
 3. Compute aero downforce and drag through `AeroManager`.
-4. Compute static, aero, lateral, and longitudinal corner loads through `SuspensionManager`.
+4. Update chassis heave/pitch/roll and compute chassis-driven corner loads through `SuspensionManager`.
 5. Update `PowertrainState` from driven-wheel angular velocity and compute drive force from motor RPM.
-6. Update wheel rotational state and tire forces through `PacejkaTire`.
+6. Solve wheel/contact speed and tire forces through the supported `PacejkaTire` model.
 7. Resolve longitudinal and lateral acceleration limits.
 8. Integrate `VehicleState`.
 9. Append telemetry to `stateLog`.

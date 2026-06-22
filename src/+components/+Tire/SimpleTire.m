@@ -1,5 +1,6 @@
 classdef SimpleTire < components.Tire.TireModel
     % SIMPLETIRE Linear tire model with saturation
+    % Deprecated: use components.Tire.PacejkaTire for supported simulation.
     % Uses a linear region up to a peak slip, then saturates
     % Includes basic load sensitivity (friction decreases with load)
     
@@ -22,6 +23,9 @@ classdef SimpleTire < components.Tire.TireModel
         function obj = SimpleTire(corneringStiffness, longitudinalStiffness, peakMuLat, loadSensitivityExp)
             % SIMPLETIRE Construct with fixed parameters
             %   SimpleTire(corneringStiffness, longitudinalStiffness, peakMuLat, loadSensitivityExp)
+            warning('components:Tire:SimpleTireDeprecated', ...
+                ['components.Tire.SimpleTire is deprecated and retained only ', ...
+                'for legacy scripts. Use components.Tire.PacejkaTire for supported physics.']);
             if nargin >= 1
                 obj.corneringStiffness = corneringStiffness;
             end
