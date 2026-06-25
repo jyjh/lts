@@ -291,8 +291,9 @@ classdef Simulator
             recordedLaps = obj.getTrackRecordedLaps(track);
             totalLaps = warmupLaps + recordedLaps;
 
+            closedLoop = obj.isClosedLoopTrack(track, trackPtsBase);
             if totalLaps > 1
-                if ~obj.isClosedLoopTrack(track, trackPtsBase)
+                if ~closedLoop
                     error('Simulator:WarmupRequiresClosedLoop', ...
                         'Track warmup/recorded laps require a closed-loop track.');
                 end
@@ -323,6 +324,10 @@ classdef Simulator
                 'length', trackLen, ...
                 'trackWidth', trackWidth, ...
                 'trackHalfWidth', trackWidth / 2, ...
+                'closedLoop', closedLoop, ...
+                'baseTrackLength', baseTrackLen, ...
+                'totalLaps', totalLaps, ...
+                'lapBreakS', (0:totalLaps)' * baseTrackLen, ...
                 'nPts', nPts);
             initialState = obj.initializePlanarState(initialState, trackData);
             if ~isempty(obj.driverModel) && ...
@@ -795,7 +800,7 @@ classdef Simulator
             end
         end
 
-        function [stateLog, lapTime, recordedSteps] = applyTelemetryLapWindow(~, ...
+        function [stateLog, lapTime, recordedSteps] = applyTelemetryLapWindow(obj, ...
                 stateLog, recordStartS, recordEndS)
             if isempty(stateLog.time)
                 lapTime = 0;
@@ -803,6 +808,7 @@ classdef Simulator
                 return;
             end
 
+            trimDiagnostics = obj.computeTelemetryTrimDiagnostics(stateLog);
             keep = stateLog.s >= recordStartS - 1e-9 & ...
                 stateLog.s <= recordEndS + 1e-9;
             fields = fieldnames(stateLog);
@@ -815,7 +821,14 @@ classdef Simulator
                 warning('Simulator:NoRecordedTelemetry', ...
                     ['No telemetry samples fell inside the recorded lap window ' ...
                     '(%.1f m to %.1f m). Simulation ended before the timed lap ' ...
-                    'started or completed.'], recordStartS, recordEndS);
+                    'started or completed. Max simulated s was %.1f m, final ' ...
+                    'speed was %.1f km/h, final lateral error was %.3f m, ' ...
+                    'and minimum track margin was %.3f m.'], ...
+                    recordStartS, recordEndS, ...
+                    trimDiagnostics.maxS, ...
+                    trimDiagnostics.finalSpeedKmh, ...
+                    trimDiagnostics.finalLateralError, ...
+                    trimDiagnostics.minTrackMargin);
                 lapTime = 0;
                 return;
             end
@@ -836,6 +849,29 @@ classdef Simulator
             end
 
             lapTime = stateLog.time(end);
+        end
+
+        function diagnostics = computeTelemetryTrimDiagnostics(~, stateLog)
+            diagnostics.maxS = NaN;
+            diagnostics.finalSpeedKmh = NaN;
+            diagnostics.finalLateralError = NaN;
+            diagnostics.minTrackMargin = NaN;
+
+            if isfield(stateLog, 's') && ~isempty(stateLog.s)
+                diagnostics.maxS = max(stateLog.s);
+            end
+            if isfield(stateLog, 'speedKmh') && ~isempty(stateLog.speedKmh)
+                diagnostics.finalSpeedKmh = stateLog.speedKmh(end);
+            elseif isfield(stateLog, 'speed') && ~isempty(stateLog.speed)
+                diagnostics.finalSpeedKmh = stateLog.speed(end) * 3.6;
+            end
+            if isfield(stateLog, 'lateralError') && ~isempty(stateLog.lateralError)
+                diagnostics.finalLateralError = stateLog.lateralError(end);
+            end
+            if isfield(stateLog, 'trackLimitMargin') && ...
+                    ~isempty(stateLog.trackLimitMargin)
+                diagnostics.minTrackMargin = min(stateLog.trackLimitMargin);
+            end
         end
 
         function input = computeDriverInput(obj, state, observation)

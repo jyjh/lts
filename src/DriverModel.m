@@ -48,6 +48,9 @@ classdef DriverModel < handle
         launchSpeedThreshold = 0.5 % Below this, do not correction-brake under target speed [m/s]
         cornerOutsideBiasFraction = 0.35 % Fraction of half-width targeted outside in corners
         cornerOutsideBiasMax = 0.7 % Max outside target offset from centerline [m]
+        enableDriveSlipLimit = true % Reduce throttle when driven rear slip is excessive
+        driveSlipTarget = 0.12      % Rear slip ratio where throttle limiting starts
+        driveSlipCutoff = 0.35      % Rear slip ratio where throttle is fully cut
 
         % Cached track geometry
         trackArcLen      = []
@@ -73,6 +76,14 @@ classdef DriverModel < handle
         inputStateInitialized = false
     end
 
+    properties (Access = private)
+        trackClosedLoop = false
+        trackBaseLength = NaN
+        trackTotalLaps = 1
+        trackLapBreakS = []
+        steadyCircleTrack = false
+    end
+
     methods
         function obj = DriverModel(vehicleManager)
             % DRIVERMODEL Construct with a VehicleManager reference
@@ -95,6 +106,7 @@ classdef DriverModel < handle
             obj.inputStateInitialized = true;
             obj.trackArcLen = trackData.arcLen(:);
             obj.trackCurvature = trackData.curvature(:);
+            obj = obj.cacheTrackMetadataFromTrackData(trackData);
             obj.inputPlanner = DriverInputPlanner(obj.vehicleManager, obj);
             obj.inputProfile = obj.inputPlanner.buildOpenLoopProfile( ...
                 initialState, trackData);
@@ -119,6 +131,7 @@ classdef DriverModel < handle
                     'targetSpeed', NaN, ...
                     'axRef', NaN);
                 input = obj.applyInputSlew(input, state);
+                input = obj.applyDriveSlipLimit(input);
                 return;
             end
 
@@ -126,6 +139,7 @@ classdef DriverModel < handle
                 obj.inputProfile, observation.s, state.speed);
             input = obj.correctPlannedInput(input, state, observation);
             input = obj.applyInputSlew(input, state);
+            input = obj.applyDriveSlipLimit(input);
         end
 
         function [throttle, brake, steer] = computeInputs(obj, state)
@@ -263,6 +277,54 @@ classdef DriverModel < handle
     end
 
     methods (Access = private)
+        function input = applyDriveSlipLimit(obj, input)
+            if ~obj.enableDriveSlipLimit || ~isfield(input, 'throttle') || ...
+                    input.throttle <= 0
+                return;
+            end
+
+            maxRearSlip = obj.getMaxRearDriveSlip();
+            if ~isfinite(maxRearSlip)
+                return;
+            end
+
+            slipTarget = max(0, obj.driveSlipTarget);
+            slipCutoff = max(slipTarget + eps, obj.driveSlipCutoff);
+            if maxRearSlip <= slipTarget
+                return;
+            end
+
+            slipUse = (maxRearSlip - slipTarget) / max(slipCutoff - slipTarget, eps);
+            slipUse = max(0, min(1, slipUse));
+            input.throttle = input.throttle * (1 - slipUse);
+        end
+
+        function maxRearSlip = getMaxRearDriveSlip(obj)
+            maxRearSlip = NaN;
+            tire = obj.getVehicleManagerValue('tire', []);
+            if isempty(tire)
+                return;
+            end
+
+            slipRL = obj.getCornerSlipRatio(tire, 'RL');
+            slipRR = obj.getCornerSlipRatio(tire, 'RR');
+            rearSlip = [slipRL, slipRR];
+            rearSlip = rearSlip(isfinite(rearSlip));
+            if isempty(rearSlip)
+                return;
+            end
+            maxRearSlip = max(rearSlip);
+        end
+
+        function slipRatio = getCornerSlipRatio(obj, tire, cornerName)
+            slipRatio = NaN;
+            cornerState = obj.getFieldValue(tire, cornerName, []);
+            if isempty(cornerState)
+                return;
+            end
+            slipRatio = obj.getFieldValue(cornerState, 'slipRatio', NaN);
+        end
+
         function input = applyInputSlew(obj, input, state)
             if ~obj.inputStateInitialized
                 [obj.lastThrottle, obj.lastBrake] = ...
@@ -512,6 +574,9 @@ classdef DriverModel < handle
             if ~isfield(ref, 'curvature') || abs(ref.curvature) <= obj.curvatureTol
                 return;
             end
+            if obj.isSteadyCircleControl()
+                return;
+            end
             if ~isfield(ref, 'trackHalfWidth') || ~isfinite(ref.trackHalfWidth) || ...
                     ref.trackHalfWidth <= 0
                 return;
@@ -629,8 +694,31 @@ classdef DriverModel < handle
             angle = atan2(sin(angle), cos(angle));
         end
 
+        function value = getVehicleManagerValue(obj, fieldName, defaultValue)
+            value = obj.getFieldValue(obj.vehicleManager, fieldName, defaultValue);
+        end
+
+        function value = getFieldValue(~, source, fieldName, defaultValue)
+            value = defaultValue;
+            if isempty(source)
+                return;
+            end
+            if isstruct(source)
+                if isfield(source, fieldName)
+                    value = source.(fieldName);
+                end
+            elseif isobject(source)
+                if isprop(source, fieldName)
+                    value = source.(fieldName);
+                end
+            end
+        end
+
         function obj = cacheTrackGeometry(obj)
-            track = obj.vehicleManager.track;
+            track = obj.getVehicleManagerValue('track', []);
+            if isempty(track)
+                return;
+            end
             trackPts = track.getTrackPoints();
 
             dx = diff(trackPts(:,1));
@@ -638,6 +726,93 @@ classdef DriverModel < handle
             obj.trackArcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
             obj.trackCurvature = track.getCurvature();
             obj.trackCurvature = obj.trackCurvature(:);
+            obj = obj.cacheTrackMetadataFromTrack(track, obj.trackArcLen(end));
+        end
+
+        function obj = cacheTrackMetadataFromTrack(obj, track, baseTrackLength)
+            obj.trackClosedLoop = false;
+            obj.trackBaseLength = baseTrackLength;
+            obj.trackTotalLaps = 1;
+            obj.trackLapBreakS = [0; baseTrackLength];
+
+            if isempty(track) || ~isfinite(baseTrackLength) || baseTrackLength <= 0
+                obj.steadyCircleTrack = false;
+                return;
+            end
+
+            if ismethod(track, 'isClosedLoop')
+                obj.trackClosedLoop = logical(track.isClosedLoop());
+            elseif isprop(track, 'closedLoop')
+                obj.trackClosedLoop = logical(track.closedLoop);
+            end
+
+            warmupLaps = 0;
+            recordedLaps = 1;
+            if ismethod(track, 'getWarmupLaps')
+                warmupLaps = track.getWarmupLaps();
+            elseif isprop(track, 'warmupLaps')
+                warmupLaps = track.warmupLaps;
+            end
+            if ismethod(track, 'getRecordedLaps')
+                recordedLaps = track.getRecordedLaps();
+            elseif isprop(track, 'recordedLaps')
+                recordedLaps = track.recordedLaps;
+            end
+
+            obj.trackTotalLaps = max(1, round(max(0, warmupLaps) + ...
+                max(1, recordedLaps)));
+            if ~obj.trackClosedLoop
+                obj.trackTotalLaps = 1;
+            end
+            obj.trackLapBreakS = (0:obj.trackTotalLaps)' * obj.trackBaseLength;
+            obj.steadyCircleTrack = obj.computeSteadyCircleTrack( ...
+                obj.trackCurvature, obj.trackClosedLoop);
+        end
+
+        function obj = cacheTrackMetadataFromTrackData(obj, trackData)
+            obj.trackClosedLoop = false;
+            obj.trackBaseLength = NaN;
+            obj.trackTotalLaps = 1;
+            obj.trackLapBreakS = [];
+
+            if isfield(trackData, 'closedLoop')
+                obj.trackClosedLoop = logical(trackData.closedLoop);
+            end
+            if isfield(trackData, 'baseTrackLength')
+                obj.trackBaseLength = trackData.baseTrackLength;
+            elseif isfield(trackData, 'length')
+                obj.trackBaseLength = trackData.length;
+            end
+            if isfield(trackData, 'totalLaps')
+                obj.trackTotalLaps = max(1, round(trackData.totalLaps));
+            end
+            if isfield(trackData, 'lapBreakS') && ~isempty(trackData.lapBreakS)
+                obj.trackLapBreakS = trackData.lapBreakS(:);
+            elseif isfinite(obj.trackBaseLength) && obj.trackBaseLength > 0
+                obj.trackLapBreakS = (0:obj.trackTotalLaps)' * obj.trackBaseLength;
+            end
+
+            obj.steadyCircleTrack = obj.computeSteadyCircleTrack( ...
+                obj.trackCurvature, obj.trackClosedLoop);
+        end
+
+        function steady = computeSteadyCircleTrack(obj, curvature, closedLoop)
+            steady = false;
+            if ~closedLoop || isempty(curvature)
+                return;
+            end
+
+            curvature = curvature(:);
+            active = abs(curvature) > obj.curvatureTol;
+            if ~all(active)
+                return;
+            end
+            turnSign = sign(curvature(find(active, 1, 'first')));
+            steady = turnSign ~= 0 && all(sign(curvature(active)) == turnSign);
+        end
+
+        function tf = isSteadyCircleControl(obj)
+            tf = obj.trackClosedLoop && obj.steadyCircleTrack;
         end
 
         function [arcLen, curvature] = getTrackGeometry(obj)
@@ -739,6 +914,11 @@ classdef DriverModel < handle
             if idx > nPts || all(absKappa <= obj.curvatureTol)
                 return;
             end
+            if obj.isSteadyCircleControl()
+                idx = max(1, min(idx, nPts));
+                inActiveCorner = absKappa(idx) > obj.curvatureTol;
+                return;
+            end
 
             [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
             if ~found
@@ -770,11 +950,15 @@ classdef DriverModel < handle
             phase = (s - segmentStartS) / segmentLength;
             phase = max(0, min(1, phase));
 
-            apexPhaseClamped = obj.getClampedApexPhase();
-            if phase <= apexPhaseClamped
-                steeringUsageFrac = sin((pi / 2) * phase / apexPhaseClamped);
+            if obj.isSteadyCircleControl()
+                steeringUsageFrac = 1;
             else
-                steeringUsageFrac = sin((pi / 2) * (1 - phase) / (1 - apexPhaseClamped));
+                apexPhaseClamped = obj.getClampedApexPhase();
+                if phase <= apexPhaseClamped
+                    steeringUsageFrac = sin((pi / 2) * phase / apexPhaseClamped);
+                else
+                    steeringUsageFrac = sin((pi / 2) * (1 - phase) / (1 - apexPhaseClamped));
+                end
             end
             peakKappa = max(abs(curvature(segmentStart:segmentEnd)));
             peakSteer = atan(obj.vehicleManager.wheelbase * peakKappa) * obj.steeringUsage;
@@ -791,7 +975,7 @@ classdef DriverModel < handle
         end
 
         function [segmentStart, segmentEnd, turnSign, found] = findCornerSegment(obj, idx)
-            [~, curvature] = obj.getTrackGeometry();
+            [arcLen, curvature] = obj.getTrackGeometry();
             absKappa = abs(curvature);
             nPts = numel(curvature);
             segmentStart = 1;
@@ -802,17 +986,20 @@ classdef DriverModel < handle
             if idx > nPts || all(absKappa <= obj.curvatureTol)
                 return;
             end
+            idx = max(1, min(idx, nPts));
+            [lapStartIdx, lapEndIdx] = obj.getLapIndexBounds(idx, arcLen);
 
             if absKappa(idx) > obj.curvatureTol
                 segmentStart = idx;
                 turnSign = sign(curvature(idx));
-                while segmentStart > 1 && ...
+                while segmentStart > lapStartIdx && ...
                         absKappa(segmentStart - 1) > obj.curvatureTol && ...
                         sign(curvature(segmentStart - 1)) == turnSign
                     segmentStart = segmentStart - 1;
                 end
             else
-                nextCornerOffset = find(absKappa(idx:end) > obj.curvatureTol, 1, 'first');
+                nextCornerOffset = find( ...
+                    absKappa(idx:lapEndIdx) > obj.curvatureTol, 1, 'first');
                 if isempty(nextCornerOffset)
                     return;
                 end
@@ -821,13 +1008,44 @@ classdef DriverModel < handle
             end
 
             segmentEnd = segmentStart;
-            while segmentEnd < nPts && ...
+            while segmentEnd < lapEndIdx && ...
                     absKappa(segmentEnd + 1) > obj.curvatureTol && ...
                     sign(curvature(segmentEnd + 1)) == turnSign
                 segmentEnd = segmentEnd + 1;
             end
 
             found = true;
+        end
+
+        function [lapStartIdx, lapEndIdx] = getLapIndexBounds(obj, idx, arcLen)
+            nPts = numel(arcLen);
+            lapStartIdx = 1;
+            lapEndIdx = nPts;
+            if ~obj.trackClosedLoop || isempty(obj.trackLapBreakS) || ...
+                    numel(obj.trackLapBreakS) < 2
+                return;
+            end
+
+            idx = max(1, min(idx, nPts));
+            s = arcLen(idx);
+            lapIdx = find(obj.trackLapBreakS <= s + 1e-9, 1, 'last');
+            if isempty(lapIdx)
+                lapIdx = 1;
+            end
+            lapIdx = min(max(lapIdx, 1), numel(obj.trackLapBreakS) - 1);
+
+            startS = obj.trackLapBreakS(lapIdx);
+            endS = obj.trackLapBreakS(lapIdx + 1);
+            lapStartIdx = find(arcLen >= startS - 1e-9, 1, 'first');
+            lapEndIdx = find(arcLen <= endS + 1e-9, 1, 'last');
+            if isempty(lapStartIdx)
+                lapStartIdx = 1;
+            end
+            if isempty(lapEndIdx)
+                lapEndIdx = nPts;
+            end
+            lapStartIdx = max(1, min(lapStartIdx, nPts));
+            lapEndIdx = max(lapStartIdx, min(lapEndIdx, nPts));
         end
 
         function apexS = computeApexS(obj, arcLen, segmentStart, segmentEnd)

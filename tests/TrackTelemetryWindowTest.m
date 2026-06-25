@@ -87,22 +87,27 @@ function testTelemetryWindowCanReturnEmptyTimedLap(testCase)
 simulator = Simulator([], [], 0.001);
 stateLog = createStateLog();
 
-warnState = warning('off', 'Simulator:NoRecordedTelemetry');
-cleanup = onCleanup(@() warning(warnState));
+lastwarn('');
 
 [stateLog, lapTime, recordedSteps] = simulator.applyTelemetryLapWindow( ...
     stateLog, 200, 250);
+[warnMsg, warnId] = lastwarn();
 
 verifyEqual(testCase, recordedSteps, 0);
 verifyEqual(testCase, lapTime, 0);
 verifyTrue(testCase, isempty(stateLog.time));
 verifyTrue(testCase, isempty(stateLog.s));
+verifyEqual(testCase, warnId, 'Simulator:NoRecordedTelemetry');
+verifyTrue(testCase, contains(warnMsg, 'Max simulated s'));
+verifyTrue(testCase, contains(warnMsg, 'minimum track margin'));
 end
 
 function stateLog = createStateLog()
 stateLog = struct( ...
     'time', (1:6)', ...
     's', [10; 40; 51; 60; 80; 102], ...
+    'lateralError', [0; 0.1; 0.2; 0.3; 0.4; 0.5], ...
+    'trackLimitMargin', [1.5; 1.4; 1.3; 1.2; 1.1; 1.0], ...
     'controlTime', (0:5)', ...
     'controlS', [9; 39; 50; 59; 79; 101], ...
     'refS', [10; 40; 51; 60; 80; 102], ...
