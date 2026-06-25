@@ -38,7 +38,7 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 frontWing = components.Aero.FrontWing( ...
     0.9, ...                   % xPosition: 0.9m forward of CG (ahead of front axle)
     0.08, ...                  % zPosition: 8cm above reference plane
-    0.45, ...                   % ClA: Downforce coefficient * area
+    1.6, ...                   % ClA: Downforce coefficient * area
     0.35, ...                  % CdA: Drag coefficient * area
     -5.0, ...                  % pitchSensitivityClA: Loses DF when nose pitches up
     0.3 ...                    % heightSensitivity: Sensitive to ride height
@@ -50,8 +50,8 @@ fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
 rearWing = components.Aero.RearWing( ...
     -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
     0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
-    0.55, ...                   % ClA: Highest DF element
-    0.8, ...                  % CdA: Highest drag element
+    2.1, ...                   % ClA: Highest DF element
+    1.15, ...                  % CdA: Highest drag element
     3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
     0.15 ...                   % heightSensitivity: Moderately sensitive
 );

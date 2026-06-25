@@ -11,7 +11,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         torqueCurveNm = []          % Motor torque breakpoints [Nm]
         tractiveForceCurveN = []    % Wheel tractive-force breakpoints [N]
         state                       % components.Powertrain.PowertrainState
-        totalGearRatio = 4.5        % Final drive ratio [-]
+        totalGearRatio = 3        % Final drive ratio [-]
         wheelRadius = 0.228        % Effective tire radius [m]
         drivetrainEfficiency = 1.0  % Additional drivetrain efficiency [0-1]
         maxVehicleSpeed = 0         % Highest speed in the MAT tractive map [m/s]

@@ -146,7 +146,7 @@ classdef SuspensionGeometry
                 case {'neutral', 'default'}
                     % Preserve current simulator behavior.
                 case {'baseline', 'fsae'}
-                    obj.ackermann = 0.55;
+                    obj.ackermann = 0.8872;
                     obj.frontCamberCurve = [0.5 0 -1.5] * pi / 180;
                     obj.rearCamberCurve = [0.25 0 -0.8] * pi / 180;
                     obj.frontToeCurve = [-0.05 0 0.05] * pi / 180;

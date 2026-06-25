@@ -15,13 +15,13 @@ classdef VehicleManager
         track       % components.Track
         
         % Vehicle parameters
-        totalMass     = 280      % Total mass with driver [kg]
-        wheelbase     = 1.55     % Wheelbase [m]
-        trackWidth    = 1.2      % Track width [m]
-        cgHeight      = 0.28     % CG height [m]
+        totalMass     = 256      % Total mass with driver [kg]
+        wheelbase     = 1.558     % Wheelbase [m]
+        trackWidth    = 1.21      % Track width [m]
+        cgHeight      = 0.3     % CG height [m]
         yawInertia    = 130      % Yaw inertia about CG [kg*m^2]
         airDensity    = 1.225    % Air density [kg/m^3]
-        staticFrontWeight = 0.45 % Static front weight distribution [0-1]
+        staticFrontWeight = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
         brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
         
