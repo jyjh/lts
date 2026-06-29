@@ -45,7 +45,10 @@ classdef VehicleState
         
         % Pitch angle [rad] (positive = nose up, e.g. acceleration squat)
         pitchAngle  = 0
-        
+
+        % Roll angle [rad] (positive = right side down, e.g. in a left turn)
+        rollAngle   = 0
+
         % Ride height deviation from nominal [m] (positive = higher, e.g. over a crest)
         rideHeight  = 0
         
@@ -128,6 +131,8 @@ classdef VehicleState
             
             % Compute pitch angle from current dynamics
             obj.pitchAngle = obj.computePitch();
+            obj.rollAngle = obj.computeRoll();
+            obj.rideHeight = obj.computeRideHeight();
             
             % Yaw rate from speed and curvature (bicycle model)
             if obj.speed > 0.1
@@ -164,24 +169,55 @@ classdef VehicleState
             obj.mu = mu;
 
             obj.pitchAngle = obj.computePitch();
+            obj.rollAngle = obj.computeRoll();
+            obj.rideHeight = obj.computeRideHeight();
             obj.time = obj.time + dt;
         end
         
         function pitchAngle = computePitch(obj)
-            % COMPUTEPITCH Compute pitch angle from suspension compression
-            %   positive = nose up (e.g. acceleration squat)
-            %   negative = nose down (e.g. braking dive)
-            %
-            % Delegates to SuspensionManager which uses the differential
-            % front/rear sprung-body positions from static equilibrium:
-            %   pitchAngle = atan2(avgRearSprungDown - avgFrontSprungDown, wheelbase)
-            
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.suspension)
+            % COMPUTEPITCH Pitch angle [rad], positive = nose up.
+            %   When a chassis attitude model is present it owns pitch (an
+            %   integrated rigid-body DOF driven by m*ax*cgH + aero pitch
+            %   moment). Otherwise pitch is inferred from the suspension
+            %   front/rear sprung-position difference.
+            if isempty(obj.vehicleManager)
                 pitchAngle = 0;
                 return;
             end
-            
-            pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
+            if ~isempty(obj.vehicleManager.chassis) && ...
+                    isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent')
+                pitchAngle = obj.vehicleManager.chassis.getPitchAngle();
+                return;
+            end
+            if ~isempty(obj.vehicleManager.suspension) && ...
+                    ismethod(obj.vehicleManager.suspension, 'computePitchAngle')
+                pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
+                return;
+            end
+            pitchAngle = 0;
+        end
+
+        function rollAngle = computeRoll(obj)
+            % COMPUTEROLL Roll angle [rad], positive = right side down.
+            % Sourced from the chassis attitude model when present.
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent')
+                rollAngle = 0;
+                return;
+            end
+            rollAngle = obj.vehicleManager.chassis.getRollAngle();
+        end
+
+        function rideHeight = computeRideHeight(obj)
+            % COMPUTERIDEHEIGHT Ride-height deviation [m], positive = higher.
+            % Downforce compresses the sprung mass downward, so heave
+            % (positive down) maps to a negative ride-height deviation.
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent')
+                rideHeight = 0;
+                return;
+            end
+            rideHeight = -obj.vehicleManager.chassis.getHeave();
         end
 
         function bodySlipAngle = computeBodySlipAngle(obj)
@@ -208,8 +244,11 @@ classdef VehicleState
             log.ax        = obj.ax;
             log.ay        = obj.ay;
             log.heading   = obj.heading;
-            log.yawRate   = obj.yawRate;
-            log.yawAccel  = obj.yawAccel;
+        log.yawRate   = obj.yawRate;
+        log.yawAccel  = obj.yawAccel;
+        log.pitchAngle = obj.pitchAngle;
+        log.rollAngle  = obj.rollAngle;
+        log.rideHeight = obj.rideHeight;
             log.throttle  = obj.throttle;
             log.brake     = obj.brake;
             log.steer     = obj.steer;

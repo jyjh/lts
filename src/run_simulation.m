@@ -90,7 +90,10 @@ fprintf('\n');
 %  ====================================================================
 
 % --- Powertrain ---
-powertrain = components.Powertrain.EMRAX228Powertrain();
+% drivetrainEfficiency accounts for gear/bearing losses in the final drive.
+% 0.92 is a typical FSAE single-reduction value; pass 1.0 to recover the
+% lossless baseline.
+powertrain = components.Powertrain.EMRAX228Powertrain('', 0.92);
 fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
     powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
     powertrain.rpmFalloffStartRPM, powertrain.rpmLimitRPM, ...
@@ -115,6 +118,7 @@ fprintf('\n');
 dt = 0.001;
 
 % VehicleManager is created first so SuspensionManager can reference it
+% Chassis and differential are attached after construction (6th/7th slots).
 vehicle = VehicleManager(aero, [], powertrain, tire, track);
 
 % --- Suspension geometry ---
@@ -142,6 +146,30 @@ fprintf('Suspension: SuspensionManager (4-corner transient + geometry)\n');
 
 % Warmup suspension to static equilibrium (prevents zero-state startup transient)
 suspension.warmup(vehicle.totalMass, dt);
+
+% --- Chassis attitude model (heave/pitch/roll DOFs) ---
+% Owns pitch (squat/dive), roll, and ride-height so aero ground-effect and
+% pitch sensitivity are driven by an integrated sprung-mass attitude rather
+% than inferred from suspension deflection. Leave unset ([]) to fall back to
+% suspension-inferred pitch and a zero ride-height/roll.
+chassis = components.Chassis.SimpleChassis(vehicle);
+chassis.reset();
+% Settle the chassis to static equilibrium (zero ax/ay) over a few steps so
+% the attitude starts at equilibrium instead of integrating a startup spike.
+for warm = 1:5
+    chassis.updateFromAccelerations(0, 0, struct('Fz_front', 0, 'Fz_rear', 0), dt);
+end
+vehicle.chassis = chassis;
+fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF)\n');
+
+% --- Differential (driven/rear axle) ---
+% Options:
+%   components.Powertrain.OpenDifferential()       - 50/50, mean carrier (default; matches legacy)
+%   components.Powertrain.LockedDifferential()     - spool, equal rear wheel speed
+%   components.Powertrain.ClutchLSDDifferential()  - torque-biasing limited-slip
+differential = components.Powertrain.OpenDifferential();
+vehicle.differential = differential;
+fprintf('Differential: %s\n', differential.getName());
 
 driver    = DriverModel(vehicle);
 simulator = Simulator(vehicle, driver, dt);
@@ -184,6 +212,7 @@ speedKmh = stateLog.speedKmh;
 axG = stateLog.ax / 9.81;
 ayG = stateLog.ay / 9.81;
 pitchDeg = stateLog.pitchAngle * (180/pi);
+rollDeg = stateLog.rollAngle * (180/pi);
 
 fprintf('\n=== Vehicle Summary ===\n');
 fprintf('Mass:       %.0f kg\n', vehicle.totalMass);
@@ -202,3 +231,4 @@ if isfield(stateLog, 'rpmLimitActive')
     fprintf('RPM Limiter Hits: %d\n', nnz(stateLog.rpmLimitActive));
 end
 fprintf('Peak Pitch:     %.3f deg\n', max(abs(pitchDeg)));
+fprintf('Peak Roll:      %.3f deg\n', max(abs(rollDeg)));

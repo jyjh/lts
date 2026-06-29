@@ -153,8 +153,11 @@ classdef SimpleTire < components.Tire.TireModel
                 suspensionKinematics.RR.camberAngle, mu);
         end
 
-        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
+        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu, ~, ~)
             % UPDATECORNER Evaluate the simple tire model for one corner
+            % Trailing dt/longSpeed args are accepted (and ignored) for
+            % interface parity with PacejkaTire; the simple model has no
+            % relaxation layer.
             cornerState.normalForce = normalLoad;
             cornerState.slipAngle = slipAngle;
             cornerState.slipRatio = slipRatio;

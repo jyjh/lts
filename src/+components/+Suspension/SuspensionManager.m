@@ -22,6 +22,12 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         % Static front weight distribution (from VehicleManager)
         staticFrontWeight = 0.48  % [0-1]
 
+        % Roll-center height per axle [m], resolved from geometry at
+        % construction. Drives the geometric (instantaneous) component of
+        % lateral load transfer; 0 recovers the CG-height-only split.
+        frontRollCenterHeight = 0
+        rearRollCenterHeight = 0
+
         % Suspension and steering kinematic model
         geometry
     end
@@ -65,6 +71,14 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % Pull static weight distribution from VehicleManager
             obj.staticFrontWeight = vehicleManager.staticFrontWeight;
             obj.geometry = geometry;
+
+            % Resolve per-axle roll-center heights from the geometry model.
+            if isprop(geometry, 'frontRollCenterHeight')
+                obj.frontRollCenterHeight = geometry.frontRollCenterHeight;
+            end
+            if isprop(geometry, 'rearRollCenterHeight')
+                obj.rearRollCenterHeight = geometry.rearRollCenterHeight;
+            end
 
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
@@ -159,6 +173,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
             rollStiffDist = obj.frontLeft.rollStiffDist;
+            hrcF = obj.frontRollCenterHeight;
+            hrcR = obj.rearRollCenterHeight;
             
             % --- Static weight per corner ---
             Fz_static_front = W * frontWeightFrac;
@@ -175,11 +191,21 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             Fz_aero_RR = Fz_aero_rear  / 2;
             
             % --- Lateral load transfer ---
-            % positive ay = left turn → load transfers to right side
-            totalLatTransfer = totalMass * abs(ay) * cgH / tw;
-            frontLatTransfer = totalLatTransfer * rollStiffDist;
-            rearLatTransfer  = totalLatTransfer * (1 - rollStiffDist);
-            
+            % positive ay = left turn → load transfers to right side.
+            % The total transfer is split into a geometric (roll-center)
+            % component, which acts instantaneously through the linkage at
+            % each axle, and an elastic component, which is distributed by
+            % the roll-stiffness distribution. With hrcF = hrcR = 0 the
+            % geometric part vanishes and the split collapses to the legacy
+            % CG-height-only behavior.
+            latForce = totalMass * abs(ay);
+            totalLatTransfer = latForce * cgH / tw;
+            geoLatFront = latForce * hrcF / tw;
+            geoLatRear  = latForce * hrcR / tw;
+            elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
+            frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
+            rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
+
             sign_ay = sign(ay);
             Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
             Fz_lat_FR =  sign_ay * frontLatTransfer / 2;
@@ -235,6 +261,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
             rollStiffDist = obj.frontLeft.rollStiffDist;
+            hrcF = obj.frontRollCenterHeight;
+            hrcR = obj.rearRollCenterHeight;
 
             Fz_static_front = W * frontWeightFrac;
             Fz_static_rear  = W * (1 - frontWeightFrac);
@@ -248,9 +276,13 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             Fz_aero_RL = Fz_aero_rear  / 2;
             Fz_aero_RR = Fz_aero_rear  / 2;
 
-            totalLatTransfer = totalMass * abs(ay) * cgH / tw;
-            frontLatTransfer = totalLatTransfer * rollStiffDist;
-            rearLatTransfer  = totalLatTransfer * (1 - rollStiffDist);
+            latForce = totalMass * abs(ay);
+            totalLatTransfer = latForce * cgH / tw;
+            geoLatFront = latForce * hrcF / tw;
+            geoLatRear  = latForce * hrcR / tw;
+            elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
+            frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
+            rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
 
             sign_ay = sign(ay);
             Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
