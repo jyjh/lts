@@ -744,6 +744,9 @@ classdef DriverModel < handle
                 obj.trackClosedLoop = logical(track.isClosedLoop());
             elseif isprop(track, 'closedLoop')
                 obj.trackClosedLoop = logical(track.closedLoop);
+            elseif isprop(track, 'Closed')
+                % WaypointTrack exposes Closed rather than closedLoop/isClosedLoop
+                obj.trackClosedLoop = logical(track.Closed);
             end
 
             warmupLaps = 0;

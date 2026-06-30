@@ -205,20 +205,41 @@ classDiagram
         +getSurfaceFriction()*
         +getTotalLength()*
         +getHeading()*
-        +computeCurvature(points)$
-        +computeHeading(points)$
+        +getTrackWidth()*
+        +resampleTrack(points, ds, closed)$
+        +computeCurvature(points, closed)$
+        +computeHeading(points, closed)$
+        +cumulativeArcLength(points, closed)$
+        +pathLength(points, closed)$
+        +smoothTrack(points, span, closed)$
+        +cleanPoints(points, closed)$
     }
 
-    class TestTrack {
-        +trackPoints
-        +trackCurvature
-        +trackHeading
-        +trackMu
-        +trackLength
+    class WaypointTrack {
+        +Points
+        +Width
+        +Mu
+        +Closed
+        +Name
         +getTrackPoints()
         +getCurvature()
         +getSurfaceFriction()
         +getTotalLength()
+        +getHeading()
+        +getTrackWidth()
+        +toStruct()
+        +exportCsv(fileName)
+        +saveMat(fileName)
+        +loadMat(fileName)$
+        +fromCsv(fileName)$
+    }
+
+    class TestTrack {
+        +warmupLaps
+        +recordedLaps
+        +isClosedLoop()
+        +getWarmupLaps()
+        +getRecordedLaps()
     }
 
     class GraphPlotter {
@@ -238,7 +259,8 @@ classDiagram
     SuspensionComponent <|-- SuspensionManager
     PowertrainComponent <|-- EMRAX228Powertrain
     TireModel <|-- PacejkaTire
-    Track <|-- TestTrack
+    Track <|-- WaypointTrack
+    WaypointTrack <|-- TestTrack
 
     Simulator *-- VehicleManager : vehicleManager
     Simulator *-- DriverModel : driverModel

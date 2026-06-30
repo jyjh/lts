@@ -41,7 +41,7 @@ The simulation separates vehicle configuration from simulation execution:
 | `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain`, `SimplePowertrain` |
 | `components.Chassis.ChassisComponent` | `SimpleChassis` |
 | `components.Tire.TireModel` | `PacejkaTire`; `SimpleTire` is deprecated |
-| `components.Track` | `TestTrack` |
+| `components.Track` | `WaypointTrack`; `TestTrack` (extends `WaypointTrack`) |
 
 ### Composition
 

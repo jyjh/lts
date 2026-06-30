@@ -833,6 +833,9 @@ classdef Simulator
                 closed = track.isClosedLoop();
             elseif isprop(track, 'closedLoop')
                 closed = track.closedLoop;
+            elseif isprop(track, 'Closed')
+                % WaypointTrack exposes Closed rather than closedLoop/isClosedLoop
+                closed = track.Closed;
             end
             closed = logical(closed);
         end
@@ -851,8 +854,14 @@ classdef Simulator
             baseMu = mu;
             baseHeading = heading;
 
+            % A closed loop may be stored two ways: with an explicit closure
+            % point (points(1) ~= points(end), legacy convention) or without
+            % (points(1) ~= points(end), WaypointTrack/cleanPoints convention).
+            % hasClosurePoint selects the tiling so consecutive laps do not
+            % duplicate the junction point.
             repeatStartIdx = 1;
-            if norm(basePoints(1, :) - basePoints(end, :)) <= 0.05
+            hasClosurePoint = norm(basePoints(1, :) - basePoints(end, :)) <= 0.05;
+            if hasClosurePoint
                 repeatStartIdx = 2;
             end
 
@@ -861,6 +870,17 @@ classdef Simulator
                 curvature = [curvature; baseCurvature(repeatStartIdx:end)]; %#ok<AGROW>
                 mu = [mu; baseMu(repeatStartIdx:end)]; %#ok<AGROW>
                 heading = [heading; baseHeading(repeatStartIdx:end)]; %#ok<AGROW>
+            end
+
+            % Without an explicit closure point the final lap is missing its
+            % closing edge, so the tiled length would fall short of
+            % lapCount * getTotalLength() by one segment. Append the start
+            % point once to complete the circuit.
+            if lapCount > 1 && ~hasClosurePoint
+                points = [points; basePoints(1, :)]; %#ok<AGROW>
+                curvature = [curvature; baseCurvature(1)]; %#ok<AGROW>
+                mu = [mu; baseMu(1)]; %#ok<AGROW>
+                heading = [heading; baseHeading(1)]; %#ok<AGROW>
             end
         end
 
