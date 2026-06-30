@@ -87,9 +87,33 @@ function cfg = baseline()
     cfg.suspension.bumpStopRate   = 200000;   % Bump stop stiffness [N/m]
     cfg.suspension.tireSpringRate = 200000;   % Vertical tire stiffness [N/m]
 
-    % SuspensionGeometry preset name.
-    % Options: 'neutral', 'baseline', 'high-camber-gain', 'pro-ackermann'
-    cfg.suspension.geometryPreset = 'baseline';
+    % Suspension geometry: per-axle kinematic tables indexed by wheel travel
+    % [m] (bump/compression = positive travel) plus the steering model.
+    %   camberCurve/toeCurve in [rad] (camber positive = top-out,
+    %                                  toe positive = toe-left)
+    %   motionRatioCurve [-] referenced to the wheel
+    %   rollCenterHeight [m] above ground (drives the geometric load transfer)
+    % Vehicle-level wheelbase/track/weight are pulled from the VehicleManager
+    % at construction, so they are not duplicated here.
+    cfg.suspension.geometry.front = struct( ...
+        'travelGrid',       [-0.05 0 0.05], ...
+        'camberCurve',      [0.5 0 -1.5] * pi / 180, ...   % gains neg. camber in bump
+        'toeCurve',         [-0.05 0 0.05] * pi / 180, ... % toes out in bump
+        'motionRatioCurve', [0.93 0.95 0.97], ...
+        'rollCenterHeight', 0.030);                        % slightly above ground
+    cfg.suspension.geometry.rear = struct( ...
+        'travelGrid',       [-0.05 0 0.05], ...
+        'camberCurve',      [0.25 0 -0.8] * pi / 180, ...
+        'toeCurve',         [0.05 0 -0.05] * pi / 180, ... % toes in in bump
+        'motionRatioCurve', [0.94 0.95 0.96], ...
+        'rollCenterHeight', 0.045);                        % a bit higher = stable platform
+    % steerInput is treated as road-wheel angle by default.
+    %   ackermann: 0 = parallel steer, 1 = ideal Ackermann.
+    cfg.suspension.geometry.steering = struct( ...
+        'steeringRatio',      1.0, ...
+        'ackermann',          0.8872, ...
+        'maxWheelSteerAngle', 0.6, ...                      % [rad]
+        'rearSteerRatio',     0.0);
 
     % Anti-roll bars: described by end stiffness, motion ratio, and
     % drop-link lever arm; wheel-rate roll stiffness is added to the axle's

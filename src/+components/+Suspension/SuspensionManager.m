@@ -90,8 +90,10 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   rearAntiRollBarRate  - Rear anti-roll bar wheel rate [N/m] (optional)
             
             if nargin < 14 || isempty(geometry)
-                geometry = components.Suspension.SuspensionGeometry.fromPreset( ...
-                    'neutral', vehicleManager);
+                % Fallback when no geometry is supplied: a neutral kinematic
+                % model (zero camber/toe gain) whose only non-trivial table is
+                % the motion-ratio curve set from the passed motionRatio.
+                geometry = components.Suspension.SuspensionGeometry(vehicleManager);
                 geometry.frontMotionRatioCurve = motionRatio * [1 1 1];
                 geometry.rearMotionRatioCurve = motionRatio * [1 1 1];
             end

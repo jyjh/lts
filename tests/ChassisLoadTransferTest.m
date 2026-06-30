@@ -60,8 +60,8 @@ vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
 vehicle.cgHeight = config.cgHeight;
 vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = components.Suspension.SuspensionGeometry.fromPreset( ...
-    config.suspension.geometryPreset, vehicle);
+geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
 suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
@@ -94,8 +94,8 @@ sprungMass = vehicle.totalMass - 4 * unsprungMass;
 chassis = components.Chassis.SimpleChassis(vehicle, sprungMass);
 chassis = applyChassisTuning(chassis, config.chassis);
 vehicle.chassis = chassis;
-geometry = components.Suspension.SuspensionGeometry.fromPreset( ...
-    config.suspension.geometryPreset, vehicle);
+geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
 suspension = createSuspension(vehicle, config.suspension, unsprungMass, geometry);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);

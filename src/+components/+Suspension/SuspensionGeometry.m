@@ -154,45 +154,35 @@ classdef SuspensionGeometry
     end
 
     methods (Static)
-        function obj = fromPreset(name, vehicleManager)
-            if nargin < 2
-                vehicleManager = [];
-            end
+        function obj = fromConfig(geometryCfg, vehicleManager)
+            % FROMCONFIG Build a SuspensionGeometry from a config struct.
+            %   SuspensionGeometry.fromConfig(geometryCfg, vehicleManager)
+            %
+            %   geometryCfg    - suspension geometry config struct (see
+            %                    VehicleConfig.suspension.geometry) with
+            %                    nested .front, .rear, and .steering fields.
+            %   vehicleManager - VehicleManager (geometry pulled at construction)
             obj = components.Suspension.SuspensionGeometry(vehicleManager);
 
-            switch lower(name)
-                case {'neutral', 'default'}
-                    % Preserve current simulator behavior.
-                case {'baseline', 'fsae'}
-                    obj.ackermann = 0.8872;
-                    obj.frontCamberCurve = [0.5 0 -1.5] * pi / 180;
-                    obj.rearCamberCurve = [0.25 0 -0.8] * pi / 180;
-                    obj.frontToeCurve = [-0.05 0 0.05] * pi / 180;
-                    obj.rearToeCurve = [0.05 0 -0.05] * pi / 180;
-                    obj.frontMotionRatioCurve = [0.93 0.95 0.97];
-                    obj.rearMotionRatioCurve = [0.94 0.95 0.96];
-                    % Typical FSAE roll-center heights: front slightly above
-                    % ground, rear a bit higher for a stable platform.
-                    obj.frontRollCenterHeight = 0.030;
-                    obj.rearRollCenterHeight = 0.045;
-                case {'high-camber-gain', 'highcambergain'}
-                    obj.ackermann = 0.55;
-                    obj.frontCamberCurve = [1.0 0 -3.0] * pi / 180;
-                    obj.rearCamberCurve = [0.5 0 -1.5] * pi / 180;
-                    obj.frontToeCurve = [-0.05 0 0.10] * pi / 180;
-                    obj.rearToeCurve = [0.05 0 -0.05] * pi / 180;
-                    obj.frontMotionRatioCurve = [0.90 0.95 1.00];
-                    obj.rearMotionRatioCurve = [0.92 0.95 0.98];
-                    obj.frontRollCenterHeight = 0.030;
-                    obj.rearRollCenterHeight = 0.045;
-                case {'pro-ackermann', 'ackermann'}
-                    obj.ackermann = 1.0;
-                    obj.frontCamberCurve = [0.5 0 -1.5] * pi / 180;
-                    obj.rearCamberCurve = [0.25 0 -0.8] * pi / 180;
-                otherwise
-                    error('SuspensionGeometry:UnknownPreset', ...
-                        'Unknown suspension geometry preset "%s".', name);
-            end
+            f = geometryCfg.front;
+            obj.frontTravelGrid       = f.travelGrid;
+            obj.frontCamberCurve      = f.camberCurve;
+            obj.frontToeCurve         = f.toeCurve;
+            obj.frontMotionRatioCurve = f.motionRatioCurve;
+            obj.frontRollCenterHeight = f.rollCenterHeight;
+
+            r = geometryCfg.rear;
+            obj.rearTravelGrid       = r.travelGrid;
+            obj.rearCamberCurve      = r.camberCurve;
+            obj.rearToeCurve         = r.toeCurve;
+            obj.rearMotionRatioCurve = r.motionRatioCurve;
+            obj.rearRollCenterHeight = r.rollCenterHeight;
+
+            s = geometryCfg.steering;
+            obj.steeringRatio      = s.steeringRatio;
+            obj.ackermann          = s.ackermann;
+            obj.maxWheelSteerAngle = s.maxWheelSteerAngle;
+            obj.rearSteerRatio     = s.rearSteerRatio;
         end
 
         function value = interpolateCurve(grid, curve, query)
