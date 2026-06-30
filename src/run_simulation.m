@@ -28,7 +28,7 @@ config = vehicles.baseline();
 %  DISPLAY OPTIONS
 %  Set to true to show all graphs in a single window
 %  ====================================================================
-singleWindow = true;
+singleWindow = false;
 
 % Export MoTeC CSV and .ld files after the simulation completes.
 exportMoTeC = true;

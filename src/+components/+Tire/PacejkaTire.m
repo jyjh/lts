@@ -42,8 +42,28 @@ classdef PacejkaTire < components.Tire.TireModel
         % 0 disables the transient layer (pure steady-state Magic Formula).
         relaxationLength = 0.30
 
+        % Rolling-resistance coefficient [-]. Acts as a wheel-resistance
+        % torque T_rr = Crr * Fz * R opposing rotation, so a free-rolling
+        % wheel coast-down is driven by the contact patch (not just a body
+        % force). Typical racing slick Crr ~ 0.010-0.015. Set to 0.015 to
+        % match the legacy body-force model; the body force is removed to
+        % avoid double-counting.
+        rollingResistanceCoeff = 0.015
+
+        % Bearing drag coefficient [N·m·s/rad]. Viscous wheel-hub drag
+        % T_bearing = C_bearing * omega opposing spin. A small value lets a
+        % freely spinning wheel decay to the road speed instead of remaining
+        % locked to it indefinitely. 0 disables it (default); enable for
+        % extra coast-down drag.
+        bearingDragCoeff = 0
+
         % Cache peak-mu scans by rounded load/camber/speed.
         peakMuCache
+
+        % Resolved MFeval low-speed floor [m/s]. The .tir params struct is
+        % immutable, so whether it carries VXLOW (and its value) is a run
+        % invariant; cached to avoid an isfield check per corner per step.
+        cachedMFevalLowSpeed = NaN
     end
     
     methods
@@ -69,27 +89,27 @@ classdef PacejkaTire < components.Tire.TireModel
         
         %% ---- Per-corner evaluation ----
         
-        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu, dt, longSpeed)
+        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, dt, longSpeed)
             % UPDATECORNER Evaluate MFeval for one corner and update its state
-            %   updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
-            %   updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu, dt, longSpeed)
+            %   updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle)
+            %   updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, dt, longSpeed)
             %
             %   cornerState  — TireState handle for this corner
             %   normalLoad   — Tire normal force Fz [N]
             %   slipAngle    — Steady-state (kinematic) slip angle alpha [rad]
             %   slipRatio    — Steady-state (kinematic) slip ratio kappa [-1 to 1]
             %   camberAngle  — Inclination angle gamma [rad]
-            %   mu           — Surface friction multiplier (1.0 = nominal)
             %   dt           — Timestep [s] (optional; enables relaxation lag)
             %   longSpeed    — Contact-patch longitudinal speed [m/s] (optional)
             %
-            %   In this codebase, mu is treated as an absolute surface grip cap.
+            %   Grip is set entirely by the Pacejka tire data (peak mu with
+            %   load sensitivity); there is no surface-friction cap.
             %   Mutates cornerState in-place with computed forces and moments.
 
-            if nargin < 8 || isempty(dt)
+            if nargin < 7 || isempty(dt)
                 dt = 0;
             end
-            if nargin < 9 || isempty(longSpeed)
+            if nargin < 8 || isempty(longSpeed)
                 longSpeed = obj.tireConstants.refVelocity;
             end
             
@@ -143,8 +163,8 @@ classdef PacejkaTire < components.Tire.TireModel
             rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longSpeed);
 
             % Store the raw Magic-Formula forces. Peak grip is set by the tire
-            % data itself (LMUY/LMUX scaling applied at load), not by a surface
-            % cap; mu is accepted for interface compatibility but not used.
+            % data itself (LMUY/LMUX scaling applied at load); there is no
+            % separate surface-friction cap.
             cornerState.Fy = -outputs(:,2);
             cornerState.Fx = outputs(:,1);
             cornerState.Mx = outputs(:,4);
@@ -306,14 +326,17 @@ classdef PacejkaTire < components.Tire.TireModel
             %   updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
             %
             %   Rotational equation of motion:
-            %     I * d(omega)/dt = T_drive - T_brake - Fx * R
+            %     I * d(omega)/dt = T_drive - sign*T_brake - Fx*R - T_resist
             %
             %   where:
-            %     T_drive = applied drive torque at this wheel [Nm]
-            %     T_brake = applied brake torque at this wheel [Nm] (positive value)
-            %     Fx      = longitudinal tire force from previous evaluation [N]
-            %     R       = effective wheel radius [m]
-            %     I       = wheel rotational inertia [kg·m^2]
+            %     T_drive  = applied drive torque at this wheel [Nm]
+            %     T_brake  = applied brake torque at this wheel [Nm] (positive value)
+            %     Fx       = longitudinal tire force from previous evaluation [N]
+            %     R        = effective wheel radius [m]
+            %     I        = wheel rotational inertia [kg·m^2]
+            %     T_resist = rolling-resistance + bearing-drag torque opposing
+            %                spin, so a free-rolling wheel coast-down is driven
+            %                by the contact patch (T_rr = Crr*Fz*R + C_b*omega).
             %
             %   Uses explicit Euler integration.
             %
@@ -322,28 +345,40 @@ classdef PacejkaTire < components.Tire.TireModel
             %     driveTorque - Net drive torque at this wheel [Nm]
             %     brakeTorque - Brake torque at this wheel [Nm] (positive magnitude)
             %     dt          - Timestep [s]
-            
+
             omega = cornerState.angularVelocity;
             R     = cornerState.wheelRadius;
             I     = obj.wheelInertia;
             Fx    = cornerState.Fx;  % from previous tire evaluation
-            
+
             % Net torque: drive accelerates, brake and tire Fx decelerate
             % Fx > 0 means driving force → reaction torque opposes wheel spin
             brakeSign = obj.computeBrakeTorqueSign(omega, omega * R, driveTorque);
-            netTorque = driveTorque - brakeSign * brakeTorque - Fx * R;
-            
+
+            % Resistance torque opposing spin: rolling resistance (load-proportional)
+            % plus viscous bearing drag (speed-proportional). Kept separate from
+            % the brake torque so its magnitude does not depend on the brake path.
+            spinSign = sign(omega);
+            if spinSign == 0
+                spinSign = brakeSign;  % use the brake/roll direction when omega ~ 0
+            end
+            Fz = max(cornerState.normalForce, 0);
+            resistTorque = spinSign * (obj.rollingResistanceCoeff * Fz * R ...
+                + obj.bearingDragCoeff * abs(omega));
+
+            netTorque = driveTorque - brakeSign * brakeTorque - Fx * R - resistTorque;
+
             % Angular acceleration
             alpha = netTorque / I;
-            
+
             % Euler integration
             omega_new = omega + alpha * dt;
-            
+
             % Prevent wheel from spinning backwards (one-direction clutch)
             if omega_new < 0
                 omega_new = 0;
             end
-            
+
             cornerState.angularVelocity = omega_new;
         end
 
@@ -413,30 +448,33 @@ classdef PacejkaTire < components.Tire.TireModel
         
         function updateAllCorners(obj, Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
                 slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
-                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu, ...
+                kappa_FL, kappa_FR, kappa_RL, kappa_RR, ...
                 camber_FL, camber_FR, camber_RL, camber_RR, dt, longSpeeds)
             % UPDATEALLCORNERS Evaluate all four corners at once
             %   updateAllCorners(Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
             %       slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
-            %       kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu)
-            %   updateAllCorners(..., mu, camber_FL..camber_RR, dt, longSpeeds)
+            %       kappa_FL, kappa_FR, kappa_RL, kappa_RR)
+            %   updateAllCorners(..., camber_FL..camber_RR, dt, longSpeeds)
             %
             %   Updates all four corner states with per-corner slip ratios.
             %   Slip angles/ratios passed in are the steady-state (kinematic)
             %   values; a first-order contact-patch relaxation is applied
             %   before MFeval when dt and longSpeeds are supplied.
             %   Camber defaults to 0 for all corners.
+            %
+            %   Grip is set entirely by the Pacejka tire data (peak mu with
+            %   load sensitivity); there is no separate surface-friction cap.
 
-            if nargin < 15
+            if nargin < 14
                 camber_FL = 0;
                 camber_FR = 0;
                 camber_RL = 0;
                 camber_RR = 0;
             end
-            if nargin < 16 || isempty(dt)
+            if nargin < 15 || isempty(dt)
                 dt = 0;
             end
-            if nargin < 17 || isempty(longSpeeds)
+            if nargin < 16 || isempty(longSpeeds)
                 longSpeeds = repmat(obj.tireConstants.refVelocity, 4, 1);
             else
                 longSpeeds = longSpeeds(:);
@@ -509,9 +547,9 @@ classdef PacejkaTire < components.Tire.TireModel
             end
         end
         
-        function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
+        function updateAllFromState(obj, state, vehicleManager, cornerLoads)
             % UPDATEALLFROMSTATE Compute slip angles/ratios and update all corners
-            %   updateAllFromState(state, vehicleManager, cornerLoads, mu)
+            %   updateAllFromState(state, vehicleManager, cornerLoads)
             %
             %   Computes per-corner slip angles from vehicle kinematics and
             %   per-corner slip ratios from wheel rotational state, then
@@ -521,25 +559,23 @@ classdef PacejkaTire < components.Tire.TireModel
             %     state          - VehicleState with speed, vy, yawRate, steer
             %     vehicleManager - VehicleManager for geometry (wheelbase, weight dist)
             %     cornerLoads    - struct with .FL, .FR, .RL, .RR normal forces [N]
-            %     mu             - Surface friction multiplier
-            %                      Treated as an absolute surface grip cap here.
-            
+
             % Compute per-corner slip angles and suspension geometry
             slipAngles = obj.computeSlipAngles( ...
                 state.speed, state.vy, state.yawRate, state.steer, ...
                 vehicleManager);
             suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, state.steer);
-            
+
             % Compute per-corner slip ratios from wheel rotational state
             kappa_FL = obj.computeSlipRatio(obj.FL, state.speed);
             kappa_FR = obj.computeSlipRatio(obj.FR, state.speed);
             kappa_RL = obj.computeSlipRatio(obj.RL, state.speed);
             kappa_RR = obj.computeSlipRatio(obj.RR, state.speed);
-            
+
             obj.updateAllCorners( ...
                 cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
                 slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
-                kappa_FL, kappa_FR, kappa_RL, kappa_RR, mu, ...
+                kappa_FL, kappa_FR, kappa_RL, kappa_RR, ...
                 suspensionKinematics.FL.camberAngle, ...
                 suspensionKinematics.FR.camberAngle, ...
                 suspensionKinematics.RL.camberAngle, ...
@@ -680,12 +716,14 @@ classdef PacejkaTire < components.Tire.TireModel
         end
 
         function Vx = computeMFevalSpeed(obj, longitudinalSpeed)
-            lowSpeedLimit = 0.1;
-            if isfield(obj.tireConstants.params, 'VXLOW')
-                lowSpeedLimit = max(lowSpeedLimit, obj.tireConstants.params.VXLOW);
+            if isnan(obj.cachedMFevalLowSpeed)
+                lowSpeedLimit = 0.1;
+                if isfield(obj.tireConstants.params, 'VXLOW')
+                    lowSpeedLimit = max(lowSpeedLimit, obj.tireConstants.params.VXLOW);
+                end
+                obj.cachedMFevalLowSpeed = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
             end
-            lowSpeedLimit = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
-            Vx = max(abs(longitudinalSpeed), lowSpeedLimit);
+            Vx = max(abs(longitudinalSpeed), obj.cachedMFevalLowSpeed);
         end
 
         function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params, longitudinalSpeed)

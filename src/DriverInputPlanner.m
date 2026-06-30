@@ -48,7 +48,6 @@ classdef DriverInputPlanner
             vm = obj.vehicleManager;
             n = trackData.nPts;
             curvature = trackData.curvature(:);
-            mu = trackData.mu(:);
             vTarget = vm.maxSpeed * ones(n, 1);
 
             % Iterating lets speed-dependent aero influence the GGV envelope
@@ -56,7 +55,7 @@ classdef DriverInputPlanner
             for iter = 1:3 %#ok<NASGU>
                 for i = 1:n
                     if abs(curvature(i)) > 1e-6
-                        limits = obj.estimateGGVLimits(vTarget(i), mu(i), initialState);
+                        limits = obj.estimateGGVLimits(vTarget(i), initialState);
                         vTarget(i) = min(vm.maxSpeed, ...
                             sqrt(max(limits.maxLatAccel, 0.1) / abs(curvature(i))));
                     else
@@ -67,7 +66,7 @@ classdef DriverInputPlanner
 
             maxBrakeAccel = zeros(n, 1);
             for i = 1:n
-                limits = obj.estimateGGVLimits(vTarget(i), mu(i), initialState);
+                limits = obj.estimateGGVLimits(vTarget(i), initialState);
                 maxBrakeAccel(i) = limits.maxBrakeAccel;
             end
 
@@ -188,7 +187,7 @@ classdef DriverInputPlanner
             input.brake = max(0, min(1, input.brake));
         end
 
-        function limits = estimateGGVLimits(obj, speed, mu, templateState)
+        function limits = estimateGGVLimits(obj, speed, templateState)
             vm = obj.vehicleManager;
             tempState = templateState;
             tempState.vehicleManager = vm;
@@ -197,10 +196,11 @@ classdef DriverInputPlanner
             tempState.vy = 0;
 
             aeroForces = vm.aero.computeForces(tempState);
-            totalNormalLoad = vm.totalMass * 9.81 + aeroForces.Fz_front + aeroForces.Fz_rear;
+            totalNormalLoad = vm.totalMass * vm.g + aeroForces.Fz_front + aeroForces.Fz_rear;
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            effectiveMu = min(max(peakMu, 0), max(mu, 0));
-            tireAccel = effectiveMu * totalNormalLoad / vm.totalMass;
+            % Grip comes entirely from the tire model (no surface mu cap);
+            % the vehicles run on dry rubber with no friction variability.
+            tireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
 
             brakeForce = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
             rollingResistance = 0.015 * totalNormalLoad;

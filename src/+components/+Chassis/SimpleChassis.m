@@ -25,6 +25,12 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
         frontRollInertia
         rearRollInertia
 
+        % CG-to-axle moment arms [m], derived from wheelbase and static weight
+        % at construction. Run invariants; precomputed to avoid recomputing
+        % the pitch-moment bookkeeping every step.
+        frontArm
+        rearArm
+
         % Linear platform stiffness/damping from static equilibrium.
         % No defaults: set by VehicleManager.fromConfig from VehicleConfig.
         heaveStiffness    % [N/m]
@@ -46,6 +52,12 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
         % wheel-rate roll stiffness so the chassis roll model and the
         % load-transfer split share the same numbers. Optional.
         suspension
+    end
+
+    properties (Transient = true) %#ok<MCNPC>
+        % Lazily-cached run invariant: whether the linked suspension exposes
+        % getAxleRollStiffness. Empty = uncached.
+        cachedSuspensionHasRollStiffness
     end
 
     methods
@@ -77,6 +89,10 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             % Split the whole-car roll inertia by static weight distribution.
             obj.frontRollInertia = max(1, obj.rollInertia * obj.staticFrontWeight);
             obj.rearRollInertia  = max(1, obj.rollInertia * (1 - obj.staticFrontWeight));
+
+            % Precompute the CG-to-axle moment arms (run invariants).
+            obj.frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
+            obj.rearArm  = obj.wheelbase * obj.staticFrontWeight;
 
             obj.state = components.Chassis.ChassisState();
             obj.state.updateCornerKinematics( ...
@@ -110,8 +126,8 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             Fdrag = obj.getStructField(aeroForces, 'F_drag', 0);
             dragHeight = obj.getStructField(aeroForces, 'dragHeight', 0);
 
-            frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
-            rearArm = obj.wheelbase * obj.staticFrontWeight;
+            frontArm = obj.frontArm;
+            rearArm = obj.rearArm;
             downforcePitchMoment = FzRear * rearArm - FzFront * frontArm;
             dragPitchMoment = Fdrag * dragHeight;
             aeroPitchMoment = downforcePitchMoment + dragPitchMoment;
@@ -241,8 +257,11 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             % Returns 0,0 when no suspension is linked.
             KrollF = 0;
             KrollR = 0;
-            if ~isempty(obj.suspension) && ...
-                    ismethod(obj.suspension, 'getAxleRollStiffness')
+            if isempty(obj.cachedSuspensionHasRollStiffness)
+                obj.cachedSuspensionHasRollStiffness = ~isempty(obj.suspension) && ...
+                    ismethod(obj.suspension, 'getAxleRollStiffness');
+            end
+            if obj.cachedSuspensionHasRollStiffness
                 [KwF, KwR] = obj.suspension.getAxleRollStiffness();
                 KrollF = KwF * obj.trackWidth^2 / 2;
                 KrollR = KwR * obj.trackWidth^2 / 2;

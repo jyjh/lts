@@ -9,7 +9,7 @@ state = createState(0, 0, 0);
 loads = suspension.computeCornerLoads(state, 0, 0, vehicle.totalMass, 0.001);
 loadValues = loadVector(loads);
 
-verifyEqual(testCase, sum(loadValues), vehicle.totalMass * 9.81, 'AbsTol', 1e-9);
+verifyEqual(testCase, sum(loadValues), vehicle.totalMass * vehicle.g, 'AbsTol', 1e-9);
 verifyLessThan(testCase, abs(suspension.computePitchAngle()), 1e-12);
 verifyEqual(testCase, suspension.frontLeft.state.damperPosition, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, suspension.rearLeft.state.damperPosition, 0, 'AbsTol', 1e-12);

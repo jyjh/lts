@@ -838,18 +838,21 @@ classdef DriverModel < handle
             vm = obj.vehicleManager;
             aeroForces = vm.aero.computeForces(state);
             F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
-            W = vm.totalMass * 9.81;
+            W = vm.totalMass * vm.g;
             totalNormalLoad = W + F_downforce;
 
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            effectiveMu = min(max(peakMu, 0), max(state.mu, 0));
-            maxTireAccel = effectiveMu * totalNormalLoad / vm.totalMass;
+            % Grip is set entirely by the tire model (its Pacejka peak mu with
+            % load sensitivity). The vehicles run on dry FSAE rubber with no
+            % surface-friction variability, so there is no separate surface
+            % mu cap — the driver and the tire model now agree on grip.
+            maxTireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
             maxLateralAccel = max(0.1, maxTireAccel * obj.corneringUsage);
 
             frontNormalLoad = max(W * vm.staticFrontWeight + aeroForces.Fz_front, 0);
             rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
-            frontMu = min(max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0), max(state.mu, 0));
-            rearMu = min(max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0), max(state.mu, 0));
+            frontMu = max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0);
+            rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
             brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
             brakeBiasRear = 1 - brakeBiasFront;
             brakeGripLimit = inf;

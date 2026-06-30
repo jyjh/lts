@@ -5,6 +5,13 @@ classdef VehicleManager
     %
     % Simulation is handled by the Simulator class, driver decisions by DriverModel.
     
+    properties (Constant)
+        % Gravitational acceleration [m/s^2]. Defined once as the single
+        % source of truth for all physics (weight, load transfer, g-display);
+        % display scripts still tolerate the legacy 9.81 literal.
+        g = 9.80665
+    end
+
     properties
         % Swappable component objects
         aero        % components.Aero.AeroManager
@@ -122,6 +129,12 @@ classdef VehicleManager
             tire = components.Tire.PacejkaTire(config.tire.tirFile);
             tire.wheelInertia = config.tire.wheelInertia;
             tire.relaxationLength = config.tire.relaxationLength;
+            if isfield(config.tire, 'rollingResistanceCoeff')
+                tire.rollingResistanceCoeff = config.tire.rollingResistanceCoeff;
+            end
+            if isfield(config.tire, 'bearingDragCoeff')
+                tire.bearingDragCoeff = config.tire.bearingDragCoeff;
+            end
             % Effective rolling radius is per-corner state; propagate to all four.
             corners = {tire.FL, tire.FR, tire.RL, tire.RR};
             for k = 1:numel(corners)

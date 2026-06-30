@@ -23,6 +23,10 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         % construction (no default — a bare instance is invalid).
         staticFrontWeight  % [0-1]
 
+        % Gravitational acceleration [m/s^2], cached from VehicleManager so
+        % the load-transfer algebra reads a single named constant.
+        g = 9.80665
+
         % Roll-center height per axle [m], resolved from geometry at
         % construction. Drives the geometric (instantaneous) component of
         % lateral load transfer; 0 recovers the CG-height-only split.
@@ -54,6 +58,12 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
 
         % Suspension and steering kinematic model
         geometry
+    end
+
+    properties (Transient = true) %#ok<MCNPC>
+        % Lazily-cached run invariant: whether the linked chassis exposes
+        % computeCornerKinematics. Empty = uncached.
+        cachedChassisHasCornerKinematics
     end
     
     methods
@@ -98,8 +108,11 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 geometry.rearMotionRatioCurve = motionRatio * [1 1 1];
             end
 
-            % Pull static weight distribution from VehicleManager
+            % Pull static weight distribution and gravity from VehicleManager
             obj.staticFrontWeight = vehicleManager.staticFrontWeight;
+            if isprop(vehicleManager, 'g')
+                obj.g = vehicleManager.g;
+            end
             obj.geometry = geometry;
 
             % Resolve per-axle roll-center heights from the geometry model.
@@ -182,7 +195,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             end
             %#ok<NASGU>
 
-            W = totalMass * 9.81;
+            W = totalMass * obj.g;
             
             % Static weight per corner (no aero, no load transfer)
             Fz_static_front = W * obj.staticFrontWeight;
@@ -214,7 +227,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             %   Returns struct with per-corner tire normal forces:
             %     loads.FL, loads.FR, loads.RL, loads.RR  [N]
             
-            W = totalMass * 9.81;
+            W = totalMass * obj.g;
             ax = state.ax;
             ay = state.ay;
             
@@ -330,7 +343,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % ESTIMATECORNERLOADS Compute load-transfer demands without
             % advancing suspension state.
 
-            W = totalMass * 9.81;
+            W = totalMass * obj.g;
             ax = state.ax;
             ay = state.ay;
 
@@ -405,8 +418,13 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             end
 
             % Refresh per-corner sprung displacement/velocity from the chassis
-            % attitude (positive = compression-producing).
-            if ismethod(chassis, 'computeCornerKinematics')
+            % attitude (positive = compression-producing). The chassis
+            % capability is a run invariant; resolve it once.
+            if isempty(obj.cachedChassisHasCornerKinematics)
+                obj.cachedChassisHasCornerKinematics = ...
+                    ismethod(chassis, 'computeCornerKinematics');
+            end
+            if obj.cachedChassisHasCornerKinematics
                 chassis.computeCornerKinematics();
             end
             disp = chassis.state.cornerDisplacement;

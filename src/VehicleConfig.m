@@ -20,31 +20,33 @@ classdef VehicleConfig
     properties
         % ----------------------------------------------------------------
         % Vehicle-level constants
+        %   Mass is car + driver; all lengths in [m]. CG height is measured
+        %   from the ground. x is forward, y is left, z is up (SAE-ish).
         % ----------------------------------------------------------------
         totalMass     = 256      % Total mass with driver [kg]
         wheelbase     = 1.558    % Wheelbase [m]
         trackWidth    = 1.21     % Track width [m]
-        cgHeight      = 0.3      % CG height [m]
+        cgHeight      = 0.3      % CG height above ground [m]
         yawInertia    = 130      % Yaw inertia about CG [kg*m^2]
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight    = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront       = 0.60 % Brake force fraction to front axle [0-1]
-        brakeForceCoefficient = 0.70 % Brake capacity as fraction of normal load
-        maxSpeed      = 80       % Speed limiter [m/s] (~288 km/h)
+        brakeForceCoefficient = 0.70 % Brake force capacity as a fraction of total normal load (no ABS)
+        maxSpeed      = 80       % Soft speed limiter [m/s] (~288 km/h)
         unsprungMass  = 25       % Per-corner unsprung mass [kg]
 
         % ----------------------------------------------------------------
         % Sub-systems (nested structs, initialized in the constructor)
         % ----------------------------------------------------------------
-        frontWing     % Front wing aero map
+        frontWing     % Front wing aero map (downforce/drag + pitch & height sensitivity)
         rearWing      % Rear wing aero map
-        underbody     % Underbody floor / diffuser aero map
+        underbody     % Underbody floor / diffuser aero map (exponential ground effect)
 
-        suspension    % Springs, damping, ARBs, geometry preset
-        chassis       % Heave/pitch/roll platform stiffness & damping
+        suspension    % Springs, damping, ARBs, bump stops, kinematic geometry
+        chassis       % Sprung-mass heave/pitch/roll platform stiffness & damping
 
-        powertrain    % Motor map, efficiency, differential
-        tire          % Tire data file + wheel dynamics
+        powertrain    % Motor map, drivetrain efficiency, differential type
+        tire          % Pacejka .tir data + wheel dynamics (inertia, relaxation, drag)
     end
 
     methods
@@ -54,9 +56,14 @@ classdef VehicleConfig
             %   fields can be overridden later (cfg.frontWing.ClA = 2.0).
 
             % --- Aero: front wing ---
-            %   xPosition [m forward of CG], zPosition [m above ground],
-            %   ClA, CdA [m^2], pitchSensitivityClA [1/rad],
-            %   heightSensitivity [fractional ClA change per cm]
+            %   Aero elements are positioned at (xPosition, zPosition) where
+            %   xPosition > 0 is forward of CG, < 0 is behind. Each element
+            %   produces downforce F = 0.5*rho*ClA*V^2 and drag F = 0.5*rho*CdA*V^2.
+            %   pitchSensitivityClA [1/rad]: fractional ClA change per rad of
+            %     body pitch (nose-up positive); negative = loses DF nose-up.
+            %   Wings use a LINEAR ride-height model:
+            %     heightSensitivity = fractional ClA change per cm of height
+            %     deviation from nominal (FrontWing/RearWing only).
             obj.frontWing = struct( ...
                 'xPosition', 0.9, ...
                 'zPosition', 0.08, ...
@@ -75,7 +82,10 @@ classdef VehicleConfig
                 'heightSensitivity', 0.15);
 
             % --- Aero: underbody floor / diffuser ---
-            %   stallHeight [m], heightExponent [ground-effect curve]
+            %   The floor uses an EXPONENTIAL ground-effect model (unlike the
+            %   wings' linear one):
+            %     heightFactor = (zPosition/effectiveZ)^heightExponent
+            %     stallHeight [m]: below this the floor stalls (DF collapses).
             obj.underbody = struct( ...
                 'xPosition', 0.0, ...
                 'zPosition', 0.035, ...
@@ -86,10 +96,14 @@ classdef VehicleConfig
                 'heightExponent', 0.6);
 
             % --- Suspension ---
-            %   front/rear: springRate [N/m], dampingCoeff [N*s/m] (compression),
-            %               reboundCoeff [N*s/m]
-            %   motionRatio, bumpStopLength [m], bumpStopRate [N/m],
-            %   tireSpringRate [N/m]
+            %   front/rear (shared within an axle):
+            %     springRate   [N/m] heave spring (wheel rate = springRate*MR^2)
+            %     dampingCoeff [N*s/m] compression (bump) damping
+            %     reboundCoeff [N*s/m] rebound (droop) damping
+            %   motionRatio     [-] installation MR (wheel<->spring); wheel rate scales by MR^2
+            %   bumpStopLength  [m] free travel before the bump stop engages
+            %   bumpStopRate    [N/m] bump-stop stiffness
+            %   tireSpringRate  [N/m] vertical tire stiffness (quarter-car)
             %   geometry: suspension/steering kinematics (per-axle curves +
             %             steering model), see the geometry block below
             %   frontArb/rearArb: stiffness [N/m at bar end], motionRatio,
@@ -109,11 +123,17 @@ classdef VehicleConfig
                 'coupleChassisRollToLoadTransfer', false);
 
             % --- Suspension geometry (kinematics) ---
-            %   Per-axle tables indexed by wheel travel [m] (bump = positive):
-            %     travelGrid [m], camberCurve [rad] (positive = top-out),
-            %     toeCurve [rad] (positive = toe-left),
-            %     motionRatioCurve [-], rollCenterHeight [m].
-            %   Steering model: steerInput is treated as road-wheel angle.
+            %   Per-axle lookup tables indexed by wheel travel [m]
+            %   (bump/compression = positive travel, rebound = negative). Values
+            %   are linearly interpolated across travelGrid and extrapolated
+            %   beyond the endpoints (3 points is the minimum useful resolution).
+            %     travelGrid       [m] wheel-travel sample points (monotonic)
+            %     camberCurve      [rad] camber vs travel (positive = top-outward)
+            %     toeCurve         [rad] toe vs travel (positive = toe-left)
+            %     motionRatioCurve [-] MR vs travel (referenced to the wheel)
+            %     rollCenterHeight [m] above ground; drives the geometric
+            %                          (instantaneous) lateral load transfer.
+            %   Steering model: steerInput is treated as a road-wheel angle.
             %     ackermann: 0 = parallel steer, 1 = ideal Ackermann.
             %   (Vehicle-level wheelbase/track/weight are pulled from the
             %    VehicleManager at construction, not duplicated here.)
@@ -137,9 +157,15 @@ classdef VehicleConfig
                     'rearSteerRatio',     0.0));
 
             % --- Chassis (sprung-mass platform heave/pitch/roll) ---
-            %   Stiffness [N/m or N*m/rad], damping [N*s/m or N*m*s/rad].
-            %   Pitch/roll inertia are derived from mass + geometry in
-            %   SimpleChassis, so they are not part of the config.
+            %   The sprung mass is a lumped heave/pitch/2xroll body. Heave
+            %   uses translational units; pitch/roll/twist use rotational
+            %   units. Pitch/roll inertia are derived from mass + geometry in
+            %   SimpleChassis, so they are not configured here.
+            %     heave/pitch/roll Stiffness [N/m] / [N*m/rad]
+            %     heave/pitch/roll Damping   [N*s/m] / [N*m*s/rad]
+            %     torsionalRigidity [N*m/rad] couples front vs rear roll DOFs
+            %       (twist angle); Inf = perfectly rigid tub. ~4000 N*m/deg.
+            %     torsionalDamping [N*m*s/rad] damps the twist rate.
             obj.chassis = struct( ...
                 'heaveStiffness', 160000, ...
                 'heaveDamping', 12000, ...
@@ -151,24 +177,39 @@ classdef VehicleConfig
                 'torsionalDamping', 2000);
 
             % --- Powertrain ---
-            %   matFile: '' uses the default EMRAX 228 map in +Powertrain/
-            %   efficiency: drivetrain efficiency [0-1]
-            %   differential: struct with 'type' in {'open','locked','lsd'};
-            %     'lsd' may carry preload/ramp/speedGain/biasRatio
+            %   Single-speed EV (EMRAX 228). The motor map is tractive-force
+            %   vs RPM with a rev limiter; final drive is fixed in the map.
+            %     matFile: '' uses the default EMRAX 228 map in +Powertrain/
+            %     efficiency [0-1] drivetrain efficiency (gearbox + bearings)
+            %     differential.type: 'open' | 'locked' (spool) | 'lsd'
+            %       'lsd' may carry preload [N*m], ramp [-], speedGain [-],
+            %       biasRatio [-] (torque-bias cap).
+            %   Drivetrain is RWD (drive torque only on the rear axle).
             obj.powertrain = struct( ...
                 'matFile', '', ...
                 'efficiency', 0.92, ...
                 'differential', struct('type', 'open'));
 
             % --- Tire ---
-            %   tirFile: Pacejka .tir filename in +Tire/
-            %   wheelInertia [kg*m^2], relaxationLength [m],
-            %   wheelRadius [m] (effective rolling radius)
+            %   Pacejka Magic Formula (MF 6.1) via MFeval. Grip is set entirely
+            %   by the tire data (its peak mu with load sensitivity); there is
+            %   no separate surface-friction cap, so the driver and the tire
+            %   model agree on grip. tirFile lives in +Tire/.
+            %     tirFile:  Pacejka .tir filename in +Tire/
+            %     wheelInertia [kg*m^2] wheel+tire+brake rotating inertia/corner
+            %     relaxationLength [m] contact-patch slip lag (0 = steady-state)
+            %     wheelRadius [m] effective rolling radius
+            %     rollingResistanceCoeff [-] Crr; per-wheel resistance torque
+            %       T_rr = Crr*Fz*R (0 disables coast-down drag)
+            %     bearingDragCoeff [N*m*s/rad] viscous wheel-hub drag
+            %       T_b = coeff*omega (0 = off by default)
             obj.tire = struct( ...
                 'tirFile', '43105_18x7.5_10_R25B_7.tir', ...
                 'wheelInertia', 0.5, ...
                 'relaxationLength', 0.30, ...
-                'wheelRadius', 0.241935);
+                'wheelRadius', 0.241935, ...
+                'rollingResistanceCoeff', 0.015, ...
+                'bearingDragCoeff', 0);
         end
     end
 end
