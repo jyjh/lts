@@ -19,6 +19,17 @@ classdef ChassisState < handle
         rollRate = 0       % Body roll rate [rad/s]
         rollAccel = 0      % Body roll acceleration [rad/s^2]
 
+        % Front/rear split roll DOFs. With finite chassis torsional rigidity
+        % the two ends of the body can roll by different amounts under
+        % asymmetric load; the twist angle is frontRollAngle - rearRollAngle.
+        % rollAngle above is kept as the average for backward compatibility.
+        frontRollAngle = 0   % Front-end roll angle [rad]
+        frontRollRate  = 0   % Front-end roll rate [rad/s]
+        frontRollAccel = 0   % Front-end roll acceleration [rad/s^2]
+        rearRollAngle  = 0   % Rear-end roll angle [rad]
+        rearRollRate   = 0   % Rear-end roll rate [rad/s]
+        rearRollAccel  = 0   % Rear-end roll acceleration [rad/s^2]
+
         % Derived corner chassis displacement/velocity at suspension pickups
         cornerDisplacement = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0)
         cornerVelocity = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0)
@@ -44,6 +55,12 @@ classdef ChassisState < handle
             obj.rollAngle = 0;
             obj.rollRate = 0;
             obj.rollAccel = 0;
+            obj.frontRollAngle = 0;
+            obj.frontRollRate  = 0;
+            obj.frontRollAccel = 0;
+            obj.rearRollAngle  = 0;
+            obj.rearRollRate   = 0;
+            obj.rearRollAccel  = 0;
             obj.cornerDisplacement = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
             obj.cornerVelocity = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
             obj.longitudinalLoadTransfer = 0;

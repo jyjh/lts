@@ -23,7 +23,11 @@ classdef SimpleSuspension
         cgHeight           = 0.28   % Center of gravity height [m]
 
         % --- Suspension tuning ---
-        rollStiffDist      = 0.55   % Roll stiffness distribution for this end [0-1]
+        % DEPRECATED: the front/rear elastic load-transfer split is now
+        % derived from springs + anti-roll bars (see
+        % SuspensionManager.deriveFrontRollStiffnessFraction). Kept only to
+        % preserve the constructor signature; no longer read for the split.
+        rollStiffDist      = 0.55   % Legacy roll stiffness distribution [0-1]
 
         % --- Per-corner spring-damper ---
         springRate         = 25000  % Heave spring rate [N/m]

@@ -28,6 +28,29 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         frontRollCenterHeight = 0
         rearRollCenterHeight = 0
 
+        % Anti-roll bars per axle, resolved from geometry at construction.
+        % Their wheel-rate stiffness is added to each axle's wheel-spring
+        % rate to derive the elastic load-transfer split.
+        frontAntiRollBar = []
+        rearAntiRollBar  = []
+
+        % Optional override for the front elastic load-transfer fraction
+        % [0-1]. When set (non-NaN), it is used directly and the spring+ARB
+        % derivation is skipped — this reproduces the legacy fixed 0.55
+        % split for an exact A/B baseline. Leave NaN to derive from stiffness.
+        rollStiffnessOverride = NaN
+
+        % Opt-in coupling between the chassis roll DOFs and the elastic
+        % load-transfer split. When true (and a chassis is linked), the
+        % elastic transfer is redistributed by each axle's roll-angle
+        % contribution, so chassis torsional compliance changes the F/R
+        % balance under asymmetric load. Default false: the split is purely
+        % stiffness-derived and the chassis roll is telemetry/aero only.
+        coupleChassisRollToLoadTransfer = false
+
+        % Linked chassis attitude model for the optional coupling above.
+        chassis
+
         % Suspension and steering kinematic model
         geometry
     end
@@ -78,6 +101,14 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             end
             if isprop(geometry, 'rearRollCenterHeight')
                 obj.rearRollCenterHeight = geometry.rearRollCenterHeight;
+            end
+
+            % Resolve per-axle anti-roll bars from the geometry model.
+            if isprop(geometry, 'frontAntiRollBar') && ~isempty(geometry.frontAntiRollBar)
+                obj.frontAntiRollBar = geometry.frontAntiRollBar;
+            end
+            if isprop(geometry, 'rearAntiRollBar') && ~isempty(geometry.rearAntiRollBar)
+                obj.rearAntiRollBar = geometry.rearAntiRollBar;
             end
 
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
@@ -172,7 +203,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             wb = obj.frontLeft.wheelbase;
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
-            rollStiffDist = obj.frontLeft.rollStiffDist;
+            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
             hrcF = obj.frontRollCenterHeight;
             hrcR = obj.rearRollCenterHeight;
             
@@ -260,7 +291,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             wb = obj.frontLeft.wheelbase;
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
-            rollStiffDist = obj.frontLeft.rollStiffDist;
+            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
             hrcF = obj.frontRollCenterHeight;
             hrcR = obj.rearRollCenterHeight;
 
@@ -300,6 +331,71 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             loads.FR = max(Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR, 0);
             loads.RL = max(Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL, 0);
             loads.RR = max(Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR, 0);
+        end
+
+        function frac = deriveFrontRollStiffnessFraction(obj)
+            % DERIVEFRONTROLLSTIFFNESSFRACTION Front share [0-1] of the
+            % elastic lateral load transfer, derived from actual per-axle
+            % roll stiffness (wheel springs + anti-roll bars) rather than a
+            % fixed magic scalar.
+            %
+            %   KwF = frontSpringRate * frontMotionRatio^2 + frontAntiRollBar.Kw_bar
+            %   KwR = rearSpringRate  * rearMotionRatio^2  + rearAntiRollBar.Kw_bar
+            %   frac = KwF / (KwF + KwR)
+            %
+            % If rollStiffnessOverride is set (non-NaN) it is returned
+            % directly, reproducing the legacy fixed split for an exact A/B
+            % baseline.
+
+            if ~isnan(obj.rollStiffnessOverride)
+                frac = min(1, max(0, obj.rollStiffnessOverride));
+                return;
+            end
+
+            [KwF, KwR] = obj.getAxleRollStiffness();
+            totalKw = KwF + KwR;
+            if totalKw <= eps
+                frac = 0.5;
+            else
+                frac = KwF / totalKw;
+            end
+
+            % Optional chassis-roll coupling: with a torsionally compliant
+            % chassis the axle carrying more roll angle physically takes a
+            % larger share of the elastic transfer. Redistribute by each
+            % axle's stiffness*roll-angle product. Disabled by default.
+            if obj.coupleChassisRollToLoadTransfer && ~isempty(obj.chassis) && ...
+                    isa(obj.chassis, 'components.Chassis.ChassisComponent') && ...
+                    ismethod(obj.chassis, 'getFrontRollAngle')
+                phiF = obj.chassis.getFrontRollAngle();
+                phiR = obj.chassis.getRearRollAngle();
+                % Axle elastic force ~ K_roll * |phi|. Compare magnitudes.
+                fF = abs(KwF * phiF);
+                fR = abs(KwR * phiR);
+                tot = fF + fR;
+                if tot > eps
+                    frac = fF / tot;
+                end
+            end
+        end
+
+        function [KwF, KwR] = getAxleRollStiffness(obj)
+            % GETAXLEROLLSTIFFNESS Per-axle wheel-rate roll stiffness [N/m].
+            % Wheel springs + anti-roll bar, referenced to the wheel. Shared
+            % with the chassis roll model so the load-transfer split and the
+            % chassis roll stiffness use the same numbers.
+            KwSpringF = obj.frontLeft.springRate * obj.frontLeft.motionRatio^2;
+            KwSpringR = obj.rearLeft.springRate  * obj.rearLeft.motionRatio^2;
+            KwF = KwSpringF + obj.getAxleBarWheelRate(obj.frontAntiRollBar);
+            KwR = KwSpringR + obj.getAxleBarWheelRate(obj.rearAntiRollBar);
+        end
+
+        function kw = getAxleBarWheelRate(~, antiRollBar)
+            % GETAXLEBARWHEELRATE Wheel-rate roll stiffness of an axle's ARB.
+            kw = 0;
+            if ~isempty(antiRollBar) && isa(antiRollBar, 'components.Suspension.AntiRollBar')
+                kw = antiRollBar.getWheelRateStiffness();
+            end
         end
 
         function updateCornerGeometry(obj, cornerUnit, cornerName, steerInput)

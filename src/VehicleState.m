@@ -49,6 +49,13 @@ classdef VehicleState
         % Roll angle [rad] (positive = right side down, e.g. in a left turn)
         rollAngle   = 0
 
+        % Front/rear chassis roll angles [rad] and the chassis twist
+        % (front - rear). Equal when the tub is torsionally rigid; they
+        % differ under asymmetric load with finite torsional rigidity.
+        frontRollAngle = 0
+        rearRollAngle  = 0
+        twistAngle     = 0
+
         % Ride height deviation from nominal [m] (positive = higher, e.g. over a crest)
         rideHeight  = 0
         
@@ -132,8 +139,11 @@ classdef VehicleState
             % Compute pitch angle from current dynamics
             obj.pitchAngle = obj.computePitch();
             obj.rollAngle = obj.computeRoll();
+            obj.frontRollAngle = obj.computeFrontRoll();
+            obj.rearRollAngle  = obj.computeRearRoll();
+            obj.twistAngle     = obj.computeTwist();
             obj.rideHeight = obj.computeRideHeight();
-            
+
             % Yaw rate from speed and curvature (bicycle model)
             if obj.speed > 0.1
                 obj.yawRate = obj.speed * curvature;
@@ -170,6 +180,9 @@ classdef VehicleState
 
             obj.pitchAngle = obj.computePitch();
             obj.rollAngle = obj.computeRoll();
+            obj.frontRollAngle = obj.computeFrontRoll();
+            obj.rearRollAngle  = obj.computeRearRoll();
+            obj.twistAngle     = obj.computeTwist();
             obj.rideHeight = obj.computeRideHeight();
             obj.time = obj.time + dt;
         end
@@ -206,6 +219,39 @@ classdef VehicleState
                 return;
             end
             rollAngle = obj.vehicleManager.chassis.getRollAngle();
+        end
+
+        function rollAngle = computeFrontRoll(obj)
+            % COMPUTEFRONTROLL Front-end chassis roll angle [rad].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getFrontRollAngle')
+                rollAngle = obj.computeRoll();
+                return;
+            end
+            rollAngle = obj.vehicleManager.chassis.getFrontRollAngle();
+        end
+
+        function rollAngle = computeRearRoll(obj)
+            % COMPUTEREARROLL Rear-end chassis roll angle [rad].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getRearRollAngle')
+                rollAngle = obj.computeRoll();
+                return;
+            end
+            rollAngle = obj.vehicleManager.chassis.getRearRollAngle();
+        end
+
+        function twist = computeTwist(obj)
+            % COMPUTETWIST Chassis torsional twist [rad] = front - rear roll.
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getTwistAngle')
+                twist = 0;
+                return;
+            end
+            twist = obj.vehicleManager.chassis.getTwistAngle();
         end
 
         function rideHeight = computeRideHeight(obj)
@@ -248,6 +294,9 @@ classdef VehicleState
         log.yawAccel  = obj.yawAccel;
         log.pitchAngle = obj.pitchAngle;
         log.rollAngle  = obj.rollAngle;
+        log.frontRollAngle = obj.frontRollAngle;
+        log.rearRollAngle  = obj.rearRollAngle;
+        log.twistAngle     = obj.twistAngle;
         log.rideHeight = obj.rideHeight;
             log.throttle  = obj.throttle;
             log.brake     = obj.brake;

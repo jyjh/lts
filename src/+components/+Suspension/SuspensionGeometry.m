@@ -37,6 +37,11 @@ classdef SuspensionGeometry
         % legacy CG-height-only behavior.
         frontRollCenterHeight = 0
         rearRollCenterHeight = 0
+
+        % Anti-roll bars per axle. Empty/disabled => the axle's roll
+        % stiffness is its wheel springs only.
+        frontAntiRollBar = []
+        rearAntiRollBar  = []
     end
 
     methods

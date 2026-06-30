@@ -128,10 +128,36 @@ geometry = components.Suspension.SuspensionGeometry.fromPreset(geometryPreset, v
 fprintf('Suspension Geometry: %s (Ackermann %.0f%%)\n', ...
     geometryPreset, geometry.ackermann * 100);
 
+% --- Anti-roll bars ---
+% Each ARB is described by its end stiffness, motion ratio, and drop-link
+% lever arm; its wheel-rate roll stiffness is added to the axle's wheel
+% springs to derive the front/rear elastic load-transfer split. Disable
+% (enabled=false) to use wheel springs only. The split is derived from
+% these unless suspension.rollStiffnessOverride is set (legacy fixed split).
+%
+% Wheel-rate target: front ~25 kN/m, rear ~15 kN/m (stiffer front is the
+% common FSAE setup to suppress front roll and tune steady-state balance).
+frontArb = components.Suspension.AntiRollBar( ...
+    1800, ...     % stiffness [N/m] at the bar end
+    0.95, ...     % motionRatio (wheel <-> bar end)
+    0.26, ...     % leverArm [m] (bar axis to drop-link)
+    true);        % enabled
+rearArb = components.Suspension.AntiRollBar( ...
+    1100, ...
+    0.95, ...
+    0.26, ...
+    true);
+geometry.frontAntiRollBar = frontArb;
+geometry.rearAntiRollBar = rearArb;
+fprintf('Anti-Roll Bars: front=%.0f N/m, rear=%.0f N/m at the wheel\n', ...
+    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
+
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...
     vehicle, ...                    % vehicleManager handle
-    0.55, ...                       % frontRollStiffDist: 55% front
+    0.55, ...                       % frontRollStiffDist: legacy arg (split is now
+                                    %   derived from springs + ARBs; set
+                                    %   suspension.rollStiffnessOverride to use this)
     45000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
     42000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
     0.95, ...                       % motionRatio
@@ -159,8 +185,16 @@ chassis.reset();
 for warm = 1:5
     chassis.updateFromAccelerations(0, 0, struct('Fz_front', 0, 'Fz_rear', 0), dt);
 end
+% Link the chassis to the suspension so the chassis roll model reads the
+% per-axle wheel-rate roll stiffness (springs + ARBs) — this keeps the
+% load-transfer split and the chassis roll DOFs on a consistent stiffness.
+chassis.setSuspension(suspension);
+% Reverse link (opt-in): lets chassis torsional compliance modulate the F/R
+% load-transfer split. Off by default; enable for full twist coupling.
+suspension.chassis = chassis;
 vehicle.chassis = chassis;
-fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF)\n');
+fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF, torsional rigidity %.0f N*m/deg)\n', ...
+    chassis.torsionalRigidity * pi / 180);
 
 % --- Differential (driven/rear axle) ---
 % Options:
@@ -213,6 +247,7 @@ axG = stateLog.ax / 9.81;
 ayG = stateLog.ay / 9.81;
 pitchDeg = stateLog.pitchAngle * (180/pi);
 rollDeg = stateLog.rollAngle * (180/pi);
+twistDeg = stateLog.twistAngle * (180/pi);
 
 fprintf('\n=== Vehicle Summary ===\n');
 fprintf('Mass:       %.0f kg\n', vehicle.totalMass);
@@ -232,3 +267,4 @@ if isfield(stateLog, 'rpmLimitActive')
 end
 fprintf('Peak Pitch:     %.3f deg\n', max(abs(pitchDeg)));
 fprintf('Peak Roll:      %.3f deg\n', max(abs(rollDeg)));
+fprintf('Peak Twist:     %.3f deg\n', max(abs(twistDeg)));
