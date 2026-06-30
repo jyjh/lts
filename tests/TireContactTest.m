@@ -52,9 +52,12 @@ warningState = warning('query', 'Solver:Limits:Exceeded');
 cleanup = onCleanup(@() warning(warningState.state, 'Solver:Limits:Exceeded'));
 warning('error', 'Solver:Limits:Exceeded');
 
-tire.updateCorner(corner, 1000, 0.05, 0, 0, 1.2, 0.2);
+% updateCorner signature: (cornerState, Fz, alpha, kappa, gamma, mu, dt, longSpeed).
+% The trailing numeric is the contact-patch longitudinal speed [m/s], which
+% the speed-keyed peak-Mu cache must distinguish.
+tire.updateCorner(corner, 1000, 0.05, 0, 0, 1.2, 0, 0.2);
 keysAfterLowSpeed = tire.peakMuCache.keys;
-tire.updateCorner(corner, 1000, 0.05, 0, 0, 1.2, 20);
+tire.updateCorner(corner, 1000, 0.05, 0, 0, 1.2, 0, 20);
 keysAfterHighSpeed = tire.peakMuCache.keys;
 
 verifyTrue(testCase, any(contains(keysAfterLowSpeed, '_1.0')));

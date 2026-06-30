@@ -160,9 +160,9 @@ fprintf('Anti-Roll Bars: front=%.0f N/m, rear=%.0f N/m at the wheel\n', ...
 % --- Suspension (needs vehicleManager for geometry) ---
 suspension = components.Suspension.SuspensionManager( ...
     vehicle, ...                    % vehicleManager handle
-    0.55, ...                       % frontRollStiffDist: legacy arg (split is now
-                                    %   derived from springs + ARBs; set
-                                    %   suspension.rollStiffnessOverride to use this)
+    0.55, ...                       % frontRollStiffDist (legacy; the split is now
+    ...                             %   derived from springs + ARBs unless
+    ...                             %   suspension.rollStiffnessOverride is set)
     45000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
     42000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
     0.95, ...                       % motionRatio
@@ -170,14 +170,13 @@ suspension = components.Suspension.SuspensionManager( ...
     200000, ...                     % bumpStopRate [N/m]
     200000, ...                     % tireSpringRate [N/m]
     unsprungMass, ...               % unsprungMass per corner [kg]
-    geometry, ...                   % suspension/steering geometry preset
-    frontAntiRollBarRate, ...       % frontAntiRollBarRate [N/m]
-    rearAntiRollBarRate ...         % rearAntiRollBarRate [N/m]
-);
+    geometry);                      % suspension/steering geometry preset
+                                    %   (anti-roll bars ride on geometry as
+                                    %    AntiRollBar objects; see above)
 vehicle.suspension = suspension;
 fprintf(['Suspension: SuspensionManager ' ...
-    '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m)\n'], ...
-    frontAntiRollBarRate, rearAntiRollBarRate);
+    '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m at the wheel)\n'], ...
+    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
 
 % Warmup suspension to static equilibrium (prevents zero-state startup transient)
 suspension.warmup(vehicle.totalMass, dt);

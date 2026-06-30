@@ -201,7 +201,10 @@ classdef Simulator
             correctedLoadState.ay = dynamics.ay;
             cornerLoads = vm.suspension.computeCornerLoads( ...
                 correctedLoadState, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
-            tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, curMu, obj.dt);
+            % Re-evaluate tire forces at the corrected loads with dt = 0: the
+            % contact-patch relaxation already advanced once on the final
+            % wheel-solve iteration above, so it must not advance again here.
+            tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, curMu, 0);
             dynamics = obj.computePlanarDynamics(state, tireData, F_drag, W + F_downforce);
 
             % Integrate the sprung-mass attitude (heave/pitch/roll) from the
@@ -1173,7 +1176,6 @@ classdef Simulator
             slipRatios = struct();
             longSpeeds = struct();
             wheelHeadings = struct();
-            longSpeeds = struct();
 
             for i = 1:numel(corners)
                 corner = corners{i};
@@ -1193,7 +1195,6 @@ classdef Simulator
                 slipRatios.(corner) = kappa;
                 longSpeeds.(corner) = longSpeed;
                 wheelHeadings.(corner) = wheelHeading;
-                longSpeeds.(corner) = longSpeed;
             end
 
             % Per-corner contact-patch longitudinal speeds feed the tire
@@ -1206,18 +1207,16 @@ classdef Simulator
                     cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
                     slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
                     slipRatios.FL, slipRatios.FR, slipRatios.RL, slipRatios.RR, mu, ...
-                    kin.FL.camberAngle, kin.FR.camberAngle, ...);
+                    kin.FL.camberAngle, kin.FR.camberAngle, ...
+                    kin.RL.camberAngle, kin.RR.camberAngle, dt, longSpeedVec);
             else
+                % Fallback for tire models without a batch update: evaluate
+                % each corner individually. Wheel omega is integrated in the
+                % main step() wheel-contact solve, not here.
                 for i = 1:numel(corners)
                     corner = corners{i};
                     tireState = vm.tire.(corner);
                     cornerKin = kin.(corner);
-                    if integrateWheel
-                        vm.tire.updateWheelDynamics(tireState, ...
-                            wheelTorques.drive.(corner), wheelTorques.brake.(corner), obj.dt);
-                        slipRatios.(corner) = obj.computeLocalSlipRatio( ...
-                            tireState, longSpeeds.(corner));
-                    end
                     vm.tire.updateCorner(tireState, cornerLoads.(corner), ...
                         slipAngles.(corner), slipRatios.(corner), ...
                         cornerKin.camberAngle, mu, dt, longSpeeds.(corner));
@@ -1240,6 +1239,28 @@ classdef Simulator
                 tireData.yawMoment = tireData.yawMoment + ...
                     cornerKin.xPosition * FyBody - cornerKin.yPosition * FxBody;
             end
+        end
+
+        function tf = hasChassis(obj)
+            % HASCHASSIS True when a sprung-mass attitude model is attached.
+            %   The chassis owns heave/pitch/roll and imposes sprung-mass
+            %   motion on the suspension corners; without it, corner loads
+            %   fall back to the suspension's algebraic load-transfer path.
+            vm = obj.vehicleManager;
+            tf = ~isempty(vm.chassis) && ...
+                isa(vm.chassis, 'components.Chassis.ChassisComponent');
+        end
+
+        function loads = getCurrentCornerLoads(obj, steer)
+            % GETCURRENTCORNERLOADS Chassis-driven per-corner tire loads.
+            %   loads = getCurrentCornerLoads(steer)
+            %
+            %   Thin wrapper over SuspensionManager.computeCornerLoadsFromChassis:
+            %   reads the sprung-mass motion the chassis has resolved at each
+            %   suspension pickup and returns the four tire normal forces.
+            vm = obj.vehicleManager;
+            loads = vm.suspension.computeCornerLoadsFromChassis( ...
+                vm.chassis, steer, obj.dt);
         end
 
         function dynamics = computePlanarDynamics(obj, state, tireData, F_drag, totalNormalLoad)
@@ -1278,6 +1299,33 @@ classdef Simulator
             dynamics.ax = netFx / vm.totalMass;
             dynamics.ay = netFy / vm.totalMass;
             dynamics.yawAccel = tireData.yawMoment / max(vm.yawInertia, eps);
+        end
+
+        function moments = computeAeroPitchMoments(obj, aeroForces)
+            % COMPUTEAEROPITCHMOMENTS Resolve aero forces into pitch moments.
+            %   moments = computeAeroPitchMoments(aeroForces)
+            %
+            %   Returns a struct with the downforce and drag pitch moments
+            %   about the CG (positive = nose-up) and the drag resultant
+            %   height. Mirrors the moment bookkeeping in
+            %   SimpleChassis.updateFromAccelerations so the two agree when
+            %   no chassis is attached.
+            if isempty(aeroForces)
+                aeroForces = struct('Fz_front', 0, 'Fz_rear', 0, ...
+                    'F_drag', 0, 'dragHeight', 0);
+            end
+            vm = obj.vehicleManager;
+            FzFront = localGetField(aeroForces, 'Fz_front', 0);
+            FzRear  = localGetField(aeroForces, 'Fz_rear', 0);
+            Fdrag   = localGetField(aeroForces, 'F_drag', 0);
+            dragHeight = localGetField(aeroForces, 'dragHeight', 0);
+
+            frontArm = vm.wheelbase * (1 - vm.staticFrontWeight);
+            rearArm  = vm.wheelbase * vm.staticFrontWeight;
+            moments.dragHeight = dragHeight;
+            moments.downforce  = FzRear * rearArm - FzFront * frontArm;
+            moments.drag       = Fdrag * dragHeight;
+            moments.total      = moments.downforce + moments.drag;
         end
 
         function kin = getCornerKinematics(obj, steer)
@@ -1456,4 +1504,16 @@ classdef Simulator
                 max(cornerState.wheelRadius, eps);
         end
     end
+end
+
+function value = localGetField(s, fieldName, defaultValue)
+% LOCALGETFIELD Struct field access with a default, tolerant of non-structs.
+if isstruct(s) && isfield(s, fieldName)
+    value = s.(fieldName);
+    if isempty(value)
+        value = defaultValue;
+    end
+else
+    value = defaultValue;
+end
 end

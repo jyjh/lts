@@ -79,11 +79,15 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
                 TL = TL - Tlock;
             end
 
-            % Enforce the maximum bias ratio and keep both torques
-            % non-negative (a clutch LSD cannot send negative torque).
+            % Enforce the maximum bias ratio on the conserved (un-clamped)
+            % torques, THEN clamp to non-negative. Applying the cap before the
+            % clamp keeps TL + TR == totalWheelTorque: the cap pulls the
+            % over-biased (fast) side up toward maxSide/biasRatio and takes
+            % the excess from the slow side, preserving the sum. Clamping
+            % first would zero a negative fast side and create torque.
+            [TL, TR] = obj.applyBiasRatio(TL, TR);
             TL = max(0, TL);
             TR = max(0, TR);
-            [TL, TR] = obj.applyBiasRatio(TL, TR);
 
             out.TL = TL;
             out.TR = TR;

@@ -125,20 +125,22 @@ classdef PacejkaTire < components.Tire.TireModel
                 return;
             end
 
-            % Unpack for MFeval call
+            % Unpack for MFeval call. Evaluate at the contact-patch
+            % longitudinal speed (speed-sensitive Pacejka) so load/speed
+            % dependence is captured; this matches updateAllCorners.
             Fz    = normalLoad;
             gamma = camberAngle;
-            V     = obj.tireConstants.refVelocity;
+            V     = obj.computeMFevalSpeed(longSpeed);
             P     = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
-            
+
             % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
             inputsMF = [Fz, kappa, alpha, gamma, 0, V, P];
-            
+
             % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
             outputs = mfeval(params, inputsMF, 111);
-            
-            rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params);
+
+            rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longSpeed);
             surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
 
             % Store outputs capped by the current surface friction coefficient.
@@ -446,7 +448,7 @@ classdef PacejkaTire < components.Tire.TireModel
                 [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR]));
             ssKappa = max(-1, min(1, [kappa_FL; kappa_FR; kappa_RL; kappa_RR]));
             gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
-            longSpeed = [longSpeed_FL; longSpeed_FR; longSpeed_RL; longSpeed_RR];
+            longSpeed = longSpeeds(:);
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
 
             % Apply per-corner relaxation to obtain the transient (force-

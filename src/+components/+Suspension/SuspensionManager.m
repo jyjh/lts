@@ -115,6 +115,19 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
                 obj.rearAntiRollBar = geometry.rearAntiRollBar;
             end
 
+            % Backward-compatible scalar ARB wheel rates (legacy call style):
+            % when supplied AND the geometry did not already provide a bar,
+            % install a unit-ratio AntiRollBar whose wheel-rate stiffness
+            % equals the scalar. Geometry-object ARBs take precedence.
+            if nargin >= 15 && ~isempty(frontAntiRollBarRate) && ...
+                    isempty(obj.frontAntiRollBar)
+                obj.frontAntiRollBar = obj.makeWheelRateBar(frontAntiRollBarRate);
+            end
+            if nargin >= 16 && ~isempty(rearAntiRollBarRate) && ...
+                    isempty(obj.rearAntiRollBar)
+                obj.rearAntiRollBar = obj.makeWheelRateBar(rearAntiRollBarRate);
+            end
+
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
             rearSprungMass = max(totalSprungMass * (1 - obj.staticFrontWeight) / 2, eps);
@@ -262,9 +275,9 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
             
             frontAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarRate);
+                obj.frontLeft, obj.frontRight, obj.getAxleBarWheelRate(obj.frontAntiRollBar));
             rearAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarRate);
+                obj.rearLeft, obj.rearRight, obj.getAxleBarWheelRate(obj.rearAntiRollBar));
 
             % --- Update each corner's transient state ---
             obj.frontLeft.updateCorner( ...
@@ -276,7 +289,7 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             obj.rearRight.updateCorner( ...
                 obj.rearRight.state, demanded_RR, dt, rearAntiRoll.right);
             obj.updateGeometry(state.steer);
-            
+
             % --- Return per-corner tire normal forces ---
             loads.FL = obj.frontLeft.state.tireNormalForce;
             loads.FR = obj.frontRight.state.tireNormalForce;
@@ -290,6 +303,24 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             obj.updateCornerGeometry(obj.frontRight, 'FR', steerInput);
             obj.updateCornerGeometry(obj.rearLeft,   'RL', steerInput);
             obj.updateCornerGeometry(obj.rearRight,  'RR', steerInput);
+        end
+
+        function forces = getAntiRollBarForces(obj)
+            % GETANTIROLLBARFORCES Per-corner ARB coupling forces [N].
+            %   forces.FL, .FR, .RL, .RR
+            %   Uses each axle bar's wheel-rate stiffness. Shared by the
+            %   demanded-load and chassis-driven load paths so both apply the
+            %   same axle coupling.
+            front = obj.computeAntiRollBarForces( ...
+                obj.frontLeft, obj.frontRight, ...
+                obj.getAxleBarWheelRate(obj.frontAntiRollBar));
+            rear = obj.computeAntiRollBarForces( ...
+                obj.rearLeft, obj.rearRight, ...
+                obj.getAxleBarWheelRate(obj.rearAntiRollBar));
+            forces.FL = front.left;
+            forces.FR = front.right;
+            forces.RL = rear.left;
+            forces.RR = rear.right;
         end
 
         function loads = estimateCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass)
@@ -344,6 +375,60 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             loads.FR = max(Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR, 0);
             loads.RL = max(Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL, 0);
             loads.RR = max(Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR, 0);
+        end
+
+        function loads = computeCornerLoadsFromChassis(obj, chassis, steer, dt)
+            % COMPUTECORNERLOADSFROMCHASSIS Chassis-driven per-corner loads.
+            %   loads = computeCornerLoadsFromChassis(chassis, steer, dt)
+            %
+            %   Reads the sprung-mass motion (heave/pitch/roll) the chassis
+            %   has resolved at each suspension pickup and drives each
+            %   corner's unsprung/tire state through it, returning the four
+            %   tire normal forces. This is the chassis-coupled counterpart
+            %   of computeCornerLoads: there the corners integrate a
+            %   *demanded* load, here the sprung motion is *imposed* by the
+            %   chassis so the attitude and load-transfer models share one
+            %   sprung-mass motion.
+            %
+            %   chassis - linked SimpleChassis (or compatible) whose state
+            %             already reflects the current heave/pitch/roll
+            %   steer   - steering input [-1,1] (for kinematic refresh only)
+            %   dt      - timestep [s]
+            if nargin < 3 || isempty(steer)
+                steer = 0;
+            end
+            if nargin < 4 || isempty(dt)
+                dt = 0.001;
+            end
+
+            % Refresh per-corner sprung displacement/velocity from the chassis
+            % attitude (positive = compression-producing).
+            if ismethod(chassis, 'computeCornerKinematics')
+                chassis.computeCornerKinematics();
+            end
+            disp = chassis.state.cornerDisplacement;
+            vel  = chassis.state.cornerVelocity;
+
+            % ARB coupling forces per axle (wheel-rate stiffness from the bar
+            % objects, mirroring computeCornerLoads).
+            arb = obj.getAntiRollBarForces();
+
+            % Drive each corner from the chassis-imposed sprung motion. The
+            % suspension advances its unsprung mass against the tire spring.
+            obj.frontLeft.updateCornerFromChassis( ...
+                obj.frontLeft.state, disp.FL, vel.FL, dt, arb.FL);
+            obj.frontRight.updateCornerFromChassis( ...
+                obj.frontRight.state, disp.FR, vel.FR, dt, arb.FR);
+            obj.rearLeft.updateCornerFromChassis( ...
+                obj.rearLeft.state, disp.RL, vel.RL, dt, arb.RL);
+            obj.rearRight.updateCornerFromChassis( ...
+                obj.rearRight.state, disp.RR, vel.RR, dt, arb.RR);
+            obj.updateGeometry(steer);
+
+            loads.FL = obj.frontLeft.state.tireNormalForce;
+            loads.FR = obj.frontRight.state.tireNormalForce;
+            loads.RL = obj.rearLeft.state.tireNormalForce;
+            loads.RR = obj.rearRight.state.tireNormalForce;
         end
 
         function frac = deriveFrontRollStiffnessFraction(obj)
@@ -457,12 +542,16 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         end
 
         function setAntiRollBarRates(obj, frontRate, rearRate)
-            % SETANTIROLLBARRATES Configure front/rear anti-roll bar rates [N/m].
+            % SETANTIROLLBARRATES Configure front/rear anti-roll bars from a
+            %   wheel-rate stiffness [N/m].
+            %   The rates are interpreted as the bar's wheel-rate roll
+            %   stiffness (the same quantity getWheelRateStiffness returns),
+            %   so an AntiRollBar is built whose wheel rate equals the input.
             if nargin >= 2 && ~isempty(frontRate)
-                obj.frontAntiRollBarRate = max(frontRate, 0);
+                obj.frontAntiRollBar = obj.makeWheelRateBar(max(frontRate, 0));
             end
             if nargin >= 3 && ~isempty(rearRate)
-                obj.rearAntiRollBarRate = max(rearRate, 0);
+                obj.rearAntiRollBar = obj.makeWheelRateBar(max(rearRate, 0));
             end
         end
     end
@@ -478,6 +567,18 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
     end
 
     methods (Access = private)
+        function bar = makeWheelRateBar(~, wheelRate)
+            % MAKEWHEELRATEBAR Build a unit-ratio ARB whose wheel-rate roll
+            % stiffness equals the requested value [N/m]. Used by
+            % setAntiRollBarRates so the input is interpreted as Kw_bar.
+            wheelRate = max(0, wheelRate);
+            if wheelRate <= 0
+                bar = components.Suspension.AntiRollBar();
+            else
+                bar = components.Suspension.AntiRollBar(wheelRate, 1, 1, true);
+            end
+        end
+
         function forces = computeAntiRollBarForces(obj, leftUnit, rightUnit, rate)
             forces = struct('left', 0, 'right', 0);
             rate = max(rate, 0);
