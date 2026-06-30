@@ -30,6 +30,18 @@ classdef SuspensionGeometry
         ackermann = 0.0                 % 0 = parallel steer, 1 = ideal Ackermann
         maxWheelSteerAngle = 0.6        % [rad]
         rearSteerRatio = 0.0
+
+        % Roll-center height per axle [m] above the ground plane. The roll
+        % center is the point through which the lateral (geometric) load
+        % transfer acts. 0 collapses the lateral-transfer split to the
+        % legacy CG-height-only behavior.
+        frontRollCenterHeight = 0
+        rearRollCenterHeight = 0
+
+        % Anti-roll bars per axle. Empty/disabled => the axle's roll
+        % stiffness is its wheel springs only.
+        frontAntiRollBar = []
+        rearAntiRollBar  = []
     end
 
     methods
@@ -65,7 +77,11 @@ classdef SuspensionGeometry
             kin.steerAngle = wheelSteer;
             kin.motionRatio = obj.interpolateCurve(travelGrid, motionRatioCurve, wheelTravel);
             [kin.xPosition, kin.yPosition] = obj.computeWheelPosition(corner);
-            kin.rollCenterHeight = 0;
+            if strcmp(axle, 'front')
+                kin.rollCenterHeight = obj.frontRollCenterHeight;
+            else
+                kin.rollCenterHeight = obj.rearRollCenterHeight;
+            end
         end
 
         function steer = computeSteeringAngles(obj, steerInput)
@@ -153,6 +169,10 @@ classdef SuspensionGeometry
                     obj.rearToeCurve = [0.05 0 -0.05] * pi / 180;
                     obj.frontMotionRatioCurve = [0.93 0.95 0.97];
                     obj.rearMotionRatioCurve = [0.94 0.95 0.96];
+                    % Typical FSAE roll-center heights: front slightly above
+                    % ground, rear a bit higher for a stable platform.
+                    obj.frontRollCenterHeight = 0.030;
+                    obj.rearRollCenterHeight = 0.045;
                 case {'high-camber-gain', 'highcambergain'}
                     obj.ackermann = 0.55;
                     obj.frontCamberCurve = [1.0 0 -3.0] * pi / 180;
@@ -161,6 +181,8 @@ classdef SuspensionGeometry
                     obj.rearToeCurve = [0.05 0 -0.05] * pi / 180;
                     obj.frontMotionRatioCurve = [0.90 0.95 1.00];
                     obj.rearMotionRatioCurve = [0.92 0.95 0.98];
+                    obj.frontRollCenterHeight = 0.030;
+                    obj.rearRollCenterHeight = 0.045;
                 case {'pro-ackermann', 'ackermann'}
                     obj.ackermann = 1.0;
                     obj.frontCamberCurve = [0.5 0 -1.5] * pi / 180;

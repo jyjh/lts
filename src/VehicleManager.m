@@ -13,6 +13,10 @@ classdef VehicleManager
         powertrain  % components.PowertrainComponent
         tire        % components.Tire.TireModel
         track       % components.Track
+
+        % Driven-axle differential. Default OpenDifferential (set by
+        % run_simulation); may be LockedDifferential or ClutchLSDDifferential.
+        differential  % components.Powertrain.DifferentialComponent
         
         % Vehicle parameters
         totalMass     = 256      % Total mass with driver [kg]
@@ -30,11 +34,12 @@ classdef VehicleManager
     end
     
     methods
-        function obj = VehicleManager(aero, suspension, powertrain, tire, track, chassis)
+        function obj = VehicleManager(aero, suspension, powertrain, tire, track, chassis, differential)
             % VEHICLEMANAGER Construct with all component objects
             %   VehicleManager(aero, suspension, powertrain, tire, track)
             %   VehicleManager(aero, suspension, powertrain, tire, track, chassis)
-            
+            %   VehicleManager(aero, suspension, powertrain, tire, track, chassis, differential)
+
             obj.aero = aero;
             obj.suspension = suspension;
             obj.powertrain = powertrain;
@@ -42,6 +47,9 @@ classdef VehicleManager
             obj.track = track;
             if nargin >= 6
                 obj.chassis = chassis;
+            end
+            if nargin >= 7
+                obj.differential = differential;
             end
         end
     end

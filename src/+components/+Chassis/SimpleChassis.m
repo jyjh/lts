@@ -18,14 +18,32 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
         % Lumped inertias [kg*m^2]
         pitchInertia = 60
         rollInertia = 40
+        % Per-axle roll inertias [kg*m^2]. Default to the whole-car rollInertia
+        % split by static weight; overridden at construction from the
+        % vehicle manager when available.
+        frontRollInertia = 40
+        rearRollInertia  = 40
 
         % Linear platform stiffness/damping from static equilibrium
         heaveStiffness = 160000   % [N/m]
         heaveDamping = 12000      % [N*s/m]
         pitchStiffness = 90000    % [N*m/rad]
         pitchDamping = 6000       % [N*m*s/rad]
-        rollStiffness = 55000     % [N*m/rad]
+        rollStiffness = 55000     % [N*m/rad]  (legacy whole-car; superseded by axle model)
         rollDamping = 5000        % [N*m*s/rad]
+
+        % Chassis torsional rigidity [N*m/rad]. Couples the front and rear
+        % roll DOFs via a torsion spring on (frontRollAngle - rearRollAngle).
+        % Inf = perfectly rigid torsionally (front and rear roll together);
+        % a finite value lets the body twist under asymmetric load.
+        % 4000 N*m/deg (~229000 N*m/rad) is a representative FSAE tub.
+        torsionalRigidity = 229183   % [N*m/rad]  (4000 N*m/deg)
+        torsionalDamping  = 2000     % [N*m*s/rad]
+
+        % Reference to the suspension manager, used to read the per-axle
+        % wheel-rate roll stiffness so the chassis roll model and the
+        % load-transfer split share the same numbers. Optional.
+        suspension
     end
 
     methods
@@ -54,10 +72,21 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             else
                 obj.rollInertia = max(1, obj.sprungMass * obj.trackWidth^2 / 12);
             end
+            % Split the whole-car roll inertia by static weight distribution.
+            obj.frontRollInertia = max(1, obj.rollInertia * obj.staticFrontWeight);
+            obj.rearRollInertia  = max(1, obj.rollInertia * (1 - obj.staticFrontWeight));
 
             obj.state = components.Chassis.ChassisState();
             obj.state.updateCornerKinematics( ...
                 obj.wheelbase, obj.trackWidth, obj.staticFrontWeight);
+        end
+
+        function setSuspension(obj, suspension)
+            % SETSUSPENSION Optional link to the suspension manager so the
+            % chassis roll model can read the per-axle wheel-rate roll
+            % stiffness (springs + anti-roll bars), keeping the two roll
+            % models consistent. Call after both are constructed.
+            obj.suspension = suspension;
         end
 
         function reset(obj)
@@ -93,21 +122,66 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 - obj.pitchStiffness * obj.state.pitchAngle ...
                 - obj.pitchDamping * obj.state.pitchRate;
 
-            rollMoment = obj.sprungMass * ay * obj.cgHeight ...
-                - obj.rollStiffness * obj.state.rollAngle ...
-                - obj.rollDamping * obj.state.rollRate;
+            % --- Roll: front/rear split DOFs coupled by a torsion spring ---
+            % The sprung-mass roll moment (m*ay*cgH) is split between the
+            % axles by static weight distribution; each axle is resisted by
+            % its own roll stiffness (wheel springs + ARB, read from the
+            % suspension so the chassis and load-transfer models agree) and
+            % coupled to the other axle by the chassis torsion spring on the
+            % twist angle (frontRollAngle - rearRollAngle). With
+            % torsionalRigidity = Inf the two ends roll together (perfectly
+            % rigid tub); a finite value lets the body twist under asymmetric
+            % load. The legacy whole-car rollAngle is kept as the average.
+            massFrac = obj.staticFrontWeight;
+            rollMomentF = obj.sprungMass * ay * obj.cgHeight * massFrac;
+            rollMomentR = obj.sprungMass * ay * obj.cgHeight * (1 - massFrac);
+
+            [KrollF, KrollR] = obj.getAxleRollStiffnessRad();
+            CrollF = obj.rollDamping * massFrac;
+            CrollR = obj.rollDamping * (1 - massFrac);
+
+            % If no per-axle stiffness is available, fall back to the legacy
+            % whole-car rollStiffness split so the model remains stable.
+            if KrollF <= 0 && KrollR <= 0
+                KrollF = obj.rollStiffness * massFrac;
+                KrollR = obj.rollStiffness * (1 - massFrac);
+            end
+
+            twist = obj.state.frontRollAngle - obj.state.rearRollAngle;
+            Kt = obj.torsionalRigidity;
+            Ct = obj.torsionalDamping;
+            twistRate = obj.state.frontRollRate - obj.state.rearRollRate;
+
+            frontRollMoment = rollMomentF ...
+                - KrollF * obj.state.frontRollAngle ...
+                - CrollF * obj.state.frontRollRate ...
+                - obj.safeTorsion(Kt, twist) ...
+                - Ct * twistRate;
+            rearRollMoment = rollMomentR ...
+                - KrollR * obj.state.rearRollAngle ...
+                - CrollR * obj.state.rearRollRate ...
+                + obj.safeTorsion(Kt, twist) ...
+                + Ct * twistRate;
 
             obj.state.heaveAccel = heaveForce / max(obj.sprungMass, eps);
             obj.state.pitchAccel = pitchMoment / max(obj.pitchInertia, eps);
-            obj.state.rollAccel = rollMoment / max(obj.rollInertia, eps);
+            obj.state.frontRollAccel = frontRollMoment / max(obj.frontRollInertia, eps);
+            obj.state.rearRollAccel  = rearRollMoment  / max(obj.rearRollInertia,  eps);
 
             obj.state.heaveRate = obj.state.heaveRate + obj.state.heaveAccel * dt;
             obj.state.pitchRate = obj.state.pitchRate + obj.state.pitchAccel * dt;
-            obj.state.rollRate = obj.state.rollRate + obj.state.rollAccel * dt;
+            obj.state.frontRollRate = obj.state.frontRollRate + obj.state.frontRollAccel * dt;
+            obj.state.rearRollRate  = obj.state.rearRollRate  + obj.state.rearRollAccel  * dt;
 
             obj.state.heave = obj.state.heave + obj.state.heaveRate * dt;
             obj.state.pitchAngle = obj.state.pitchAngle + obj.state.pitchRate * dt;
-            obj.state.rollAngle = obj.state.rollAngle + obj.state.rollRate * dt;
+            obj.state.frontRollAngle = obj.state.frontRollAngle + obj.state.frontRollRate * dt;
+            obj.state.rearRollAngle  = obj.state.rearRollAngle  + obj.state.rearRollRate  * dt;
+
+            % Legacy whole-car roll state = average of the two axle DOFs.
+            obj.state.rollAngle = 0.5 * (obj.state.frontRollAngle + obj.state.rearRollAngle);
+            obj.state.rollRate  = 0.5 * (obj.state.frontRollRate  + obj.state.rearRollRate);
+            obj.state.rollAccel = 0.5 * (obj.state.frontRollAccel + obj.state.rearRollAccel);
 
             obj.state.longitudinalLoadTransfer = ...
                 obj.totalMass * ax * obj.cgHeight / max(obj.wheelbase, eps);
@@ -137,7 +211,52 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
         end
 
         function rollAngle = getRollAngle(obj)
+            % Whole-car roll angle [rad] (average of front/rear DOFs).
             rollAngle = obj.state.rollAngle;
+        end
+
+        function rollAngle = getFrontRollAngle(obj)
+            rollAngle = obj.state.frontRollAngle;
+        end
+
+        function rollAngle = getRearRollAngle(obj)
+            rollAngle = obj.state.rearRollAngle;
+        end
+
+        function twist = getTwistAngle(obj)
+            % Chassis twist angle [rad] = front - rear roll. Zero when the
+            % tub is torsionally rigid or under symmetric load.
+            twist = obj.state.frontRollAngle - obj.state.rearRollAngle;
+        end
+    end
+
+    methods (Access = private)
+        function [KrollF, KrollR] = getAxleRollStiffnessRad(obj)
+            % GETAXLEROLLSTIFFNESSRAD Per-axle roll stiffness [N*m/rad].
+            % Reads the per-axle wheel-rate roll stiffness (springs + ARB)
+            % from the linked suspension manager and converts to a roll
+            % rate about the roll axis: K_roll = Kw * (t/2)^2 * 2 = Kw*t^2/2.
+            % Returns 0,0 when no suspension is linked.
+            KrollF = 0;
+            KrollR = 0;
+            if ~isempty(obj.suspension) && ...
+                    ismethod(obj.suspension, 'getAxleRollStiffness')
+                [KwF, KwR] = obj.suspension.getAxleRollStiffness();
+                KrollF = KwF * obj.trackWidth^2 / 2;
+                KrollR = KwR * obj.trackWidth^2 / 2;
+            end
+        end
+
+        function torque = safeTorsion(~, Kt, twist)
+            % SAFETORSION Torsion-spring torque, robust to Kt = Inf.
+            % With infinite rigidity the front/rear DOFs should lock together;
+            % an Inf*0 product would yield NaN, so a very large finite cap is
+            % used instead, which numerically enforces near-equal roll angles.
+            if isinf(Kt)
+                torque = 1e9 * twist;
+            else
+                torque = Kt * twist;
+            end
         end
     end
 

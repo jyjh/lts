@@ -19,6 +19,16 @@ classdef TireState < handle
         
         % Slip ratio [-1 to 1] (positive = driving, negative = braking)
         slipRatio       = 0
+
+        % --- Transient (relaxation) slip state ---
+        % Lagged slip quantities fed to the Magic Formula. These track the
+        % steady-state kinematic slip through a first-order contact-patch
+        % lag (tire relaxation). See PacejkaTire.applyRelaxation.
+        % slipAngle/slipRatio above hold the lagged (transient) values used
+        % for the force evaluation; the steady-state kinematic inputs are
+        % stored here for the next step's relaxation update.
+        ssSlipAngle  = 0     % Steady-state (kinematic) slip angle [rad]
+        ssSlipRatio  = 0     % Steady-state (kinematic) slip ratio [-]
         
         % Inclination (camber) angle [rad] (positive = top tilted outward)
         camberAngle     = 0
@@ -58,6 +68,8 @@ classdef TireState < handle
             obj.normalForce     = 0;
             obj.slipAngle       = 0;
             obj.slipRatio       = 0;
+            obj.ssSlipAngle     = 0;
+            obj.ssSlipRatio     = 0;
             obj.camberAngle     = 0;
             obj.angularVelocity = 0;
             % wheelRadius keeps its default (0.2286 m)
@@ -74,6 +86,8 @@ classdef TireState < handle
             obj.normalForce     = 0;
             obj.slipAngle       = 0;
             obj.slipRatio       = 0;
+            obj.ssSlipAngle     = 0;
+            obj.ssSlipRatio     = 0;
             obj.camberAngle     = 0;
             obj.angularVelocity = 0;
             obj.Fy              = 0;

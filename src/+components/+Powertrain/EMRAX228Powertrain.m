@@ -13,7 +13,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         state                       % components.Powertrain.PowertrainState
         totalGearRatio = 3        % Final drive ratio [-]
         wheelRadius = 0.228        % Effective tire radius [m]
-        drivetrainEfficiency = 1.0  % Additional drivetrain efficiency [0-1]
+        drivetrainEfficiency = 0.92  % Additional drivetrain efficiency [0-1]
         maxVehicleSpeed = 0         % Highest speed in the MAT tractive map [m/s]
         maxEngineTorque = 0         % Compatibility alias for existing scripts [Nm]
         maxEngineRPM = 0            % Compatibility alias for existing scripts [rpm]
