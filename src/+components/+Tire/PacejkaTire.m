@@ -141,15 +141,16 @@ classdef PacejkaTire < components.Tire.TireModel
             outputs = mfeval(params, inputsMF, 111);
 
             rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longSpeed);
-            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
 
-            % Store outputs capped by the current surface friction coefficient.
-            cornerState.Fy = -outputs(:,2) * surfaceScale;
-            cornerState.Fx = outputs(:,1) * surfaceScale;
-            cornerState.Mx = outputs(:,4) * surfaceScale;
-            cornerState.My = outputs(:,5) * surfaceScale;
-            cornerState.Mz = outputs(:,6) * surfaceScale;
-            cornerState.peakMu = rawPeakMu * surfaceScale;
+            % Store the raw Magic-Formula forces. Peak grip is set by the tire
+            % data itself (LMUY/LMUX scaling applied at load), not by a surface
+            % cap; mu is accepted for interface compatibility but not used.
+            cornerState.Fy = -outputs(:,2);
+            cornerState.Fx = outputs(:,1);
+            cornerState.Mx = outputs(:,4);
+            cornerState.My = outputs(:,5);
+            cornerState.Mz = outputs(:,6);
+            cornerState.peakMu = rawPeakMu;
         end
         
         %% ---- TireModel interface methods ----
@@ -172,10 +173,9 @@ classdef PacejkaTire < components.Tire.TireModel
             
             rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
-            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fy = -outputs(:,2) * surfaceScale;
+            Fy = -outputs(:,2);
         end
-        
+
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
             % COMPUTELONGITUDINALFORCE Longitudinal force [N] for a single evaluation
             %   Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -194,8 +194,7 @@ classdef PacejkaTire < components.Tire.TireModel
             
             rawPeakMu = obj.computePeakMuInternal(normalLoad, 0, ...
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
-            surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-            Fx = outputs(:,1) * surfaceScale;
+            Fx = outputs(:,1);
         end
         
         function peakMu = getPeakFriction(obj, normalLoad)
@@ -489,13 +488,12 @@ classdef PacejkaTire < components.Tire.TireModel
                     i = activeIdx(j);
                     rawPeakMu = obj.getCachedPeakMu( ...
                         Fz(i), gamma(i), P, params, longSpeed(i));
-                    surfaceScale = obj.computeSurfaceScale(rawPeakMu, mu);
-                    states{i}.Fx = outputs(j,1) * surfaceScale;
-                    states{i}.Fy = -outputs(j,2) * surfaceScale;
-                    states{i}.Mx = outputs(j,4) * surfaceScale;
-                    states{i}.My = outputs(j,5) * surfaceScale;
-                    states{i}.Mz = outputs(j,6) * surfaceScale;
-                    states{i}.peakMu = rawPeakMu * surfaceScale;
+                    states{i}.Fx = outputs(j,1);
+                    states{i}.Fy = -outputs(j,2);
+                    states{i}.Mx = outputs(j,4);
+                    states{i}.My = outputs(j,5);
+                    states{i}.Mz = outputs(j,6);
+                    states{i}.peakMu = rawPeakMu;
                 end
             end
 
@@ -621,15 +619,6 @@ classdef PacejkaTire < components.Tire.TireModel
             latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
             alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
         end
-        function surfaceScale = computeSurfaceScale(obj, rawPeakMu, surfaceMu)
-            % COMPUTESURFACESCALE Scale tire forces so surface mu is an absolute cap.
-            surfaceMu = max(surfaceMu, 0);
-            if rawPeakMu <= 0
-                surfaceScale = 0;
-            else
-                surfaceScale = min(1, surfaceMu / rawPeakMu);
-            end
-        end
 
         function kappa = computeSlipRatioFromOmega(~, cornerState, omega, longitudinalSpeed)
             wheelSpeed = omega * cornerState.wheelRadius;
@@ -682,13 +671,12 @@ classdef PacejkaTire < components.Tire.TireModel
             outputs = mfeval(params, inputsMF, 111);
 
             rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longitudinalSpeed);
-            surfaceScale = obj.computeSurfaceScale(rawPeakMu, surfaceMu);
-            Fx = outputs(:,1) * surfaceScale;
-            Fy = -outputs(:,2) * surfaceScale;
-            Mx = outputs(:,4) * surfaceScale;
-            My = outputs(:,5) * surfaceScale;
-            Mz = outputs(:,6) * surfaceScale;
-            peakMu = rawPeakMu * surfaceScale;
+            Fx = outputs(:,1);
+            Fy = -outputs(:,2);
+            Mx = outputs(:,4);
+            My = outputs(:,5);
+            Mz = outputs(:,6);
+            peakMu = rawPeakMu;
         end
 
         function Vx = computeMFevalSpeed(obj, longitudinalSpeed)

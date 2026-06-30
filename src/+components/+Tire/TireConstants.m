@@ -67,7 +67,7 @@ classdef TireConstants
             
             % Read TIR file using MFeval
             obj.params = mfeval.readTIR(obj.tirFilePath);
-            
+
             % Extract nominal operating conditions from TIR data
             if isfield(obj.params, 'NOMPRES')
                 obj.nomPressure = obj.params.NOMPRES;
