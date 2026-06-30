@@ -7,38 +7,40 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
     properties
         state  % components.Chassis.ChassisState
 
-        % Vehicle geometry/mass
-        totalMass = 280
-        sprungMass = 280
-        wheelbase = 1.55
-        trackWidth = 1.2
-        cgHeight = 0.28
-        staticFrontWeight = 0.45
+        % Vehicle geometry/mass. Pulled from VehicleManager at construction
+        % (no defaults — a bare instance is invalid and must not be simulated).
+        totalMass
+        sprungMass
+        wheelbase
+        trackWidth
+        cgHeight
+        staticFrontWeight
 
-        % Lumped inertias [kg*m^2]
-        pitchInertia = 60
-        rollInertia = 40
-        % Per-axle roll inertias [kg*m^2]. Default to the whole-car rollInertia
-        % split by static weight; overridden at construction from the
-        % vehicle manager when available.
-        frontRollInertia = 40
-        rearRollInertia  = 40
+        % Lumped inertias [kg*m^2]. Derived from mass + geometry at
+        % construction unless explicitly passed as constructor args.
+        pitchInertia
+        rollInertia
+        % Per-axle roll inertias [kg*m^2], split by static weight at
+        % construction.
+        frontRollInertia
+        rearRollInertia
 
-        % Linear platform stiffness/damping from static equilibrium
-        heaveStiffness = 160000   % [N/m]
-        heaveDamping = 12000      % [N*s/m]
-        pitchStiffness = 90000    % [N*m/rad]
-        pitchDamping = 6000       % [N*m*s/rad]
-        rollStiffness = 55000     % [N*m/rad]  (legacy whole-car; superseded by axle model)
-        rollDamping = 5000        % [N*m*s/rad]
+        % Linear platform stiffness/damping from static equilibrium.
+        % No defaults: set by VehicleManager.fromConfig from VehicleConfig.
+        heaveStiffness    % [N/m]
+        heaveDamping      % [N*s/m]
+        pitchStiffness    % [N*m/rad]
+        pitchDamping      % [N*m*s/rad]
+        rollStiffness     % [N*m/rad]  (legacy whole-car; superseded by axle model)
+        rollDamping       % [N*m*s/rad]
 
         % Chassis torsional rigidity [N*m/rad]. Couples the front and rear
         % roll DOFs via a torsion spring on (frontRollAngle - rearRollAngle).
         % Inf = perfectly rigid torsionally (front and rear roll together);
         % a finite value lets the body twist under asymmetric load.
-        % 4000 N*m/deg (~229000 N*m/rad) is a representative FSAE tub.
-        torsionalRigidity = 229183   % [N*m/rad]  (4000 N*m/deg)
-        torsionalDamping  = 2000     % [N*m*s/rad]
+        % Set by VehicleManager.fromConfig (e.g. 4000 N*m/deg ~ 229000 N*m/rad).
+        torsionalRigidity  % [N*m/rad]
+        torsionalDamping   % [N*m*s/rad]
 
         % Reference to the suspension manager, used to read the per-axle
         % wheel-rate roll stiffness so the chassis roll model and the

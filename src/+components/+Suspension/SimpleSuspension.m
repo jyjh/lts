@@ -18,34 +18,34 @@ classdef SimpleSuspension
 
     properties
         % --- Vehicle geometry (from VehicleManager, stored at construction) ---
-        trackWidth         = 1.2    % Track width [m]
-        wheelbase          = 1.55   % Wheelbase [m]
-        cgHeight           = 0.28   % Center of gravity height [m]
+        trackWidth                   % Track width [m]
+        wheelbase                    % Wheelbase [m]
+        cgHeight                     % Center of gravity height [m]
 
         % --- Suspension tuning ---
         % DEPRECATED: the front/rear elastic load-transfer split is now
         % derived from springs + anti-roll bars (see
         % SuspensionManager.deriveFrontRollStiffnessFraction). Kept only to
         % preserve the constructor signature; no longer read for the split.
-        rollStiffDist      = 0.55   % Legacy roll stiffness distribution [0-1]
+        rollStiffDist                % Legacy roll stiffness distribution [0-1]
 
         % --- Per-corner spring-damper ---
-        springRate         = 25000  % Heave spring rate [N/m]
-        dampingCoeff       = 3000   % Compression damping coefficient [N*s/m]
-        reboundCoeff       = 4500   % Rebound damping coefficient [N*s/m]
-        motionRatio        = 0.95   % Installation motion ratio [dimensionless]
-        bumpStopLength     = 0.025  % Bump stop engagement length [m]
-        bumpStopRate       = 200000 % Bump stop stiffness [N/m]
+        springRate                   % Heave spring rate [N/m]
+        dampingCoeff                 % Compression damping coefficient [N*s/m]
+        reboundCoeff                 % Rebound damping coefficient [N*s/m]
+        motionRatio                  % Installation motion ratio [dimensionless]
+        bumpStopLength               % Bump stop engagement length [m]
+        bumpStopRate                 % Bump stop stiffness [N/m]
 
         % --- Tire spring ---
-        tireSpringRate     = 200000 % Vertical tire stiffness [N/m]
+        tireSpringRate               % Vertical tire stiffness [N/m]
 
         % --- Corner masses ---
-        sprungMass         = 45     % Per-corner sprung mass [kg]
-        unsprungMass       = 25     % Per-corner unsprung mass [kg]
+        sprungMass                   % Per-corner sprung mass [kg]
+        unsprungMass                 % Per-corner unsprung mass [kg]
 
         % --- Transient state ---
-        state                       % SuspensionState handle object
+        state                        % SuspensionState handle object
     end
 
     methods

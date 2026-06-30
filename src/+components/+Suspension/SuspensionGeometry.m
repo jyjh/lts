@@ -7,9 +7,11 @@ classdef SuspensionGeometry
     % full hardpoint solver.
 
     properties
-        wheelbase = 1.55
-        trackWidth = 1.2
-        staticFrontWeight = 0.45
+        % Vehicle geometry: pulled from VehicleManager at construction
+        % (no defaults — a bare instance must not be used for kinematics).
+        wheelbase
+        trackWidth
+        staticFrontWeight
 
         % Front axle geometry curves, indexed by wheel travel [m].
         % Positive wheel travel is bump/compression.

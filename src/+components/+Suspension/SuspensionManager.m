@@ -19,8 +19,9 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
         rearLeft       % SimpleSuspension (rear params)
         rearRight      % SimpleSuspension (rear params)
         
-        % Static front weight distribution (from VehicleManager)
-        staticFrontWeight = 0.48  % [0-1]
+        % Static front weight distribution: pulled from VehicleManager at
+        % construction (no default — a bare instance is invalid).
+        staticFrontWeight  % [0-1]
 
         % Roll-center height per axle [m], resolved from geometry at
         % construction. Drives the geometric (instantaneous) component of

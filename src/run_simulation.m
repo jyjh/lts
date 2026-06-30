@@ -2,12 +2,13 @@
 % Entry point script that configures and runs the simulation
 %
 % Architecture:
-%   - Components (aero, suspension, powertrain, tire) are swappable objects
-%   - AeroManager aggregates multiple positioned AeroComponents (FW, RW, Floor)
-%   - VehicleManager holds component references and vehicle parameters
-%   - DriverModel decides throttle/brake inputs based on track lookahead
-%   - Simulator runs the physics loop: state + inputs → next state
-%   - Track provides geometry and surface properties
+%   - The CAR is defined by a VehicleConfig from the +vehicles package
+%     (e.g. vehicles.baseline). Swap cars by changing that one line.
+%   - VehicleManager.fromConfig turns a config into a wired vehicle.
+%   - The TRACK, driver tuning, and timestep are scenario settings and
+%     stay in this script.
+%   - DriverModel decides throttle/brake inputs based on track lookahead.
+%   - Simulator runs the physics loop: state + inputs -> next state.
 
 clear; clc; close all;
 
@@ -18,6 +19,12 @@ clear; clc; close all;
 trackType = 'skidpad';
 
 %% ====================================================================
+%  SELECT VEHICLE CONFIGURATION
+%  Add new cars in src/+vehicles/<name>.m, then reference them here.
+%  ====================================================================
+config = vehicles.baseline();
+
+%% ====================================================================
 %  DISPLAY OPTIONS
 %  Set to true to show all graphs in a single window
 %  ====================================================================
@@ -26,193 +33,27 @@ singleWindow = true;
 % Export MoTeC CSV and .ld files after the simulation completes.
 exportMoTeC = true;
 
+% Simulation timestep [s]
+dt = 0.001;
+
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
 %% ====================================================================
-%  CREATE AERODYNAMIC COMPONENTS
-%  Each aero element is positioned independently and responds to
-%  vehicle pitch and ride height from VehicleState
+%  BUILD TRACK
 %  ====================================================================
-
-% Front Wing: ahead of front axle, very pitch/height sensitive
-frontWing = components.Aero.FrontWing( ...
-    0.9, ...                   % xPosition: 0.9m forward of CG (ahead of front axle)
-    0.08, ...                  % zPosition: 8cm above reference plane
-    1.6, ...                   % ClA: Downforce coefficient * area
-    0.35, ...                  % CdA: Drag coefficient * area
-    -5.0, ...                  % pitchSensitivityClA: Loses DF when nose pitches up
-    0.3 ...                    % heightSensitivity: Sensitive to ride height
-);
-fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-    frontWing.xPosition, frontWing.ClA, frontWing.CdA);
-
-% Rear Wing: behind rear axle, moderate pitch sensitivity
-rearWing = components.Aero.RearWing( ...
-    -0.85, ...                 % xPosition: 0.85m behind CG (behind rear axle)
-    0.45, ...                  % zPosition: 45cm above reference plane (high-mounted)
-    2.1, ...                   % ClA: Highest DF element
-    1.15, ...                  % CdA: Highest drag element
-    3.0, ...                   % pitchSensitivityClA: Gains DF when nose pitches up
-    0.15 ...                   % heightSensitivity: Moderately sensitive
-);
-fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-    rearWing.xPosition, rearWing.ClA, rearWing.CdA);
-
-% Underbody Floor / Diffuser: near CG, extremely height sensitive
-floor = components.Aero.UnderbodyFloor( ...
-    0.0, ...                   % xPosition: At CG
-    0.035, ...                 % zPosition: 3.5cm (nominal floor height)
-    0.4, ...                   % ClA: Moderate DF
-    0.10, ...                  % CdA: Very low drag
-    -8.0, ...                  % pitchSensitivityClA: Very pitch-sensitive (ground effect)
-    0.015, ...                 % stallHeight: Stall below 1.5cm
-    0.6 ...                    % heightExponent: Ground-effect sensitivity curve
-);
-fprintf('Aero: Floor      | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-    floor.xPosition, floor.ClA, floor.CdA);
-
-% AeroManager: aggregates all aero components
-aero = components.Aero.AeroManager();
-aero = aero.addComponent(frontWing);
-aero = aero.addComponent(rearWing);
-aero = aero.addComponent(floor);
-fprintf('Aero: AeroManager with %d components\n', aero.numComponents());
-
-% Print aero summary
-totalClA = frontWing.ClA + rearWing.ClA + floor.ClA;
-totalCdA = frontWing.CdA + rearWing.CdA + floor.CdA;
-fprintf('  Total ClA=%.2f, Total CdA=%.2f\n', totalClA, totalCdA);
-
-fprintf('\n');
-
-%% ====================================================================
-%  CREATE REMAINING COMPONENTS
-%  ====================================================================
-
-% --- Powertrain ---
-% drivetrainEfficiency accounts for gear/bearing losses in the final drive.
-% 0.92 is a typical FSAE single-reduction value; pass 1.0 to recover the
-% lossless baseline.
-powertrain = components.Powertrain.EMRAX228Powertrain('', 0.92);
-fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
-    powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
-    powertrain.rpmFalloffStartRPM, powertrain.rpmLimitRPM, ...
-    powertrain.rpmFalloffFactor);
-
-% --- Tires (Pacejka Magic Formula via MFeval) ---
-% Requires MFeval toolbox: https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval
-tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
-
-% --- Track ---
 track = components.TestTrack(trackType);
 fprintf('Track: TestTrack (''%s'', %.1f m, %d points)\n', ...
     trackType, track.getTotalLength(), size(track.getTrackPoints(), 1));
-
 fprintf('\n');
 
 %% ====================================================================
-%  CREATE VEHICLE MANAGER, DRIVER MODEL, AND SIMULATOR
+%  BUILD VEHICLE FROM CONFIG
 %  ====================================================================
+vehicle = VehicleManager.fromConfig(config, track, dt);
 
-% Simulation timestep [s]
-dt = 0.001;
-unsprungMass = 25;  % Unsprung mass per corner [kg]
-
-% VehicleManager is created first so SuspensionManager can reference it
-% Chassis and differential are attached after construction (6th/7th slots).
-vehicle = VehicleManager(aero, [], powertrain, tire, track);
-vehicle.chassis = components.Chassis.SimpleChassis( ...
-    vehicle, max(vehicle.totalMass - 4 * unsprungMass, eps));
-fprintf('Chassis: SimpleChassis (sprung mass %.0f kg)\n', ...
-    vehicle.chassis.sprungMass);
-
-% --- Suspension geometry ---
-% Options: 'neutral', 'baseline', 'high-camber-gain', 'pro-ackermann'
-geometryPreset = 'baseline';
-geometry = components.Suspension.SuspensionGeometry.fromPreset(geometryPreset, vehicle);
-fprintf('Suspension Geometry: %s (Ackermann %.0f%%)\n', ...
-    geometryPreset, geometry.ackermann * 100);
-
-% --- Anti-roll bars ---
-% Each ARB is described by its end stiffness, motion ratio, and drop-link
-% lever arm; its wheel-rate roll stiffness is added to the axle's wheel
-% springs to derive the front/rear elastic load-transfer split. Disable
-% (enabled=false) to use wheel springs only. The split is derived from
-% these unless suspension.rollStiffnessOverride is set (legacy fixed split).
-%
-% Wheel-rate target: front ~25 kN/m, rear ~15 kN/m (stiffer front is the
-% common FSAE setup to suppress front roll and tune steady-state balance).
-frontArb = components.Suspension.AntiRollBar( ...
-    1800, ...     % stiffness [N/m] at the bar end
-    0.95, ...     % motionRatio (wheel <-> bar end)
-    0.26, ...     % leverArm [m] (bar axis to drop-link)
-    true);        % enabled
-rearArb = components.Suspension.AntiRollBar( ...
-    1100, ...
-    0.95, ...
-    0.26, ...
-    true);
-geometry.frontAntiRollBar = frontArb;
-geometry.rearAntiRollBar = rearArb;
-fprintf('Anti-Roll Bars: front=%.0f N/m, rear=%.0f N/m at the wheel\n', ...
-    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
-
-% --- Suspension (needs vehicleManager for geometry) ---
-suspension = components.Suspension.SuspensionManager( ...
-    vehicle, ...                    % vehicleManager handle
-    0.55, ...                       % frontRollStiffDist (legacy; the split is now
-    ...                             %   derived from springs + ARBs unless
-    ...                             %   suspension.rollStiffnessOverride is set)
-    45000, 3000, 4500, ...          % front: springRate, dampingCoeff, reboundCoeff
-    42000, 2800, 4200, ...          % rear:  springRate, dampingCoeff, reboundCoeff
-    0.95, ...                       % motionRatio
-    0.025, ...                      % bumpStopLength [m]
-    200000, ...                     % bumpStopRate [N/m]
-    200000, ...                     % tireSpringRate [N/m]
-    unsprungMass, ...               % unsprungMass per corner [kg]
-    geometry);                      % suspension/steering geometry preset
-                                    %   (anti-roll bars ride on geometry as
-                                    %    AntiRollBar objects; see above)
-vehicle.suspension = suspension;
-fprintf(['Suspension: SuspensionManager ' ...
-    '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m at the wheel)\n'], ...
-    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
-
-% Warmup suspension to static equilibrium (prevents zero-state startup transient)
-suspension.warmup(vehicle.totalMass, dt);
-
-% --- Chassis attitude model (heave/pitch/roll DOFs) ---
-% Owns pitch (squat/dive), roll, and ride-height so aero ground-effect and
-% pitch sensitivity are driven by an integrated sprung-mass attitude rather
-% than inferred from suspension deflection. Leave unset ([]) to fall back to
-% suspension-inferred pitch and a zero ride-height/roll.
-chassis = components.Chassis.SimpleChassis(vehicle);
-chassis.reset();
-% Settle the chassis to static equilibrium (zero ax/ay) over a few steps so
-% the attitude starts at equilibrium instead of integrating a startup spike.
-for warm = 1:5
-    chassis.updateFromAccelerations(0, 0, struct('Fz_front', 0, 'Fz_rear', 0), dt);
-end
-% Link the chassis to the suspension so the chassis roll model reads the
-% per-axle wheel-rate roll stiffness (springs + ARBs) — this keeps the
-% load-transfer split and the chassis roll DOFs on a consistent stiffness.
-chassis.setSuspension(suspension);
-% Reverse link (opt-in): lets chassis torsional compliance modulate the F/R
-% load-transfer split. Off by default; enable for full twist coupling.
-suspension.chassis = chassis;
-vehicle.chassis = chassis;
-fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF, torsional rigidity %.0f N*m/deg)\n', ...
-    chassis.torsionalRigidity * pi / 180);
-
-% --- Differential (driven/rear axle) ---
-% Options:
-%   components.Powertrain.OpenDifferential()       - 50/50, mean carrier (default; matches legacy)
-%   components.Powertrain.LockedDifferential()     - spool, equal rear wheel speed
-%   components.Powertrain.ClutchLSDDifferential()  - torque-biasing limited-slip
-differential = components.Powertrain.OpenDifferential();
-vehicle.differential = differential;
-fprintf('Differential: %s\n', differential.getName());
-
+%% ====================================================================
+%  BUILD DRIVER MODEL AND SIMULATOR, THEN RUN
+%  ====================================================================
 driver    = DriverModel(vehicle);
 simulator = Simulator(vehicle, driver, dt);
 
@@ -257,7 +98,7 @@ end
 %% ====================================================================
 %  PLOT RESULTS
 %  ====================================================================
-GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero, singleWindow);
+GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, vehicle.aero, singleWindow);
 
 % --- Summary ---
 speedKmh = stateLog.speedKmh;

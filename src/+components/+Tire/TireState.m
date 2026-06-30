@@ -72,7 +72,8 @@ classdef TireState < handle
             obj.ssSlipRatio     = 0;
             obj.camberAngle     = 0;
             obj.angularVelocity = 0;
-            % wheelRadius keeps its default (0.2286 m)
+            % wheelRadius keeps its default (0.241935 m); VehicleManager.fromConfig
+            % overrides it from config.tire.wheelRadius when building via a config.
             obj.Fy              = 0;
             obj.Fx              = 0;
             obj.Mx              = 0;
