@@ -159,6 +159,25 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             wheelTorque = obj.computeDriveTorque(speed, throttle);
             F_drive = wheelTorque / max(obj.wheelRadius, eps);
         end
+
+        function F_drive = computeMaxDriveForce(obj, speed)
+            % COMPUTEMAXDRIVEFORCE Full-throttle wheel-equivalent drive force [N]
+            %
+            %   F_drive = computeMaxDriveForce(obj, speed)
+            %
+            %   Returns the full-throttle tractive force available at the given
+            %   vehicle speed [m/s], WITHOUT mutating the live powertrain state.
+            %   This is the planner-safe probe: it converts vehicle speed to a
+            %   motor speed directly (independent of obj.state) and reads the
+            %   tractive-force map, so the lap-time planner can sample capability
+            %   across the speed profile without disturbing the simulator's
+            %   per-step motor-state bookkeeping (which computeDriveTorque
+            %   performs via obj.state.updateOutputs).
+            speed = max(0, speed);
+            motorRPM = obj.vehicleSpeedToMotorRPM(speed);
+            fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
+            F_drive = max(0, fullThrottleForce * obj.drivetrainEfficiency);
+        end
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
             % Update motor RPM from driven-wheel angular velocity [rad/s].

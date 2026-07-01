@@ -10,6 +10,11 @@ classdef (Abstract) PowertrainComponent
         % Total driven-axle wheel torque [Nm] given vehicle speed and throttle [0-1]
         wheelTorque = computeDriveTorque(obj, speed, throttle)
 
+        % Full-throttle wheel-equivalent drive force [N] at the given vehicle
+        % speed [m/s], WITHOUT mutating powertrain state. Used by the lap-time
+        % planner to probe tractive capability along the speed plan.
+        F = computeMaxDriveForce(obj, speed)
+
         % Update motor speed from driven-wheel angular velocity [rad/s]
         updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
 

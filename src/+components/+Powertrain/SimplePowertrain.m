@@ -72,6 +72,21 @@ classdef SimplePowertrain < components.Powertrain.PowertrainComponent
             wheelTorque = obj.computeDriveTorque(speed, throttle);
             F_drive = wheelTorque / max(obj.wheelRadius, eps);
         end
+
+        function F_drive = computeMaxDriveForce(obj, speed)
+            % COMPUTEMAXDRIVEFORCE Full-throttle wheel-equivalent drive force [N]
+            %
+            %   Planner-safe probe (does not mutate obj.state). Interpolates the
+            %   torque curve directly from a vehicle-speed-derived RPM, so the
+            %   lap-time planner can sample capability without touching the
+            %   simulator's per-step powertrain state.
+            speed = max(0, speed);
+            motorRPM = speed / (2 * pi * obj.wheelRadius) * 60 * obj.totalGearRatio;
+            lookupRPM = min(max(obj.idleRPM, motorRPM), obj.torqueCurveRPM(end));
+            torque = interp1(obj.torqueCurveRPM, obj.torqueCurveNm, lookupRPM, 'linear', 0);
+            wheelTorque = torque * obj.totalGearRatio * obj.drivetrainEfficiency;
+            F_drive = max(0, wheelTorque / max(obj.wheelRadius, eps));
+        end
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
             obj.state.updateFromDrivenWheels( ...

@@ -1,12 +1,16 @@
 classdef DriverModel < handle
     % DRIVERMODEL Decides throttle and brake inputs from a racing speed profile
     %
-    % The driver builds a local backward speed envelope from upcoming
-    % curvature and available braking. It stays at full throttle until the
-    % latest feasible braking point, then uses a high brake command. The
-    % only intentional coast state is near a detected corner apex. Steering
-    % is shaped by the active corner segment, peaking at a configurable
-    % apex phase that defaults to the corner midpoint.
+    % The primary path consumes a feedforward lap plan built by
+    % DriverInputPlanner (target speed, axRef, throttle/brake/steer refs) and
+    % adds closed-loop path-following corrections. The fallback path
+    % (computeInputs) builds a local backward speed envelope from upcoming
+    % curvature and maps the required longitudinal accel onto pedals via the
+    % same physics-based pedal map (DriverInputPlanner.computePedals), so both
+    % paths produce partial throttle, true coasting, and gradual braking
+    % rather than a bang-bang WOT/hard-brake policy. Steering is shaped by the
+    % active corner segment, peaking at a configurable apex phase that
+    % defaults to the corner midpoint.
 
     properties
         % Reference to VehicleManager for component access
@@ -19,6 +23,7 @@ classdef DriverModel < handle
         hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
         corneringUsage   = 0.8   % Fraction of lateral grip used for speed targets
         brakingUsage     = 0.75   % Fraction of braking capability used in planning
+        driveUsage       = 0.85   % Fraction of tractive/drive grip used in planning
         minBrakeCommand  = 0.85   % Minimum brake command once braking is required
         brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
         throttleBand     = 0.15   % Speed band [m/s] around target before switching
@@ -145,10 +150,13 @@ classdef DriverModel < handle
         function [throttle, brake, steer] = computeInputs(obj, state)
             % COMPUTEINPUTS Decide throttle and brake for the current state
             %
-            % The command policy is deliberately close to bang-bang:
-            %   - brake hard if the car is above the latest-braking envelope
-            %   - coast only at the local apex
-            %   - otherwise use full throttle
+            % Fallback controller (used only when no feedforward lap plan is
+            % available). Builds a local backward speed envelope from upcoming
+            % curvature, derives the required longitudinal accel to follow it,
+            % then maps that accel onto pedals via the same physics-based pedal
+            % map as the planner (DriverInputPlanner.computePedals). This yields
+            % partial throttle, true coasting, and gradual braking instead of the
+            % previous bang-bang (WOT / hard-brake / apex-only-coast) policy.
             % Steering is a sine-shaped command through each corner segment,
             % with peak steering at the segment midpoint/apex.
 
@@ -163,7 +171,9 @@ classdef DriverModel < handle
             end
             idx = max(1, min(idx, nPts));
 
-            [maxLateralAccel, maxBrakeAccel] = obj.estimateAvailableAcceleration(state);
+            caps = obj.estimateAvailableAcceleration(state);
+            maxLateralAccel = caps.maxLatAccel;
+            maxBrakeAccel = caps.maxBrakeAccel;
             lookAheadDist = obj.computeLookaheadDistance(speed, maxBrakeAccel);
             idxEnd = find(arcLen <= s + lookAheadDist, 1, 'last');
             if isempty(idxEnd)
@@ -182,37 +192,31 @@ classdef DriverModel < handle
                 profileS, curvature(profileIdx), maxLateralAccel, maxBrakeAccel);
 
             targetSpeed = profileSpeed(1);
-            nextTargetSpeed = profileSpeed(min(2, numel(profileSpeed)));
-            speedTolerance = max(obj.throttleBand, obj.hysteresis * max(targetSpeed, 1));
-            speedError = speed - targetSpeed;
 
-            [apexDistance, atApex, inActiveCorner, afterApex] = obj.distanceToRelevantApex(idx, s);
             [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
             longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
 
-            throttle = 0;
-            brake = 0;
-
-            if inActiveCorner && afterApex
-                throttle = 1.0;
-            elseif atApex
-                throttle = 0;
-                brake = 0;
-            elseif speedError > speedTolerance
-                brake = obj.computeBrakeCommand(speedError);
-            elseif nextTargetSpeed < targetSpeed - speedTolerance && ...
-                    speed >= targetSpeed - speedTolerance
-                brake = obj.minBrakeCommand;
-            else
-                throttle = 1.0;
+            % Required longitudinal accel to track the local speed envelope,
+            % taken from the leading edge of the backward speed profile (finite
+            % difference over the first segment). Used as feedforward into the
+            % physics-based pedal map below.
+            axRef = 0;
+            if numel(profileSpeed) >= 2 && numel(profileS) >= 2
+                ds0 = max(profileS(2) - profileS(1), 0.001);
+                axRef = (profileSpeed(2)^2 - profileSpeed(1)^2) / (2 * ds0);
             end
 
-            % Do not coast just because the speed error is tiny; outside the
-            % apex zone, choose either throttle or brake.
-            if throttle == 0 && brake == 0 && abs(apexDistance) > obj.apexDistanceTol
-                throttle = 1.0;
-            end
+            % Blend the feedforward accel with a small proportional correction
+            % on speed error so the closed-loop driver converges to targetSpeed.
+            speedError = speed - targetSpeed;
+            axRef = axRef - 0.5 * speedError;
 
+            [throttle, brake] = DriverInputPlanner.computePedals( ...
+                axRef, caps.F_drive_full, caps.F_resistance, ...
+                obj.vehicleManager.totalMass, caps.brakeForceAccel);
+
+            % Reduce longitudinal command as steering usage grows (combined
+            % grip), preserving the existing traction-ellipse coupling.
             throttle = throttle * longitudinalCommandScale;
             brake = brake * longitudinalCommandScale;
         end
@@ -834,9 +838,20 @@ classdef DriverModel < handle
             curvature = curvature(:);
         end
 
-        function [maxLateralAccel, maxBrakeAccel] = estimateAvailableAcceleration(obj, state)
+        function caps = estimateAvailableAcceleration(obj, state)
+            % ESTIMATEAVAILABLEACCELERATION Vehicle longitudinal/lateral capability.
+            %   Returns a struct of capability fields used by the closed-loop
+            %   driver and the physics-based pedal map (computePedals):
+            %     maxLatAccel     - lateral grip accel for corner-speed targets
+            %     maxBrakeAccel   - total decel capability (brake + drag + roll)
+            %     F_drive_full    - full-throttle wheel force, traction-capped [N]
+            %     F_resistance    - drag + rolling resistance at this speed [N]
+            %     maxDriveAccel   - net forward accel capability [m/s^2]
+            %     coastDecel      - free lift-off decel [m/s^2]
+            %     brakeForceAccel - hydraulic-brake-only decel per unit brake [m/s^2]
             vm = obj.vehicleManager;
             aeroForces = vm.aero.computeForces(state);
+            F_drag = max(0, aeroForces.F_drag);
             F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
             W = vm.totalMass * vm.g;
             totalNormalLoad = W + F_downforce;
@@ -866,10 +881,35 @@ classdef DriverModel < handle
             maxBrakeForce = min(vm.brakeForceCoefficient * totalNormalLoad, brakeGripLimit);
             rollingResistance = 0.015 * totalNormalLoad;
             brakeLimitedAccel = ...
-                (maxBrakeForce + aeroForces.F_drag + rollingResistance) / vm.totalMass;
+                (maxBrakeForce + F_drag + rollingResistance) / vm.totalMass;
 
             maxBrakeAccel = min(maxTireAccel, brakeLimitedAccel) * obj.brakingUsage;
             maxBrakeAccel = max(maxBrakeAccel, 0.1);
+
+            % --- Forward drive capability (speed- and load-dependent) ---
+            % Full-throttle wheel force from the powertrain map (planner-safe,
+            % stateless probe), capped by the driven (rear) axle's traction.
+            F_drive_full = 0;
+            if ~isempty(vm.powertrain)
+                F_drive_full = max(0, vm.powertrain.computeMaxDriveForce( ...
+                    max(state.speed, 0)));
+            end
+            driveUsage = max(0, min(1, obj.driveUsage));
+            F_traction_rear = driveUsage * rearMu * rearNormalLoad;
+            F_drive_full = min(F_drive_full, F_traction_rear);
+
+            F_resistance = F_drag + rollingResistance;
+            maxDriveAccel = max(0, (F_drive_full - F_resistance) / vm.totalMass);
+            coastDecel = F_resistance / vm.totalMass;
+            brakeForceAccel = max(0.1, obj.brakingUsage * maxBrakeForce / vm.totalMass);
+
+            caps.maxLatAccel = maxLateralAccel;
+            caps.maxBrakeAccel = maxBrakeAccel;
+            caps.F_drive_full = F_drive_full;
+            caps.F_resistance = F_resistance;
+            caps.maxDriveAccel = maxDriveAccel;
+            caps.coastDecel = coastDecel;
+            caps.brakeForceAccel = brakeForceAccel;
         end
 
         function lookAheadDist = computeLookaheadDistance(obj, speed, maxBrakeAccel)
@@ -903,8 +943,11 @@ classdef DriverModel < handle
         end
 
         function brake = computeBrakeCommand(obj, speedError)
+            % COMPUTEBRAKECOMMAND Gradual proportional brake from speed error.
+            %   No longer floored at minBrakeCommand; the new pedal map
+            %   (computePedals) produces gradual [0,1] brake commands. Kept for
+            %   any callers that want a direct speed-error -> brake mapping.
             brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = max(obj.minBrakeCommand, brake);
             brake = max(0, min(1, brake));
         end
 
