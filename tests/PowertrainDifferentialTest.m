@@ -56,6 +56,25 @@ verifyGreaterThan(testCase, expectedDriven, 0);
 verifyGreaterThan(testCase, expectedDriven, 0.5);
 end
 
+function testSimulatorSplitsReflectedRotorInertiaAcrossRearWheels(testCase)
+warningState = warning('query', 'components:Tire:SimpleTireDeprecated');
+cleanup = onCleanup(@() warning(warningState.state, 'components:Tire:SimpleTireDeprecated'));
+warning('off', 'components:Tire:SimpleTireDeprecated');
+
+pt = createPowertrain();
+tire = components.Tire.SimpleTire();
+tire.wheelInertia = 0.5;
+vehicle = VehicleManager([], [], pt, tire, []);
+simulator = Simulator(vehicle, [], 0.001);
+inertia = simulator.getWheelInertia();
+
+expectedRear = tire.wheelInertia + 0.5 * pt.getReflectedRotorInertia();
+verifyEqual(testCase, inertia.FL, tire.wheelInertia, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.FR, tire.wheelInertia, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.RL, expectedRear, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.RR, expectedRear, 'RelTol', 1e-12);
+end
+
 function testGetMaxTorqueAgreesWithDrivePath(testCase)
 % Fix 5a: getMaxTorque must derive from the same wheel-force path as
 % computeDriveTorque, so telemetry and the sim cannot disagree.

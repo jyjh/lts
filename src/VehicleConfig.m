@@ -203,7 +203,10 @@ classdef VehicleConfig
             %   Pacejka Magic Formula (MF 6.1) via MFeval. Grip is set entirely
             %   by the tire data (its peak mu with load sensitivity); there is
             %   no separate surface-friction cap, so the driver and the tire
-            %   model agree on grip. tirFile lives in +Tire/.
+            %   model agree on grip at the dry reference surface.
+            %   surfaceMuReference is the track Mu value that maps to the
+            %   unscaled tire data; procedural dry tracks use Mu = 1.2.
+            %   tirFile lives in +Tire/.
             %     tirFile:  Pacejka .tir filename in +Tire/
             %     wheelInertia [kg*m^2] wheel+tire+brake rotating inertia/corner
             %     relaxationLength [m] contact-patch slip lag (0 = steady-state)
@@ -216,6 +219,7 @@ classdef VehicleConfig
                 'tirFile', '43105_18x7.5_10_R25B_7.tir', ...
                 'wheelInertia', 0.5, ...
                 'relaxationLength', 0.30, ...
+                'surfaceMuReference', 1.2, ...
                 'wheelRadius', 0.241935, ...
                 'rollingResistanceCoeff', 0.015, ...
                 'bearingDragCoeff', 0);

@@ -125,7 +125,7 @@ classdef SimpleTire < components.Tire.TireModel
             kappa = max(-1, min(1, kappa));
         end
 
-        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia)
+        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia, longitudinalSpeed)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
             %   Optional inertia override [kg*m^2]; defaults to obj.wheelInertia.
             omega = cornerState.angularVelocity;
@@ -135,8 +135,13 @@ classdef SimpleTire < components.Tire.TireModel
             if nargin >= 6 && ~isempty(inertia) && inertia > 0
                 I = inertia;  % per-wheel override (driven axle: +reflected rotor)
             end
+            if nargin < 7 || isempty(longitudinalSpeed)
+                longitudinalSpeed = omega * R;
+            end
 
-            netTorque = driveTorque - sign(omega) * brakeTorque - Fx * R;
+            brakeSign = components.Tire.SimpleTire.computeBrakeTorqueSign( ...
+                omega, longitudinalSpeed, driveTorque);
+            netTorque = driveTorque - brakeSign * brakeTorque - Fx * R;
             omega = omega + (netTorque / I) * dt;
 
             % One-direction clutch unless reverse rotation is enabled.
@@ -167,11 +172,15 @@ classdef SimpleTire < components.Tire.TireModel
                 suspensionKinematics.RR.camberAngle, mu);
         end
 
-        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu, ~, ~)
+        function updateCorner(obj, cornerState, normalLoad, slipAngle, slipRatio, camberAngle, varargin)
             % UPDATECORNER Evaluate the simple tire model for one corner
             % Trailing dt/longSpeed args are accepted (and ignored) for
             % interface parity with PacejkaTire; the simple model has no
             % relaxation layer.
+            mu = obj.peakMuLat;
+            if ~isempty(varargin) && ~isempty(varargin{1})
+                mu = varargin{1};
+            end
             cornerState.normalForce = normalLoad;
             cornerState.slipAngle = slipAngle;
             cornerState.slipRatio = slipRatio;
@@ -253,6 +262,18 @@ classdef SimpleTire < components.Tire.TireModel
             longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
             latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
             alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
+        end
+
+        function brakeSign = computeBrakeTorqueSign(omega, longitudinalSpeed, driveTorque)
+            if abs(omega) > 1e-6
+                brakeSign = sign(omega);
+            elseif abs(longitudinalSpeed) > 1e-6
+                brakeSign = sign(longitudinalSpeed);
+            elseif abs(driveTorque) > 1e-6
+                brakeSign = sign(driveTorque);
+            else
+                brakeSign = 0;
+            end
         end
     end
 end

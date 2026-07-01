@@ -139,6 +139,9 @@ classdef VehicleManager
             tire = components.Tire.PacejkaTire(config.tire.tirFile);
             tire.wheelInertia = config.tire.wheelInertia;
             tire.relaxationLength = config.tire.relaxationLength;
+            if isfield(config.tire, 'surfaceMuReference')
+                tire.surfaceMuReference = config.tire.surfaceMuReference;
+            end
             % Let wheels spin down through zero when the powertrain applies
             % coastdown/regen drag, so the drag is not masked by the one-way
             % clutch. Forward-only sims keep the clamp (stable default).

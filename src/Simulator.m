@@ -171,13 +171,14 @@ classdef Simulator
             % limiter sees the converged motor speed.
             tireInputState = state;
             tireInputState.steer = steer;
+            wheelLongSpeeds = obj.computeCornerLongitudinalSpeeds(tireInputState);
 
             nWheelIter = max(1, round(obj.wheelSolveIterations));
             for iter = 1:nWheelIter
-                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL);
-                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR);
-                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL);
-                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt, inertia.RR);
+                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds.FL);
+                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds.FR);
+                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL, wheelLongSpeeds.RL);
+                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt, inertia.RR, wheelLongSpeeds.RR);
 
                 % Re-solve the differential at the updated wheel speeds so a
                 % locked diff enforces a common speed and an LSD re-biases
@@ -206,7 +207,7 @@ classdef Simulator
                 % patch lag) advances only on the final iteration so the
                 % lag time constant is not shrunk by the sub-iteration.
                 if iter < nWheelIter
-                    tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0);
+                    tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0, false);
                 else
                     tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, obj.dt);
                 end
@@ -215,17 +216,19 @@ classdef Simulator
 
             % One predictor/corrector pass for load transfer using current
             % force-derived body accelerations.
-            correctedLoadState = state;
-            correctedLoadState.steer = steer;
-            correctedLoadState.ax = dynamics.ax;
-            correctedLoadState.ay = dynamics.ay;
-            cornerLoads = vm.suspension.computeCornerLoads( ...
-                correctedLoadState, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
-            % Re-evaluate tire forces at the corrected loads with dt = 0: the
-            % contact-patch relaxation already advanced once on the final
-            % wheel-solve iteration above, so it must not advance again here.
-            tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0);
-            dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
+            if ~obj.hasChassis()
+                correctedLoadState = state;
+                correctedLoadState.steer = steer;
+                correctedLoadState.ax = dynamics.ax;
+                correctedLoadState.ay = dynamics.ay;
+                cornerLoads = vm.suspension.computeCornerLoads( ...
+                    correctedLoadState, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass, obj.dt);
+                % Re-evaluate tire forces at the corrected loads with dt = 0: the
+                % contact-patch relaxation already advanced once on the final
+                % wheel-solve iteration above, so it must not advance again here.
+                tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0);
+                dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
+            end
 
             % Integrate the sprung-mass attitude (heave/pitch/roll) from the
             % converged body accelerations and aero forces. The chassis owns
@@ -248,7 +251,11 @@ classdef Simulator
             % per-wheel torque model (sum of Crr*Fz over the four corners).
             % This is already reflected in the tire Fx above, not applied again.
             corners = vm.tire;
-            F_rollResist = vm.tire.rollingResistanceCoeff * ...
+            rollingResistanceCoeff = 0;
+            if isprop(vm.tire, 'rollingResistanceCoeff')
+                rollingResistanceCoeff = vm.tire.rollingResistanceCoeff;
+            end
+            F_rollResist = rollingResistanceCoeff * ...
                 (corners.FL.normalForce + corners.FR.normalForce + ...
                  corners.RL.normalForce + corners.RR.normalForce);
 
@@ -425,6 +432,7 @@ classdef Simulator
                 'totalLaps', totalLaps, ...
                 'lapBreakS', (0:totalLaps)' * baseTrackLen, ...
                 'nPts', nPts);
+            trackData = obj.precomputeTrackSegments(trackData);
             initialState = obj.initializePlanarState(initialState, trackData);
             if ~isempty(obj.driverModel) && ...
                     ismethod(obj.driverModel, 'prepareForSimulation')
@@ -1141,6 +1149,12 @@ classdef Simulator
             end
 
             nSegments = max(trackData.nPts - 1, 1);
+            hasSegmentCache = isfield(trackData, 'segmentVectors') && ...
+                isfield(trackData, 'segmentLengths') && ...
+                isfield(trackData, 'segmentInvLen2');
+            if hasSegmentCache
+                nSegments = max(size(trackData.segmentVectors, 1), 1);
+            end
             previousIdx = max(1, min(previousIdx, trackData.nPts));
             backWindow = 10;
             forwardWindow = 80;
@@ -1155,14 +1169,24 @@ classdef Simulator
             queryPoint = [x, y];
             for segIdx = searchStart:searchEnd
                 p0 = trackData.points(segIdx, :);
-                p1 = trackData.points(segIdx + 1, :);
-                v = p1 - p0;
-                len2 = dot(v, v);
-                if len2 <= eps
+                if hasSegmentCache
+                    v = trackData.segmentVectors(segIdx, :);
+                    invLen2 = trackData.segmentInvLen2(segIdx);
+                else
+                    p1 = trackData.points(segIdx + 1, :);
+                    v = p1 - p0;
+                    len2 = dot(v, v);
+                    if len2 > eps
+                        invLen2 = 1 / len2;
+                    else
+                        invLen2 = 0;
+                    end
+                end
+                if invLen2 <= 0
                     t = 0;
                     projectedPoint = p0;
                 else
-                    t = dot(queryPoint - p0, v) / len2;
+                    t = dot(queryPoint - p0, v) * invLen2;
                     t = max(0, min(1, t));
                     projectedPoint = p0 + t * v;
                 end
@@ -1176,14 +1200,23 @@ classdef Simulator
                 end
             end
 
-            segmentLength = trackData.arcLen(bestIdx + 1) - trackData.arcLen(bestIdx);
+            if hasSegmentCache
+                segmentLength = trackData.segmentLengths(bestIdx);
+            else
+                segmentLength = trackData.arcLen(bestIdx + 1) - trackData.arcLen(bestIdx);
+            end
             refS = trackData.arcLen(bestIdx) + bestT * max(segmentLength, 0);
             refS = max(0, min(trackData.length, refS));
 
             if segmentLength > eps
-                p0 = trackData.points(bestIdx, :);
-                p1 = trackData.points(bestIdx + 1, :);
-                refHeading = atan2(p1(2) - p0(2), p1(1) - p0(1));
+                if hasSegmentCache
+                    v = trackData.segmentVectors(bestIdx, :);
+                else
+                    p0 = trackData.points(bestIdx, :);
+                    p1 = trackData.points(bestIdx + 1, :);
+                    v = p1 - p0;
+                end
+                refHeading = atan2(v(2), v(1));
             else
                 refHeading = trackData.heading(bestIdx);
             end
@@ -1217,7 +1250,7 @@ classdef Simulator
                 'onTrack', onTrack);
         end
 
-        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt)
+        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt, computePeakMu)
             % UPDATEPLANARTIREFORCES Evaluate tire forces and assemble body
             % forces / yaw moment from all four corners.
             %   tireData = updatePlanarTireForces(state, cornerLoads)
@@ -1229,6 +1262,9 @@ classdef Simulator
             %   physics step (not once per solve iteration).
             if nargin < 4
                 dt = obj.dt;
+            end
+            if nargin < 5 || isempty(computePeakMu)
+                computePeakMu = true;
             end
             vm = obj.vehicleManager;
             kin = obj.getCornerKinematics(state.steer);
@@ -1270,6 +1306,7 @@ classdef Simulator
             % Per-corner contact-patch longitudinal speeds feed the tire
             % relaxation length (transient slip lag).
             longSpeedVec = longSpeeds;
+            surfaceMu = obj.getStateSurfaceMu(state);
 
             if isempty(obj.cachedTireHasBatchUpdate)
                 obj.cachedTireHasBatchUpdate = ismethod(vm.tire, 'updateAllCorners');
@@ -1280,7 +1317,8 @@ classdef Simulator
                     slipAngles(1), slipAngles(2), slipAngles(3), slipAngles(4), ...
                     slipRatios(1), slipRatios(2), slipRatios(3), slipRatios(4), ...
                     kin.FL.camberAngle, kin.FR.camberAngle, ...
-                    kin.RL.camberAngle, kin.RR.camberAngle, dt, longSpeedVec);
+                    kin.RL.camberAngle, kin.RR.camberAngle, dt, longSpeedVec, ...
+                    surfaceMu, computePeakMu);
             else
                 % Fallback for tire models without a batch update: evaluate
                 % each corner individually. Wheel omega is integrated in the
@@ -1291,7 +1329,8 @@ classdef Simulator
                     cornerKin = kin.(corner);
                     vm.tire.updateCorner(tireState, cornerLoads.(corner), ...
                         slipAngles(i), slipRatios(i), ...
-                        cornerKin.camberAngle, dt, longSpeeds(i));
+                        cornerKin.camberAngle, surfaceMu, dt, longSpeeds(i), ...
+                        computePeakMu);
                 end
             end
 
@@ -1427,6 +1466,47 @@ classdef Simulator
             [kin.RR.xPosition, kin.RR.yPosition] = obj.getWheelPosition('RR');
         end
 
+        function trackData = precomputeTrackSegments(~, trackData)
+            % PRECOMPUTETRACKSEGMENTS Cache segment geometry used by projection.
+            if ~isfield(trackData, 'points') || size(trackData.points, 1) < 2
+                trackData.segmentVectors = zeros(0, 2);
+                trackData.segmentLengths = zeros(0, 1);
+                trackData.segmentInvLen2 = zeros(0, 1);
+                return;
+            end
+            segmentVectors = diff(trackData.points, 1, 1);
+            segmentLengths = hypot(segmentVectors(:,1), segmentVectors(:,2));
+            len2 = segmentLengths.^2;
+            segmentInvLen2 = zeros(size(len2));
+            valid = len2 > eps;
+            segmentInvLen2(valid) = 1 ./ len2(valid);
+            trackData.segmentVectors = segmentVectors;
+            trackData.segmentLengths = segmentLengths;
+            trackData.segmentInvLen2 = segmentInvLen2;
+        end
+
+        function longSpeeds = computeCornerLongitudinalSpeeds(obj, state)
+            kin = obj.getCornerKinematics(state.steer);
+            corners = {'FL', 'FR', 'RL', 'RR'};
+            for i = 1:numel(corners)
+                corner = corners{i};
+                cornerKin = kin.(corner);
+                vxCorner = state.vx - state.yawRate * cornerKin.yPosition;
+                vyCorner = state.vy + state.yawRate * cornerKin.xPosition;
+                wh = cornerKin.steerAngle + cornerKin.toeAngle;
+                longSpeeds.(corner) = vxCorner * cos(wh) + vyCorner * sin(wh);
+            end
+        end
+
+        function surfaceMu = getStateSurfaceMu(~, state)
+            surfaceMu = 1.2;
+            hasMu = (isobject(state) && isprop(state, 'mu')) || ...
+                (isstruct(state) && isfield(state, 'mu'));
+            if hasMu && ~isempty(state.mu) && isfinite(state.mu)
+                surfaceMu = state.mu;
+            end
+        end
+
         function [x, y] = getWheelPosition(obj, corner)
             vm = obj.vehicleManager;
             frontArm = vm.wheelbase * (1 - vm.staticFrontWeight);
@@ -1489,7 +1569,7 @@ classdef Simulator
             if ~isempty(vm.powertrain) && ...
                     isa(vm.powertrain, 'components.Powertrain.PowertrainComponent') && ...
                     ismethod(vm.powertrain, 'getReflectedRotorInertia')
-                drivenI = baseI + vm.powertrain.getReflectedRotorInertia();
+                drivenI = baseI + 0.5 * vm.powertrain.getReflectedRotorInertia();
             end
             inertia = struct('FL', baseI, 'FR', baseI, 'RL', drivenI, 'RR', drivenI);
             obj.cachedWheelInertia = inertia;

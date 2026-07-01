@@ -64,6 +64,47 @@ verifyTrue(testCase, any(contains(keysAfterLowSpeed, '_1.0')));
 verifyGreaterThan(testCase, numel(keysAfterHighSpeed), numel(keysAfterLowSpeed));
 end
 
+function testPacejkaSurfaceMuScalesForcesFromDryReference(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+corner = tire.FL;
+
+tire.updateCorner(corner, 1000, 0.04, 0.06, 0, 0, 20);
+baselineFx = corner.Fx;
+baselineFy = corner.Fy;
+baselineMz = corner.Mz;
+baselinePeakMu = corner.peakMu;
+
+tire.updateCorner(corner, 1000, 0.04, 0.06, 0, 1.2, 0, 20);
+dryFx = corner.Fx;
+dryFy = corner.Fy;
+dryMz = corner.Mz;
+dryPeakMu = corner.peakMu;
+
+verifyEqual(testCase, dryFx, baselineFx, 'RelTol', 1e-12);
+verifyEqual(testCase, dryFy, baselineFy, 'RelTol', 1e-12);
+verifyEqual(testCase, dryMz, baselineMz, 'RelTol', 1e-12);
+verifyEqual(testCase, dryPeakMu, baselinePeakMu, 'RelTol', 1e-12);
+
+tire.updateCorner(corner, 1000, 0.04, 0.06, 0, 0.6, 0, 20);
+verifyEqual(testCase, corner.Fx, 0.5 * dryFx, 'RelTol', 1e-12);
+verifyEqual(testCase, corner.Fy, 0.5 * dryFy, 'RelTol', 1e-12);
+verifyEqual(testCase, corner.Mz, 0.5 * dryMz, 'RelTol', 1e-12);
+verifyEqual(testCase, corner.peakMu, 0.5 * dryPeakMu, 'RelTol', 1e-12);
+end
+
+function testZeroSpeedWheelBrakingUsesRoadLongitudinalSpeed(testCase)
+tire = createPacejkaTire();
+corner = tire.FL;
+corner.normalForce = 1000;
+corner.angularVelocity = 0;
+corner.Fx = -1000;
+
+tire.updateWheelDynamics(corner, 0, 500, 0.001, 0.5, 20);
+
+verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
+end
+
 function tire = createPacejkaTire()
 tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 end
