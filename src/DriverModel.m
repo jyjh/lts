@@ -1,684 +1,604 @@
 classdef DriverModel < handle
-    % DRIVERMODEL Decides throttle and brake inputs from a racing speed profile
+    % DRIVERMODEL A preview-follow racing driver for FSAE-style cars.
     %
-    % The primary path consumes a feedforward lap plan built by
-    % DriverInputPlanner (target speed, axRef, throttle/brake/steer refs) and
-    % adds closed-loop path-following corrections. The fallback path
-    % (computeInputs) builds a local backward speed envelope from upcoming
-    % curvature and maps the required longitudinal accel onto pedals via the
-    % same physics-based pedal map (DriverInputPlanner.computePedals), so both
-    % paths produce partial throttle, true coasting, and gradual braking
-    % rather than a bang-bang WOT/hard-brake policy. Steering is shaped by the
-    % active corner segment, peaking at a configurable apex phase that
-    % defaults to the corner midpoint.
+    % Drives the car the way a real driver does: it commits to a racing line,
+    % holds a consistent sub-limit grip margin, looks ahead through corners,
+    % trail-brakes in and squeezes the throttle out, and—critically—reacts to
+    % understeer/oversteer. The goal is not theoretical-optimal lap time but
+    % repeatable, correlatable behavior so setup changes produce realistic
+    % deltas in line, speed, and pedal use.
+    %
+    % Architecture (all relative to a pre-built racing line):
+    %
+    %   prepareForSimulation:
+    %     LapPlanner.buildRacingLine   -> minimum-curvature line (full width)
+    %     LapPlanner.buildVelocityProfile -> skill-governed speed envelope
+    %
+    %   computeInput (every step):
+    %     Steering:  feedforward curvature + look-ahead heading + gentle
+    %                cross-track + slip-reactive counter/breathe + edge avoid
+    %     Longi:     speed-error feedback on axRef, single traction-circle
+    %                taper (lift->coast->squeeze), mapped to pedals via PedalMap
+    %                plus drive-slip traction control.
+    %
+    % Public contract (unchanged from the legacy driver, so Simulator.m and
+    % run_simulation.m need no edits):
+    %   DriverModel(vehicleManager)
+    %   obj = prepareForSimulation(obj, initialState, trackData, dt)
+    %   input = computeInput(obj, state, observation)
+    % where input is a struct with throttle, brake, steer.
 
     properties
-        % Reference to VehicleManager for component access
+        % ---- Reference to VehicleManager for component access ----
         vehicleManager
 
-        % Tuneable driver parameters
-        brakingLookahead = 1.0    % Multiplier on calculated braking distance
-        lookaheadTime    = 2.0    % Minimum seconds ahead to inspect
-        minLookaheadDist = 15     % Minimum lookahead distance [m]
-        hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
-        corneringUsage   = 0.8   % Fraction of lateral grip used for speed targets
-        brakingUsage     = 0.75   % Fraction of braking capability used in planning
-        driveUsage       = 0.85   % Fraction of tractive/drive grip used in planning
-        minBrakeCommand  = 0.85   % Minimum brake command once braking is required
-        brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
-        throttleBand     = 0.15   % Speed band [m/s] around target before switching
-        apexDistanceTol  = 0.75   % Distance around an apex allowed to coast [m]
-        curvatureTol     = 1e-6   % Curvature below this is treated as straight
-        steeringUsage    = 1.0    % Fraction of path curvature converted to steer
-        maxSteeringAngle = 0.6    % Steering angle limit [rad]
-        minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
-        % Traction-circle coupling for the active (planned) path: the throttle
-        % is scaled down as lateral grip demand grows, so the car lifts into a
-        % coast at the apex (max lateral grip) rather than holding cruise
-        % throttle that would eat the rear axle's cornering capacity. The
-        % reserve is the minimum throttle fraction kept even at peak lateral
-        % demand; 0 gives a pure lift-off coast through the apex.
-        tractionCircleReserve = 0      % Min throttle fraction at peak lateral grip [0-1]
-        trailBrakeReserve = 0.30       % Min brake fraction kept at peak lateral grip (trail-braking) [0-1]
-        corneringGripMargin = 0.95     % Lateral-grip fraction at which throttle is fully reserved
-        apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
-        stanleyGain      = 1.5    % Cross-track correction gain
-        stanleySoftening = 1.5    % Low-speed softening term [m/s]
-        headingGain      = 1.0    % Heading-error steering correction gain
-        edgeSlowdownMargin = 0.75 % Start slowing this far from track edge [m]
-        edgeBrakeCommand = 0.45   % Brake added near/outside track edge
-        edgeSteeringMargin = 0.75 % Start steering away this far from track edge [m]
-        edgeSteeringGain = 0.40   % Track-edge steering correction gain [rad]
-        correctionSlowdownThreshold = 0.65 % Steering correction use before slowing
-        correctionBrakeCommand = 0.15      % Brake added for large path corrections
-        throttleRampTime = 0.10   % Time from 0 to 100% throttle [s]
-        brakeRampTime    = 0.10   % Time from 0 to 100% brake [s]
-        steeringRampTime = 0.10   % Time from center to full steering command [s]
-        pedalSwitchHoldTime = 0.10    % Opposite pedal request must persist [s]
-        immediateBrakeSwitchThreshold = 0.50 % Brake command that bypasses switch dwell
-        pedalReductionHoldTime = 0.15 % Reduction must persist before pedal follows [s]
-        pedalReleaseFilterTime = 0.20 % Smooth brief same-pedal reductions [s]
-        pedalTargetDeadband = 0.04    % Ignore small same-pedal target changes
-        launchSpeedThreshold = 0.5 % Below this, do not correction-brake under target speed [m/s]
-        cornerOutsideBiasFraction = 0.35 % Fraction of half-width targeted outside in corners
-        cornerOutsideBiasMax = 0.7 % Max outside target offset from centerline [m]
-        enableDriveSlipLimit = true % Reduce throttle when driven rear slip is excessive
-        driveSlipTarget = 0.12      % Rear slip ratio where throttle limiting starts
-        driveSlipCutoff = 0.35      % Rear slip ratio where throttle is fully cut
+        % ---- Driver skill (the single margin knob) ----
+        % Fraction of the grip/drive/brake envelope the driver uses. Lower is
+        % safer and more repeatable; higher is quicker but less forgiving. The
+        % car runs a consistent fraction below the limit so setup deltas show
+        % up as monotonic, correlatable changes.
+        driverSkill = 0.90
 
-        % Cached track geometry
-        trackArcLen      = []
-        trackCurvature   = []
+        % ---- Racing line ----
+        lineUsage = 0.78          % Fraction of half-width the line may use
 
-        % Planned lap controls owned by the driver/controller layer
-        inputPlanner     = []
-        inputProfile     = []
+        % ---- Preview steering ----
+        % The feedforward curvature term (atan(L*kappa)) is the primary steer
+        % command and is physically correct for the line. The look-ahead and
+        % cross-track terms are small corrections on top of it, so their gains
+        % are kept modest to avoid over-reacting to tight corners (which would
+        % saturate steering and spin the car).
+        lookaheadTime = 0.4       % Seconds of preview -> lookahead distance
+        minLookahead  = 2.0       % Minimum lookahead distance [m]
+        kHeading      = 0.35      % Look-ahead heading-error steer gain
+        kCross        = 0.5       % Cross-track (to racing line) steer gain
+        softening     = 3.0       % Low-speed Stanley softening term [m/s]
+        steeringUsage = 1.0       % Fraction of line curvature -> feedforward steer
+        previewSteerLimit = 0.15  % Cap on preview/cross-track correction [rad]
+        maxSteeringAngle = 0.6    % Road-wheel angle limit [rad]
 
-        % Driver actuator state
-        inputDt          = 0.001
-        lastThrottle     = 0
-        lastBrake        = 0
-        lastSteer        = 0
-        filteredThrottleTarget = 0
-        filteredBrakeTarget = 0
-        pendingThrottleReductionTarget = NaN
-        pendingThrottleReductionTime = 0
-        pendingBrakeReductionTarget = NaN
-        pendingBrakeReductionTime = 0
-        pendingPedalSwitchTarget = ""
-        pendingPedalSwitchTime = 0
+        % ---- Slip stabilization (the human reaction) ----
+        enableSlipStabilizer = true
+        kOversteer   = 1.0        % Counter-steer gain when rear slides
+        slipTarget   = 0.05       % Target |body slip| kept by counter-steer [rad]
+        understeerThrottleCut = 0.5  % Throttle fraction kept when understeering
+        understeerYawErr = 0.05   % Yaw-rate deficit [rad/s] that triggers breathe
+
+        % ---- Longitudinal control ----
+        launchSpeedThreshold = 3.0  % Below this speed, pin throttle to launch [m/s]
+        kSpeed       = 0.5        % Speed-error -> accel feedback gain
+        % Traction-circle taper. ay = v^2*|kappa| uses up lateral grip; the
+        % remaining longitudinal fraction is the ellipse below. The throttle
+        % collapses to tractionReserve (0 -> coast) at peak lateral demand, and
+        % the brake trails to trailBrakeReserve (gentle trail-braking).
+        tractionReserve   = 0.0   % Min throttle fraction at peak lateral grip
+        trailBrakeReserve = 0.30  % Min brake fraction at peak lateral grip
+        corneringLiftStart = 0.55 % Lateral-grip fraction below which throttle is unhindered
+
+        % ---- Drive-slip traction control (retained, proven) ----
+        enableDriveSlipLimit = true
+        driveSlipTarget = 0.12    % Rear slip ratio where throttle limiting starts
+        driveSlipCutoff = 0.35    % Rear slip ratio where throttle is fully cut
+
+        % ---- Track-edge safety ----
+        edgeMargin    = 0.75      % Start reacting this far from the edge [m]
+        edgeSteerGain = 0.30      % Steer-back gain near the edge [rad]
+        edgeSlowGain  = 0.6       % Throttle reduction near the edge [0-1]
+        edgeBrakeAdd  = 0.2       % Brake added near/outside the edge [0-1]
+
+        % ---- Light actuator smoothing ----
+        % Single first-order filter on each pedal for smoothness. The simulator
+        % also enforces a steering rate limit, so no steering slew is needed.
+        pedalFilterTime = 0.10    % Pedal first-order time constant [s]
+
+        % ---- Cached plan (built in prepareForSimulation) ----
+        racingLine  = []          % LapPlanner.buildRacingLine output
+        velProfile  = []          % LapPlanner.buildVelocityProfile output
+
+        % ---- Driver actuator state ----
+        inputDt = 0.001
+        lastThrottle = 0
+        lastBrake = 0
+        filteredThrottle = 0
+        filteredBrake = 0
         inputStateInitialized = false
+        stuckTimer = 0   % consecutive near-stationary steps (for spin recovery)
     end
 
     properties (Access = private)
-        trackClosedLoop = false
-        trackBaseLength = NaN
-        trackTotalLaps = 1
-        trackLapBreakS = []
-        steadyCircleTrack = false
+        % Lookup index of the car's last projected reference point, used to pick
+        % the matching racing-line sample without re-searching the polyline.
+        lastIndex = 1
     end
 
     methods
         function obj = DriverModel(vehicleManager)
-            % DRIVERMODEL Construct with a VehicleManager reference
+            % DRIVERMODEL Construct with a VehicleManager reference.
             obj.vehicleManager = vehicleManager;
-            obj = obj.cacheTrackGeometry();
         end
 
         function obj = prepareForSimulation(obj, initialState, trackData, dt)
-            % PREPAREFORSIMULATION Build the driver's feedforward lap plan.
+            % PREPAREFORSIMULATION Build the racing line and velocity profile.
             if nargin >= 4 && isfinite(dt) && dt > 0
                 obj.inputDt = dt;
             end
-            [obj.lastThrottle, obj.lastBrake] = ...
-                obj.resolvePedalTargets(initialState.throttle, initialState.brake);
-            obj.lastSteer = obj.clampSteer(initialState.steer);
-            obj.filteredThrottleTarget = obj.lastThrottle;
-            obj.filteredBrakeTarget = obj.lastBrake;
-            obj.resetPedalReductionMemory();
-            obj.clearPendingPedalSwitch();
+            obj.lastThrottle = max(0, min(1, initialState.throttle));
+            obj.lastBrake = max(0, min(1, initialState.brake));
+            obj.filteredThrottle = obj.lastThrottle;
+            obj.filteredBrake = obj.lastBrake;
             obj.inputStateInitialized = true;
-            obj.trackArcLen = trackData.arcLen(:);
-            obj.trackCurvature = trackData.curvature(:);
-            obj = obj.cacheTrackMetadataFromTrackData(trackData);
-            obj.inputPlanner = DriverInputPlanner(obj.vehicleManager, obj);
-            obj.inputProfile = obj.inputPlanner.buildOpenLoopProfile( ...
-                initialState, trackData);
+            obj.lastIndex = 1;
+
+            lineOpts = struct('lineUsage', obj.lineUsage, ...
+                'maxSteeringAngle', obj.maxSteeringAngle, ...
+                'wheelbase', obj.vehicleManager.wheelbase);
+            obj.racingLine = LapPlanner.buildRacingLine(trackData, lineOpts);
+
+            % Precompute the feedforward steer profile along the racing line.
+            % The line curvature is smoothed first: image-derived centerlines
+            % are jagged (curvature sign-flips every metre), and feeding that
+            % raw into the steer command oscillates the steering and spins the
+            % car. A moving-average over a few metres captures real corners
+            % (which span many points) while suppressing that noise.
+            L = obj.vehicleManager.wheelbase;
+            closed = isfield(trackData, 'closedLoop') && logical(trackData.closedLoop);
+            kappaSmooth = LapPlanner.smoothSignal(obj.racingLine.curvature, 7, closed);
+            obj.racingLine.curvatureSmoothed = kappaSmooth;
+            steerFF = atan(L .* kappaSmooth) * obj.steeringUsage;
+            obj.racingLine.steerFF = max(-obj.maxSteeringAngle, ...
+                min(obj.maxSteeringAngle, steerFF));
+
+            velOpts = struct('driverSkill', obj.driverSkill);
+            obj.velProfile = LapPlanner.buildVelocityProfile( ...
+                obj.racingLine, obj.vehicleManager, initialState, velOpts);
         end
 
         function input = computeInput(obj, state, observation)
             % COMPUTEINPUT Return throttle, brake, and steer for this state.
-            % The simulator supplies observation telemetry; all control
-            % policy and path correction lives in the driver layer.
             if nargin < 3 || isempty(observation)
                 observation = obj.defaultObservationFromState(state);
-            else
-                observation = obj.completeObservation(observation, state);
             end
 
-            if isempty(obj.inputProfile) || isempty(obj.inputPlanner)
-                [throttle, brake, steer] = obj.computeInputs(state);
-                input = struct( ...
-                    'throttle', throttle, ...
-                    'brake', brake, ...
-                    'steer', steer, ...
-                    'targetSpeed', NaN, ...
-                    'axRef', NaN);
-                input = obj.applyInputSlew(input, state);
-                input = obj.applyDriveSlipLimit(input);
+            % If no plan was built (e.g. used outside prepareForSimulation),
+            % fall back to a safe centerline cruise so the car stays controllable.
+            if isempty(obj.racingLine) || isempty(obj.velProfile)
+                input = struct('throttle', 0.5, 'brake', 0, 'steer', 0, ...
+                    'targetSpeed', NaN, 'axRef', 0);
                 return;
             end
 
-            input = obj.inputPlanner.sampleAtProgress( ...
-                obj.inputProfile, observation.s, state.speed);
-            input = obj.correctPlannedInput(input, state, observation);
-            input = obj.applyInputSlew(input, state);
-            input = obj.applyDriveSlipLimit(input);
-        end
+            idx = obj.lineIndex(observation);
 
-        function [throttle, brake, steer] = computeInputs(obj, state)
-            % COMPUTEINPUTS Decide throttle and brake for the current state
-            %
-            % Fallback controller (used only when no feedforward lap plan is
-            % available). Builds a local backward speed envelope from upcoming
-            % curvature, derives the required longitudinal accel to follow it,
-            % then maps that accel onto pedals via the same physics-based pedal
-            % map as the planner (DriverInputPlanner.computePedals). This yields
-            % partial throttle, true coasting, and gradual braking instead of the
-            % previous bang-bang (WOT / hard-brake / apex-only-coast) policy.
-            % Steering is a sine-shaped command through each corner segment,
-            % with peak steering at the segment midpoint/apex.
+            steer = obj.computeSteering(idx, state, observation);
 
-            speed = max(state.speed, 0);
-            s = state.s;
-            [arcLen, curvature] = obj.getTrackGeometry();
-            nPts = numel(curvature);
+            [throttle, brake, axCmd] = obj.computeLongitudinal(idx, state, observation);
 
-            idx = find(arcLen <= s, 1, 'last');
-            if isempty(idx)
-                idx = 1;
+            % Slip-reactive longitudinal breathe for understeer (steering is
+            % already counter-steered in computeSteering for oversteer).
+            [throttle, brake] = obj.applyUndersteerBreathe( ...
+                throttle, brake, idx, state);
+
+            % Drive-slip traction control (rear slip ratio).
+            throttle = obj.applyDriveSlipLimit(throttle, state);
+
+            % Launch: from a standstill (or near it) while still below target
+            % speed, a driver pins the throttle and releases the brake —
+            % otherwise edge/understeer brakes can hold the car at a stop and
+            % the pedal filter never releases. The steer is also faded toward
+            % the planned line steer (not the reactive correction) so the
+            % wheels can build forward momentum instead of being pinned at full
+            % lock, which would just spin the car in place. Disabled once moving.
+            vTarget = obj.velProfile.vTarget(idx);
+            if ~isfinite(vTarget)
+                vTarget = state.speed;   % NaN/inf guard: don't fight the plan
             end
-            idx = max(1, min(idx, nPts));
-
-            caps = obj.estimateAvailableAcceleration(state);
-            maxLateralAccel = caps.maxLatAccel;
-            maxBrakeAccel = caps.maxBrakeAccel;
-            lookAheadDist = obj.computeLookaheadDistance(speed, maxBrakeAccel);
-            idxEnd = find(arcLen <= s + lookAheadDist, 1, 'last');
-            if isempty(idxEnd)
-                idxEnd = idx;
-            end
-            if idx < nPts
-                idxEnd = max(idx + 1, min(idxEnd, nPts));
-            else
-                idxEnd = nPts;
-            end
-
-            profileIdx = idx:idxEnd;
-            profileS = arcLen(profileIdx);
-            profileS(1) = s;
-            profileSpeed = obj.computeBackwardSpeedProfile( ...
-                profileS, curvature(profileIdx), maxLateralAccel, maxBrakeAccel);
-
-            targetSpeed = profileSpeed(1);
-
-            [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
-            longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
-
-            % Required longitudinal accel to track the local speed envelope,
-            % taken from the leading edge of the backward speed profile (finite
-            % difference over the first segment). Used as feedforward into the
-            % physics-based pedal map below.
-            axRef = 0;
-            if numel(profileSpeed) >= 2 && numel(profileS) >= 2
-                ds0 = max(profileS(2) - profileS(1), 0.001);
-                axRef = (profileSpeed(2)^2 - profileSpeed(1)^2) / (2 * ds0);
-            end
-
-            % Blend the feedforward accel with a small proportional correction
-            % on speed error so the closed-loop driver converges to targetSpeed.
-            speedError = speed - targetSpeed;
-            axRef = axRef - 0.5 * speedError;
-
-            [throttle, brake] = DriverInputPlanner.computePedals( ...
-                axRef, caps.F_drive_full, caps.F_resistance, ...
-                obj.vehicleManager.totalMass, caps.brakeForceAccel);
-
-            % Reduce longitudinal command as steering usage grows (combined
-            % grip), preserving the existing traction-ellipse coupling.
-            throttle = throttle * longitudinalCommandScale;
-            brake = brake * longitudinalCommandScale;
-        end
-
-        function input = correctPlannedInput(obj, plannedInput, state, ref)
-            % CORRECTPLANNEDINPUT Add path-following corrections to centerline feedforward input.
-            input = plannedInput;
-            if ~isfield(input, 'throttle')
-                input.throttle = 0;
-            end
-            if ~isfield(input, 'brake')
-                input.brake = 0;
-            end
-            if ~isfield(input, 'steer')
-                input.steer = 0;
-            end
-
-            headingError = obj.wrapAngle(ref.heading - state.yaw);
-            targetLateralError = obj.computeTargetLateralError(ref);
-            lateralTrackingError = ref.lateralError - targetLateralError;
-            crossTrackCorrection = atan2( ...
-                -obj.stanleyGain * lateralTrackingError, ...
-                max(state.speed, 0) + obj.stanleySoftening);
-            plannedSteer = input.steer;
-            steeringCorrection = obj.headingGain * headingError + crossTrackCorrection;
-            steeringCorrection = steeringCorrection + ...
-                obj.computeEdgeSteeringCorrection(ref);
-            steer = plannedSteer + steeringCorrection;
-            input.steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
-            input.targetLateralError = targetLateralError;
-
-            correctionUse = abs(steeringCorrection) / max(obj.maxSteeringAngle, eps);
-            correctionUse = max(0, min(1, correctionUse));
-            if correctionUse > obj.correctionSlowdownThreshold
-                slowdownUse = (correctionUse - obj.correctionSlowdownThreshold) / ...
-                    max(1 - obj.correctionSlowdownThreshold, eps);
-                slowdownUse = max(0, min(1, slowdownUse));
-                input.throttle = input.throttle * (1 - 0.40 * slowdownUse);
-                input.brake = max(input.brake, obj.correctionBrakeCommand * slowdownUse);
-            end
-
-            if isfield(ref, 'trackHalfWidth') && isfinite(ref.trackHalfWidth)
-                margin = ref.trackHalfWidth - abs(ref.lateralError);
-                if margin < obj.edgeSlowdownMargin
-                    edgeUse = (obj.edgeSlowdownMargin - margin) / ...
-                        max(obj.edgeSlowdownMargin, eps);
-                    edgeUse = max(0, min(1, edgeUse));
-                    input.throttle = input.throttle * (1 - 0.85 * edgeUse);
-                    input.brake = max(input.brake, obj.edgeBrakeCommand * edgeUse);
+            % Launch: whenever the car is nearly stopped, pin throttle and
+            % release brake so it always makes forward progress (a real driver
+            % never stalls on track). This also breaks any low-speed limit
+            % cycle. The "below target" check is dropped: from a standstill the
+            % driver always wants to get moving.
+            if state.speed < obj.launchSpeedThreshold
+                throttle = 1;
+                brake = 0;
+                % At a standstill, cap the steer well below full lock so the
+                % wheels can build forward momentum — a stopped car at full lock
+                % just pivots. Blend back to the planned line steer as speed
+                % rises toward the launch threshold.
+                launchFrac = max(0, min(1, state.speed / obj.launchSpeedThreshold));
+                plannedSteer = 0;
+                if isfield(obj.racingLine, 'steerFF') && ~isempty(obj.racingLine.steerFF)
+                    plannedSteer = obj.racingLine.steerFF(idx);
                 end
+                launchSteerCap = 0.3 * obj.maxSteeringAngle;
+                plannedSteer = max(-launchSteerCap, min(launchSteerCap, plannedSteer));
+                steer = plannedSteer * (1 - launchFrac) + steer * launchFrac;
+
+                % Spin recovery: if the car has been near-stationary for a
+                % sustained period it has lost control (a spin). Straighten the
+                % wheels toward the car's actual heading and creep forward with
+                % bounded throttle until forward speed returns — this guarantees
+                % the simulation always makes progress instead of looping
+                % forever at a stall, and mirrors a driver re-gathering the car.
+                obj.stuckTimer = obj.stuckTimer + 1;
+                if obj.stuckTimer > round(1.5 / obj.inputDt)
+                    steer = 0;
+                    throttle = 0.5;
+                    brake = 0;
+                end
+            else
+                obj.stuckTimer = 0;
             end
 
-            input.throttle = max(0, min(1, input.throttle));
-            input.brake = max(0, min(1, input.brake));
-            if state.speed < obj.launchSpeedThreshold && ...
-                    obj.isAtOrBelowTargetSpeed(state.speed, input)
-                input.brake = 0;
-                input.throttle = max(input.throttle, 1);
-            end
-            input = obj.enforcePedalExclusivity(input);
+            input = struct( ...
+                'throttle', throttle, ...
+                'brake', brake, ...
+                'steer', steer, ...
+                'targetSpeed', vTarget, ...
+                'axRef', axCmd);
+
+            input = obj.applyPedalFilter(input);
         end
     end
 
     methods (Access = private)
-        function input = applyDriveSlipLimit(obj, input)
-            if ~obj.enableDriveSlipLimit || ~isfield(input, 'throttle') || ...
-                    input.throttle <= 0
-                return;
-            end
+        % ============================================================
+        % Steering: preview-follow + slip reaction
+        % ============================================================
+        function steer = computeSteering(obj, idx, state, observation)
+            line = obj.racingLine;
 
-            maxRearSlip = obj.getMaxRearDriveSlip();
-            if ~isfinite(maxRearSlip)
-                return;
-            end
+            % Lookahead distance (speed-scaled, bounded).
+            lookahead = state.speed * obj.lookaheadTime + obj.minLookahead;
 
-            slipTarget = max(0, obj.driveSlipTarget);
-            slipCutoff = max(slipTarget + eps, obj.driveSlipCutoff);
-            if maxRearSlip <= slipTarget
-                return;
-            end
-
-            slipUse = (maxRearSlip - slipTarget) / max(slipCutoff - slipTarget, eps);
-            slipUse = max(0, min(1, slipUse));
-            input.throttle = input.throttle * (1 - slipUse);
-        end
-
-        function maxRearSlip = getMaxRearDriveSlip(obj)
-            maxRearSlip = NaN;
-            tire = obj.getVehicleManagerValue('tire', []);
-            if isempty(tire)
-                return;
-            end
-
-            slipRL = obj.getCornerSlipRatio(tire, 'RL');
-            slipRR = obj.getCornerSlipRatio(tire, 'RR');
-            rearSlip = [slipRL, slipRR];
-            rearSlip = rearSlip(isfinite(rearSlip));
-            if isempty(rearSlip)
-                return;
-            end
-            maxRearSlip = max(rearSlip);
-        end
-
-        function slipRatio = getCornerSlipRatio(obj, tire, cornerName)
-            slipRatio = NaN;
-            cornerState = obj.getFieldValue(tire, cornerName, []);
-            if isempty(cornerState)
-                return;
-            end
-            slipRatio = obj.getFieldValue(cornerState, 'slipRatio', NaN);
-        end
-
-        function input = applyInputSlew(obj, input, state)
-            if ~obj.inputStateInitialized
-                [obj.lastThrottle, obj.lastBrake] = ...
-                    obj.resolvePedalTargets(state.throttle, state.brake);
-                obj.lastSteer = obj.clampSteer(state.steer);
-                obj.filteredThrottleTarget = obj.lastThrottle;
-                obj.filteredBrakeTarget = obj.lastBrake;
-                obj.resetPedalReductionMemory();
-                obj.clearPendingPedalSwitch();
-                obj.inputStateInitialized = true;
-            end
-
-            [targetThrottle, targetBrake] = obj.resolvePedalTargets( ...
-                input.throttle, input.brake);
-            [targetThrottle, targetBrake] = obj.filterPedalTargets( ...
-                targetThrottle, targetBrake);
-            targetSteer = obj.clampSteer(input.steer);
-
-            if targetBrake > 0 && obj.lastThrottle > 0
-                input.throttle = obj.slewCommand( ...
-                    obj.lastThrottle, 0, obj.throttleRampTime);
-                input.brake = 0;
-            elseif targetThrottle > 0 && obj.lastBrake > 0
-                input.throttle = 0;
-                input.brake = obj.slewCommand( ...
-                    obj.lastBrake, 0, obj.brakeRampTime);
-            elseif targetThrottle > 0
-                input.throttle = obj.slewCommand( ...
-                    obj.lastThrottle, targetThrottle, obj.throttleRampTime);
-                input.brake = 0;
-            elseif targetBrake > 0
-                input.throttle = 0;
-                input.brake = obj.slewCommand( ...
-                    obj.lastBrake, targetBrake, obj.brakeRampTime);
-            elseif obj.lastBrake > 0
-                input.throttle = 0;
-                input.brake = obj.slewCommand( ...
-                    obj.lastBrake, 0, obj.brakeRampTime);
+            % 1) Feedforward: the PRECOMPUTED steer for this station along the
+            % racing line (atan(L*kappa_line)), sampled by progress. This is the
+            % primary command — non-reactive and free of preview lag, so it
+            % follows the planned line through sharp corners reliably.
+            if isfield(line, 'steerFF') && ~isempty(line.steerFF)
+                steerFF = line.steerFF(idx);
             else
-                input.throttle = obj.slewCommand( ...
-                    obj.lastThrottle, 0, obj.throttleRampTime);
-                input.brake = 0;
+                steerFF = atan(obj.vehicleManager.wheelbase * line.curvature(idx)) ...
+                    * obj.steeringUsage;
             end
 
-            obj.lastThrottle = input.throttle;
-            obj.lastBrake = input.brake;
+            % 2) Heading correction: a SMALL term comparing the car's heading to
+            % the line tangent ahead. Bounded so it can never dominate the
+            % feedforward (which is what actually follows the line).
+            targetPoint = obj.linePointAhead(line, idx, lookahead);
+            originPoint = line.points(idx, :);
+            headingToTarget = atan2( ...
+                targetPoint(2) - originPoint(2), targetPoint(1) - originPoint(1));
+            headingErr = obj.wrapAngle(headingToTarget - state.yaw);
+            steerPreview = max(-obj.previewSteerLimit, min(obj.previewSteerLimit, ...
+                obj.kHeading * headingErr));
 
-            input.steer = obj.slewSteeringCommand(obj.lastSteer, targetSteer);
-            obj.lastSteer = input.steer;
-        end
+            % 3) Cross-track to the racing line (Stanley). The simulator's
+            % lateralError is + = car left of centerline; the racing line offset
+            % is + = line left of centerline; so the error to the line is
+            % e_line = lateralError - offsetW. A car left of its line (e>0)
+            % needs to steer right: -atan(k*e / v+soft). Bounded likewise.
+            offsetW = line.offsetW(idx);
+            eLine = obj.crossTrackError(observation) - offsetW;
+            steerCross = -atan2(obj.kCross * eLine, ...
+                max(state.speed, 0) + obj.softening);
+            steerCross = max(-obj.previewSteerLimit, min(obj.previewSteerLimit, steerCross));
 
-        function [targetThrottle, targetBrake] = filterPedalTargets(obj, targetThrottle, targetBrake)
-            [targetThrottle, targetBrake] = obj.applyPedalSwitchDwell( ...
-                targetThrottle, targetBrake);
+            steer = steerFF + steerPreview + steerCross;
 
-            if targetBrake > 0
-                obj.filteredThrottleTarget = 0;
-                obj.filteredBrakeTarget = obj.filterSamePedalReduction( ...
-                    "brake", obj.filteredBrakeTarget, targetBrake);
-            elseif targetThrottle > 0
-                obj.filteredBrakeTarget = 0;
-                obj.filteredThrottleTarget = obj.filterSamePedalReduction( ...
-                    "throttle", obj.filteredThrottleTarget, targetThrottle);
-            else
-                obj.filteredThrottleTarget = obj.filterSamePedalReduction( ...
-                    "throttle", obj.filteredThrottleTarget, 0);
-                obj.filteredBrakeTarget = obj.filterSamePedalReduction( ...
-                    "brake", obj.filteredBrakeTarget, 0);
+            % 4) Slip reaction (human): counter-steer into oversteer.
+            if obj.enableSlipStabilizer
+                steer = steer + obj.oversteerCorrection(state);
             end
 
-            [targetThrottle, targetBrake] = obj.resolvePedalTargets( ...
-                obj.filteredThrottleTarget, obj.filteredBrakeTarget);
-        end
+            % 5) Edge avoidance: steer back from the track limit.
+            steer = steer + obj.edgeSteerCorrection(observation);
 
-        function [targetThrottle, targetBrake] = applyPedalSwitchDwell(obj, targetThrottle, targetBrake)
-            activeThrottle = max(obj.lastThrottle, obj.filteredThrottleTarget);
-            activeBrake = max(obj.lastBrake, obj.filteredBrakeTarget);
-
-            if targetBrake > 0 && activeThrottle > obj.pedalTargetDeadband
-                if targetBrake >= obj.immediateBrakeSwitchThreshold
-                    obj.clearPendingPedalSwitch();
-                elseif ~obj.pedalSwitchHasPersisted("brake")
-                    targetThrottle = activeThrottle;
-                    targetBrake = 0;
-                end
-            elseif targetThrottle > 0 && activeBrake > obj.pedalTargetDeadband
-                if ~obj.pedalSwitchHasPersisted("throttle")
-                    targetThrottle = 0;
-                    targetBrake = activeBrake;
-                end
-            else
-                obj.clearPendingPedalSwitch();
-            end
-        end
-
-        function persisted = pedalSwitchHasPersisted(obj, targetPedal)
-            if obj.pedalSwitchHoldTime <= 0 || ~isfinite(obj.pedalSwitchHoldTime)
-                persisted = true;
-                return;
-            end
-
-            if obj.pendingPedalSwitchTarget ~= targetPedal
-                obj.pendingPedalSwitchTarget = targetPedal;
-                obj.pendingPedalSwitchTime = 0;
-                persisted = false;
-                return;
-            end
-
-            obj.pendingPedalSwitchTime = obj.pendingPedalSwitchTime + obj.inputDt;
-            persisted = obj.pendingPedalSwitchTime >= obj.pedalSwitchHoldTime;
-        end
-
-        function clearPendingPedalSwitch(obj)
-            obj.pendingPedalSwitchTarget = "";
-            obj.pendingPedalSwitchTime = 0;
-        end
-
-        function value = filterSamePedalReduction(obj, pedalName, previousValue, targetValue)
-            targetValue = max(0, min(1, targetValue));
-            previousValue = max(0, min(1, previousValue));
-
-            if targetValue >= previousValue
-                obj.clearPendingPedalReduction(pedalName);
-                value = targetValue;
-                return;
-            end
-
-            if previousValue - targetValue <= obj.pedalTargetDeadband
-                obj.clearPendingPedalReduction(pedalName);
-                value = previousValue;
-                return;
-            end
-
-            if ~obj.reductionTargetHasPersisted(pedalName, targetValue)
-                value = previousValue;
-                return;
-            end
-
-            if obj.pedalReleaseFilterTime <= 0 || ~isfinite(obj.pedalReleaseFilterTime)
-                value = targetValue;
-                return;
-            end
-
-            alpha = obj.inputDt / max(obj.pedalReleaseFilterTime + obj.inputDt, eps);
-            value = previousValue + alpha * (targetValue - previousValue);
-            if value < obj.pedalTargetDeadband && targetValue <= obj.pedalTargetDeadband
-                value = 0;
-            end
-        end
-
-        function persisted = reductionTargetHasPersisted(obj, pedalName, targetValue)
-            if obj.pedalReductionHoldTime <= 0 || ~isfinite(obj.pedalReductionHoldTime)
-                persisted = true;
-                return;
-            end
-
-            [targetField, timeField] = obj.getPendingPedalReductionFields(pedalName);
-            pendingTarget = obj.(targetField);
-            if ~isfinite(pendingTarget) || ...
-                    abs(pendingTarget - targetValue) > obj.pedalTargetDeadband
-                obj.(targetField) = targetValue;
-                obj.(timeField) = 0;
-                persisted = false;
-                return;
-            end
-
-            obj.(timeField) = obj.(timeField) + obj.inputDt;
-            persisted = obj.(timeField) >= obj.pedalReductionHoldTime;
-        end
-
-        function clearPendingPedalReduction(obj, pedalName)
-            [targetField, timeField] = obj.getPendingPedalReductionFields(pedalName);
-            obj.(targetField) = NaN;
-            obj.(timeField) = 0;
-        end
-
-        function resetPedalReductionMemory(obj)
-            obj.clearPendingPedalReduction("throttle");
-            obj.clearPendingPedalReduction("brake");
-        end
-
-        function [targetField, timeField] = getPendingPedalReductionFields(~, pedalName)
-            if strcmp(string(pedalName), "brake")
-                targetField = 'pendingBrakeReductionTarget';
-                timeField = 'pendingBrakeReductionTime';
-            else
-                targetField = 'pendingThrottleReductionTarget';
-                timeField = 'pendingThrottleReductionTime';
-            end
-        end
-
-        function input = enforcePedalExclusivity(obj, input)
-            [input.throttle, input.brake] = obj.resolvePedalTargets( ...
-                input.throttle, input.brake);
-        end
-
-        function [throttle, brake] = resolvePedalTargets(~, throttle, brake)
-            throttle = max(0, min(1, throttle));
-            brake = max(0, min(1, brake));
-
-            if brake > 0
-                throttle = 0;
-            elseif throttle > 0
-                brake = 0;
-            end
-        end
-
-        function atOrBelow = isAtOrBelowTargetSpeed(~, speed, input)
-            atOrBelow = true;
-            if isfield(input, 'targetSpeed') && isfinite(input.targetSpeed)
-                atOrBelow = speed <= input.targetSpeed;
-            end
-        end
-
-        function steer = clampSteer(obj, steer)
             steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
         end
 
-        function steer = slewSteeringCommand(obj, previousSteer, targetSteer)
-            if obj.steeringRampTime <= 0 || ~isfinite(obj.steeringRampTime)
-                steer = targetSteer;
+        function corr = oversteerCorrection(obj, state)
+            % OVERSTEERCORRECTION Counter-steer into a developing slide.
+            % Body slip angle grows when the rear breaks loose. A driver
+            % counter-steers (steers toward the slide). Positive body slip =
+            % tail out to the right -> add negative (left) steer to chase it.
+            corr = 0;
+            slip = state.bodySlipAngle;
+            if ~isfinite(slip)
                 return;
             end
-
-            maxDelta = obj.maxSteeringAngle * obj.inputDt / ...
-                max(obj.steeringRampTime, eps);
-            delta = targetSteer - previousSteer;
-            delta = max(-maxDelta, min(maxDelta, delta));
-            steer = obj.clampSteer(previousSteer + delta);
+            excess = abs(slip) - obj.slipTarget;
+            if excess <= 0
+                return;
+            end
+            % Sign: counter-steer opposite to the slip's sign so the front
+            % wheels point toward the direction the car is sliding.
+            corr = -sign(slip) * obj.kOversteer * excess;
         end
 
-        function value = slewCommand(obj, previousValue, targetValue, rampTime)
-            if rampTime <= 0 || ~isfinite(rampTime)
-                value = targetValue;
-                return;
-            end
-
-            maxDelta = obj.inputDt / rampTime;
-            delta = targetValue - previousValue;
-            delta = max(-maxDelta, min(maxDelta, delta));
-            value = previousValue + delta;
-            value = max(0, min(1, value));
-        end
-
-        function targetLateralError = computeTargetLateralError(obj, ref)
-            targetLateralError = 0;
-            if ~isfield(ref, 'curvature') || abs(ref.curvature) <= obj.curvatureTol
-                return;
-            end
-            if obj.isSteadyCircleControl()
-                return;
-            end
-            if ~isfield(ref, 'trackHalfWidth') || ~isfinite(ref.trackHalfWidth) || ...
-                    ref.trackHalfWidth <= 0
-                return;
-            end
-
-            usableOffset = max(ref.trackHalfWidth - ...
-                max(obj.edgeSlowdownMargin, obj.edgeSteeringMargin), 0);
-            outsideBias = obj.cornerOutsideBiasFraction * ref.trackHalfWidth;
-            outsideBias = min([outsideBias, obj.cornerOutsideBiasMax, usableOffset]);
-
-            [arcLen, ~] = obj.getTrackGeometry();
-            if isfield(ref, 'idx') && isfinite(ref.idx)
-                idx = max(1, min(round(ref.idx), numel(arcLen)));
-            elseif isfield(ref, 's') && isfinite(ref.s)
-                idx = find(arcLen <= ref.s, 1, 'last');
-                if isempty(idx)
-                    idx = 1;
-                end
-            else
-                targetLateralError = -sign(ref.curvature) * outsideBias;
-                return;
-            end
-
-            [segmentStart, segmentEnd, turnSign, found] = obj.findCornerSegment(idx);
-            if ~found || turnSign == 0
-                targetLateralError = -sign(ref.curvature) * outsideBias;
-                return;
-            end
-
-            segmentStartS = arcLen(segmentStart);
-            segmentEndS = arcLen(segmentEnd);
-            segmentLength = max(segmentEndS - segmentStartS, eps);
-            if isfield(ref, 's') && isfinite(ref.s)
-                cornerS = ref.s;
-            else
-                cornerS = arcLen(idx);
-            end
-            phase = (cornerS - segmentStartS) / segmentLength;
-            phase = max(0, min(1, phase));
-            apexPhaseClamped = obj.getClampedApexPhase();
-
-            if phase <= apexPhaseClamped
-                blend = phase / max(apexPhaseClamped, eps);
-                targetLateralError = -turnSign * outsideBias * cos(pi * blend);
-            else
-                blend = (phase - apexPhaseClamped) / ...
-                    max(1 - apexPhaseClamped, eps);
-                targetLateralError = turnSign * outsideBias * cos(pi * blend);
-            end
-        end
-
-        function correction = computeEdgeSteeringCorrection(obj, ref)
+        function correction = edgeSteerCorrection(obj, observation)
+            % EDGESTEERCORRECTION Steer away from the track edge.
             correction = 0;
-            if ~isfield(ref, 'trackHalfWidth') || ~isfinite(ref.trackHalfWidth) || ...
-                    ref.trackHalfWidth <= 0
+            halfWidth = obj.fieldOr(observation, 'trackHalfWidth', []);
+            latErr = obj.fieldOr(observation, 'lateralError', []);
+            if isempty(halfWidth) || ~isfinite(halfWidth) || halfWidth <= 0
                 return;
             end
-            if ~isfield(ref, 'lateralError') || ~isfinite(ref.lateralError) || ...
-                    abs(ref.lateralError) <= eps
+            if isempty(latErr) || ~isfinite(latErr) || abs(latErr) <= eps
                 return;
             end
-
-            margin = ref.trackHalfWidth - abs(ref.lateralError);
-            if margin >= obj.edgeSteeringMargin
+            margin = halfWidth - abs(latErr);
+            if margin >= obj.edgeMargin
                 return;
             end
-
-            edgeUse = (obj.edgeSteeringMargin - margin) / ...
-                max(obj.edgeSteeringMargin, eps);
+            edgeUse = (obj.edgeMargin - margin) / max(obj.edgeMargin, eps);
             edgeUse = max(0, min(1, edgeUse));
-
-            % Positive lateral error is left of the reference line, so a
-            % negative correction steers back right; negative error is the
-            % opposite.
-            correction = -sign(ref.lateralError) * obj.edgeSteeringGain * edgeUse;
+            % Positive lateral error (left of center) -> steer right (negative).
+            correction = -sign(latErr) * obj.edgeSteerGain * edgeUse;
         end
 
-        function observation = defaultObservationFromState(~, state)
-            refHeading = state.refHeading;
-            if ~isfinite(refHeading)
-                refHeading = state.heading;
+        function [targetPoint, idxAhead] = linePointAhead(obj, line, idx, lookahead) %#ok<INUSD>
+            % LINEPOINTAHEAD Point on the racing line ~lookahead metres ahead.
+            arcLen = line.arcLen;
+            n = numel(arcLen);
+            sTarget = arcLen(idx) + max(lookahead, 0);
+            % Allow wrapping past the end on closed loops (returns the last
+            % valid point on open tracks, which is fine).
+            idxAhead = idx;
+            bestDist = inf;
+            for k = idx:min(idx + 60, n)
+                d = abs(arcLen(k) - sTarget);
+                if d < bestDist
+                    bestDist = d;
+                    idxAhead = k;
+                end
             end
-            refCurvature = state.refCurvature;
-            if ~isfinite(refCurvature)
-                refCurvature = state.curvature;
-            end
+            targetPoint = line.points(idxAhead, :);
+        end
 
+        % ============================================================
+        % Longitudinal: speed feedback + single traction circle + PedalMap
+        % ============================================================
+        function [throttle, brake, axCmd] = computeLongitudinal(obj, idx, state, observation) %#ok<INUSD>
+            % COMPUTELONGITUDINAL Map the speed plan onto pedal commands.
+            profile = obj.velProfile;
+            vTarget = profile.vTarget(idx);
+            axRef = profile.axRef(idx);
+
+            % Speed-error feedback: add proportional accel to close the gap.
+            speedErr = vTarget - state.speed;
+            axCmd = axRef + obj.kSpeed * speedErr;
+
+            % Single traction circle from lateral demand along the line. This
+            % caps the *output* pedals (not the force input) so the PedalMap
+            % ratio is not distorted. ay uses the line curvature, not the
+            % centerline, so it reflects where the car actually is.
+            %
+            % The taper is shaped so the driver holds throttle through moderate
+            % cornering (a real driver does — power-through mid-corner) and only
+            % lifts toward the apex as lateral grip demand approaches the limit.
+            % A pure ellipse sqrt(1-latUse^2) is too aggressive (it forces coast
+            % everywhere there is any curvature), so the effective lateral use is
+            % shifted: nothing happens below corneringLiftStart, then tapers.
+            kappaLine = obj.lineCurvature(idx);
+            ay = state.speed^2 * abs(kappaLine);
+            ayMax = obj.lateralGripLimit(state);
+            latUse = min(ay / max(ayMax, 0.1), 1);
+            liftStart = obj.corneringLiftStart;   % lateral-use fraction where lift begins
+            shapedUse = max(0, (latUse - liftStart) / max(1 - liftStart, eps));
+            shapedUse = min(shapedUse, 1);
+            ellipse = sqrt(max(0, 1 - shapedUse^2));
+            driveScale = obj.tractionReserve + (1 - obj.tractionReserve) * ellipse;
+            brakeScale = obj.trailBrakeReserve + (1 - obj.trailBrakeReserve) * ellipse;
+
+            % Map the commanded accel to pedals via the proven physics map.
+            F_drive_full = profile.F_drive_full(idx);
+            F_resistance = profile.F_resistance(idx);
+            brakeForceAccel = profile.brakeForceAccel(idx);
+            [throttle, brake] = PedalMap.compute( ...
+                axCmd, F_drive_full, F_resistance, ...
+                obj.vehicleManager.totalMass, brakeForceAccel);
+
+            % Apply the traction-circle caps: lift to coast at the apex, taper
+            % brake for trail-braking.
+            throttle = min(throttle, driveScale);
+            brake = min(brake, brakeScale);
+
+            % Track-edge slowdown: reduce throttle and add a little brake near
+            % the limit so excursions are rare and graceful.
+            [throttle, brake] = obj.applyEdgeSlowdown(throttle, brake, observation);
+
+            throttle = max(0, min(1, throttle));
+            brake = max(0, min(1, brake));
+            [throttle, brake] = obj.enforceExclusivity(throttle, brake);
+        end
+
+        function ayMax = lateralGripLimit(obj, state)
+            % LATERALGRIPLIMIT Approx max lateral accel at the current speed.
+            % Uses the planner's capability estimator (tire mu + downforce).
+            caps = LapPlanner.estimateCapability( ...
+                obj.vehicleManager, state, state.speed);
+            ayMax = caps.maxLatAccel;
+        end
+
+        function [throttle, brake] = applyUndersteerBreathe(obj, throttle, brake, idx, state)
+            % APPLYUNDERSTEERBREATHE Ease the throttle when understeering.
+            % Understeer = yaw rate lagging the kinematic expectation for the
+            % commanded path. A driver breathes the throttle (shifts load
+            % forward) to recover front grip rather than adding more steer.
+            if ~obj.enableSlipStabilizer
+                return;
+            end
+            kappaLine = obj.lineCurvature(idx);
+            yawExpected = state.speed * kappaLine;
+            yawDeficit = yawExpected - state.yawRate;   % + = understeer (L turn)
+            % Only counts for the turn the car is trying to make.
+            if sign(yawExpected) ~= sign(yawDeficit) || abs(yawExpected) < 1e-3
+                return;
+            end
+            excess = abs(yawDeficit) - obj.understeerYawErr;
+            if excess <= 0
+                return;
+            end
+            cut = min(excess / 0.3, 1);   % full breathe over 0.3 rad/s deficit
+            keep = obj.understeerThrottleCut + (1 - obj.understeerThrottleCut) * (1 - cut);
+            throttle = throttle * keep;
+        end
+
+        function [throttle, brake] = applyEdgeSlowdown(obj, throttle, brake, observation)
+            % APPLYEDGESLOWDOWN Lift (reduce throttle) near the track edge.
+            %
+            % A real driver who drifts toward the edge eases the throttle to
+            % bleed speed gently, rather than dabbing the brake — continuous
+            % brake-dabbing near the edge creates a limit cycle that bleeds
+            % speed forever without settling. Brake is only added if the car is
+            % genuinely past the edge (an actual excursion needing recovery).
+            halfWidth = obj.fieldOr(observation, 'trackHalfWidth', []);
+            latErr = obj.fieldOr(observation, 'lateralError', []);
+            if isempty(halfWidth) || ~isfinite(halfWidth) || halfWidth <= 0
+                return;
+            end
+            if isempty(latErr) || ~isfinite(latErr)
+                return;
+            end
+            margin = halfWidth - abs(latErr);
+            if margin >= obj.edgeMargin
+                return;
+            end
+            edgeUse = (obj.edgeMargin - margin) / max(obj.edgeMargin, eps);
+            edgeUse = max(0, min(1, edgeUse));
+            throttle = throttle * (1 - obj.edgeSlowGain * edgeUse);
+            % Only brake if actually past the edge (recovery), not just close.
+            if margin < 0
+                brake = max(brake, obj.edgeBrakeAdd * edgeUse);
+            end
+        end
+
+        function throttle = applyDriveSlipLimit(obj, throttle, state)
+            % APPLYDRIVESLIPLIMIT Traction control: cut throttle on rear slip.
+            if ~obj.enableDriveSlipLimit || throttle <= 0
+                return;
+            end
+            maxRearSlip = obj.maxRearDriveSlip(state);
+            if ~isfinite(maxRearSlip) || maxRearSlip <= obj.driveSlipTarget
+                return;
+            end
+            slipUse = (maxRearSlip - obj.driveSlipTarget) / ...
+                max(obj.driveSlipCutoff - obj.driveSlipTarget, eps);
+            slipUse = max(0, min(1, slipUse));
+            throttle = throttle * (1 - slipUse);
+        end
+
+        function maxSlip = maxRearDriveSlip(obj, state)
+            % MAXREARDRIVESLIP Max slip ratio over the driven (rear) axle.
+            maxSlip = NaN;
+            vm = state.vehicleManager;
+            if isempty(vm) && ~isempty(obj.vehicleManager)
+                vm = obj.vehicleManager;
+            end
+            if isempty(vm) || ~obj.hasField(vm, 'tire')
+                return;
+            end
+            tire = vm.tire;
+            slips = [obj.cornerSlip(tire, 'RL'), obj.cornerSlip(tire, 'RR')];
+            slips = slips(isfinite(slips));
+            if isempty(slips)
+                return;
+            end
+            maxSlip = max(slips);
+        end
+
+        function sr = cornerSlip(obj, tire, cornerName)
+            sr = NaN;
+            if ~obj.hasField(tire, cornerName)
+                return;
+            end
+            cornerState = tire.(cornerName);
+            if ~obj.hasField(cornerState, 'slipRatio')
+                return;
+            end
+            sr = cornerState.slipRatio;
+            if ~isfinite(sr)
+                sr = NaN;
+            end
+        end
+
+        function tf = hasField(~, s, name)
+            % HASFIELD True if s has a non-empty field/property `name`. Works
+            % for both MATLAB structs and handle/value objects (isprop fails
+            % on plain structs, isfield fails on objects).
+            if isstruct(s)
+                tf = isfield(s, name) && ~isempty(s.(name));
+            elseif isobject(s)
+                tf = isprop(s, name) && ~isempty(s.(name));
+            else
+                tf = false;
+            end
+        end
+
+        function input = applyPedalFilter(obj, input)
+            % APPLYPEDALFILTER First-order smoothing of the pedal outputs.
+            if obj.pedalFilterTime <= 0 || ~isfinite(obj.pedalFilterTime)
+                obj.lastThrottle = input.throttle;
+                obj.lastBrake = input.brake;
+                return;
+            end
+            if ~obj.inputStateInitialized
+                obj.filteredThrottle = input.throttle;
+                obj.filteredBrake = input.brake;
+                obj.inputStateInitialized = true;
+            end
+            alpha = obj.inputDt / max(obj.pedalFilterTime + obj.inputDt, eps);
+            obj.filteredThrottle = obj.filteredThrottle + ...
+                alpha * (input.throttle - obj.filteredThrottle);
+            obj.filteredBrake = obj.filteredBrake + ...
+                alpha * (input.brake - obj.filteredBrake);
+            obj.lastThrottle = obj.filteredThrottle;
+            obj.lastBrake = obj.filteredBrake;
+            input.throttle = max(0, min(1, obj.filteredThrottle));
+            input.brake = max(0, min(1, obj.filteredBrake));
+            [input.throttle, input.brake] = obj.enforceExclusivity( ...
+                input.throttle, input.brake);
+        end
+
+        % ============================================================
+        % Helpers
+        % ============================================================
+        function idx = lineIndex(obj, observation)
+            % LINEINDEX Racing-line sample matching the projected ref index.
+            idx = obj.fieldOr(observation, 'idx', NaN);
+            n = numel(obj.racingLine.curvature);
+            if isempty(idx) || ~isfinite(idx)
+                idx = obj.lastIndex;
+            end
+            idx = max(1, min(round(idx), n));
+            obj.lastIndex = idx;
+        end
+
+        function k = lineCurvature(obj, idx)
+            % LINECURVATURE Smoothed racing-line curvature at idx (preferred
+            % over the raw curvature, which is noisy on image-derived tracks).
+            if isfield(obj.racingLine, 'curvatureSmoothed') && ...
+                    ~isempty(obj.racingLine.curvatureSmoothed)
+                k = obj.racingLine.curvatureSmoothed(idx);
+            else
+                k = obj.racingLine.curvature(idx);
+            end
+        end
+
+        function e = crossTrackError(obj, observation)
+            e = obj.fieldOr(observation, 'lateralError', 0);
+            if isempty(e) || ~isfinite(e)
+                e = 0;
+            end
+        end
+
+        function observation = defaultObservationFromState(obj, state)
+            refHeading = state.refHeading;
+            if ~isfinite(refHeading); refHeading = state.heading; end
+            refCurvature = state.refCurvature;
+            if ~isfinite(refCurvature); refCurvature = state.curvature; end
             observation = struct( ...
-                'idx', 1, ...
+                'idx', obj.lastIndex, ...
                 's', state.s, ...
                 'x', state.x, ...
                 'y', state.y, ...
@@ -692,429 +612,31 @@ classdef DriverModel < handle
                 'onTrack', state.onTrack);
         end
 
-        function observation = completeObservation(obj, observation, state)
-            defaults = obj.defaultObservationFromState(state);
-            fields = fieldnames(defaults);
-            for i = 1:numel(fields)
-                field = fields{i};
-                if ~isfield(observation, field) || isempty(observation.(field))
-                    observation.(field) = defaults.(field);
-                end
+        function [t, b] = enforceExclusivity(~, t, b)
+            t = max(0, min(1, t));
+            b = max(0, min(1, b));
+            if b > 0
+                t = 0;
+            elseif t > 0
+                b = 0;
             end
         end
 
-        function angle = wrapAngle(~, angle)
-            angle = atan2(sin(angle), cos(angle));
+        function ang = wrapAngle(~, ang)
+            % WRAPANGLE Wrap an angle to (-pi, pi].
+            ang = mod(ang + pi, 2 * pi) - pi;
+            % Map the -pi exclusive boundary to +pi for symmetry.
+            ang(ang <= -pi) = pi;
         end
 
-        function value = getVehicleManagerValue(obj, fieldName, defaultValue)
-            value = obj.getFieldValue(obj.vehicleManager, fieldName, defaultValue);
-        end
-
-        function value = getFieldValue(~, source, fieldName, defaultValue)
-            value = defaultValue;
-            if isempty(source)
-                return;
-            end
-            if isstruct(source)
-                if isfield(source, fieldName)
-                    value = source.(fieldName);
-                end
-            elseif isobject(source)
-                if isprop(source, fieldName)
-                    value = source.(fieldName);
-                end
-            end
-        end
-
-        function obj = cacheTrackGeometry(obj)
-            track = obj.getVehicleManagerValue('track', []);
-            if isempty(track)
-                return;
-            end
-            trackPts = track.getTrackPoints();
-
-            dx = diff(trackPts(:,1));
-            dy = diff(trackPts(:,2));
-            obj.trackArcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
-            obj.trackCurvature = track.getCurvature();
-            obj.trackCurvature = obj.trackCurvature(:);
-            obj = obj.cacheTrackMetadataFromTrack(track, obj.trackArcLen(end));
-        end
-
-        function obj = cacheTrackMetadataFromTrack(obj, track, baseTrackLength)
-            obj.trackClosedLoop = false;
-            obj.trackBaseLength = baseTrackLength;
-            obj.trackTotalLaps = 1;
-            obj.trackLapBreakS = [0; baseTrackLength];
-
-            if isempty(track) || ~isfinite(baseTrackLength) || baseTrackLength <= 0
-                obj.steadyCircleTrack = false;
-                return;
-            end
-
-            if ismethod(track, 'isClosedLoop')
-                obj.trackClosedLoop = logical(track.isClosedLoop());
-            elseif isprop(track, 'closedLoop')
-                obj.trackClosedLoop = logical(track.closedLoop);
-            elseif isprop(track, 'Closed')
-                % WaypointTrack exposes Closed rather than closedLoop/isClosedLoop
-                obj.trackClosedLoop = logical(track.Closed);
-            end
-
-            warmupLaps = 0;
-            recordedLaps = 1;
-            if ismethod(track, 'getWarmupLaps')
-                warmupLaps = track.getWarmupLaps();
-            elseif isprop(track, 'warmupLaps')
-                warmupLaps = track.warmupLaps;
-            end
-            if ismethod(track, 'getRecordedLaps')
-                recordedLaps = track.getRecordedLaps();
-            elseif isprop(track, 'recordedLaps')
-                recordedLaps = track.recordedLaps;
-            end
-
-            obj.trackTotalLaps = max(1, round(max(0, warmupLaps) + ...
-                max(1, recordedLaps)));
-            if ~obj.trackClosedLoop
-                obj.trackTotalLaps = 1;
-            end
-            obj.trackLapBreakS = (0:obj.trackTotalLaps)' * obj.trackBaseLength;
-            obj.steadyCircleTrack = obj.computeSteadyCircleTrack( ...
-                obj.trackCurvature, obj.trackClosedLoop);
-        end
-
-        function obj = cacheTrackMetadataFromTrackData(obj, trackData)
-            obj.trackClosedLoop = false;
-            obj.trackBaseLength = NaN;
-            obj.trackTotalLaps = 1;
-            obj.trackLapBreakS = [];
-
-            if isfield(trackData, 'closedLoop')
-                obj.trackClosedLoop = logical(trackData.closedLoop);
-            end
-            if isfield(trackData, 'baseTrackLength')
-                obj.trackBaseLength = trackData.baseTrackLength;
-            elseif isfield(trackData, 'length')
-                obj.trackBaseLength = trackData.length;
-            end
-            if isfield(trackData, 'totalLaps')
-                obj.trackTotalLaps = max(1, round(trackData.totalLaps));
-            end
-            if isfield(trackData, 'lapBreakS') && ~isempty(trackData.lapBreakS)
-                obj.trackLapBreakS = trackData.lapBreakS(:);
-            elseif isfinite(obj.trackBaseLength) && obj.trackBaseLength > 0
-                obj.trackLapBreakS = (0:obj.trackTotalLaps)' * obj.trackBaseLength;
-            end
-
-            obj.steadyCircleTrack = obj.computeSteadyCircleTrack( ...
-                obj.trackCurvature, obj.trackClosedLoop);
-        end
-
-        function steady = computeSteadyCircleTrack(obj, curvature, closedLoop)
-            steady = false;
-            if ~closedLoop || isempty(curvature)
-                return;
-            end
-
-            curvature = curvature(:);
-            active = abs(curvature) > obj.curvatureTol;
-            if ~all(active)
-                return;
-            end
-            turnSign = sign(curvature(find(active, 1, 'first')));
-            steady = turnSign ~= 0 && all(sign(curvature(active)) == turnSign);
-        end
-
-        function tf = isSteadyCircleControl(obj)
-            tf = obj.trackClosedLoop && obj.steadyCircleTrack;
-        end
-
-        function [arcLen, curvature] = getTrackGeometry(obj)
-            if ~isempty(obj.trackArcLen) && ~isempty(obj.trackCurvature)
-                arcLen = obj.trackArcLen;
-                curvature = obj.trackCurvature;
-                return;
-            end
-
-            track = obj.vehicleManager.track;
-            trackPts = track.getTrackPoints();
-            dx = diff(trackPts(:,1));
-            dy = diff(trackPts(:,2));
-            arcLen = [0; cumsum(sqrt(dx.^2 + dy.^2))];
-            curvature = track.getCurvature();
-            curvature = curvature(:);
-        end
-
-        function caps = estimateAvailableAcceleration(obj, state)
-            % ESTIMATEAVAILABLEACCELERATION Vehicle longitudinal/lateral capability.
-            %   Returns a struct of capability fields used by the closed-loop
-            %   driver and the physics-based pedal map (computePedals):
-            %     maxLatAccel     - lateral grip accel for corner-speed targets
-            %     maxBrakeAccel   - total decel capability (brake + drag + roll)
-            %     F_drive_full    - full-throttle wheel force, traction-capped [N]
-            %     F_resistance    - drag + rolling resistance at this speed [N]
-            %     maxDriveAccel   - net forward accel capability [m/s^2]
-            %     coastDecel      - free lift-off decel [m/s^2]
-            %     brakeForceAccel - hydraulic-brake-only decel per unit brake [m/s^2]
-            vm = obj.vehicleManager;
-            aeroForces = vm.aero.computeForces(state);
-            F_drag = max(0, aeroForces.F_drag);
-            F_downforce = aeroForces.Fz_front + aeroForces.Fz_rear;
-            W = vm.totalMass * vm.g;
-            totalNormalLoad = W + F_downforce;
-
-            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            % Grip is set entirely by the tire model (its Pacejka peak mu with
-            % load sensitivity). The vehicles run on dry FSAE rubber with no
-            % surface-friction variability, so there is no separate surface
-            % mu cap — the driver and the tire model now agree on grip.
-            maxTireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
-            maxLateralAccel = max(0.1, maxTireAccel * obj.corneringUsage);
-
-            frontNormalLoad = max(W * vm.staticFrontWeight + aeroForces.Fz_front, 0);
-            rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
-            frontMu = max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0);
-            rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
-            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
-            brakeBiasRear = 1 - brakeBiasFront;
-            brakeGripLimit = inf;
-            if brakeBiasFront > eps
-                brakeGripLimit = min(brakeGripLimit, frontMu * frontNormalLoad / brakeBiasFront);
-            end
-            if brakeBiasRear > eps
-                brakeGripLimit = min(brakeGripLimit, rearMu * rearNormalLoad / brakeBiasRear);
-            end
-
-            maxBrakeForce = min(vm.brakeForceCoefficient * totalNormalLoad, brakeGripLimit);
-            rollingResistance = 0.015 * totalNormalLoad;
-            brakeLimitedAccel = ...
-                (maxBrakeForce + F_drag + rollingResistance) / vm.totalMass;
-
-            maxBrakeAccel = min(maxTireAccel, brakeLimitedAccel) * obj.brakingUsage;
-            maxBrakeAccel = max(maxBrakeAccel, 0.1);
-
-            % --- Forward drive capability (speed- and load-dependent) ---
-            % Full-throttle wheel force from the powertrain map (planner-safe,
-            % stateless probe), capped by the driven (rear) axle's traction.
-            F_drive_full = 0;
-            if ~isempty(vm.powertrain)
-                F_drive_full = max(0, vm.powertrain.computeMaxDriveForce( ...
-                    max(state.speed, 0)));
-            end
-            driveUsage = max(0, min(1, obj.driveUsage));
-            F_traction_rear = driveUsage * rearMu * rearNormalLoad;
-            F_drive_full = min(F_drive_full, F_traction_rear);
-
-            F_resistance = F_drag + rollingResistance;
-            maxDriveAccel = max(0, (F_drive_full - F_resistance) / vm.totalMass);
-            coastDecel = F_resistance / vm.totalMass;
-            brakeForceAccel = max(0.1, obj.brakingUsage * maxBrakeForce / vm.totalMass);
-
-            caps.maxLatAccel = maxLateralAccel;
-            caps.maxBrakeAccel = maxBrakeAccel;
-            caps.F_drive_full = F_drive_full;
-            caps.F_resistance = F_resistance;
-            caps.maxDriveAccel = maxDriveAccel;
-            caps.coastDecel = coastDecel;
-            caps.brakeForceAccel = brakeForceAccel;
-        end
-
-        function lookAheadDist = computeLookaheadDistance(obj, speed, maxBrakeAccel)
-            brakeDistance = speed^2 / (2 * maxBrakeAccel);
-            lookAheadDist = max([ ...
-                obj.minLookaheadDist, ...
-                speed * obj.lookaheadTime, ...
-                brakeDistance * obj.brakingLookahead + obj.minLookaheadDist]);
-        end
-
-        function profileSpeed = computeBackwardSpeedProfile(obj, profileS, curvature, maxLateralAccel, maxBrakeAccel)
-            vm = obj.vehicleManager;
-            profileSpeed = obj.computeCornerSpeedLimit(curvature, maxLateralAccel);
-            profileSpeed = min(profileSpeed, vm.maxSpeed);
-
-            for i = numel(profileSpeed)-1:-1:1
-                ds = max(profileS(i+1) - profileS(i), 0.001);
-                reachableSpeed = sqrt(profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds);
-                profileSpeed(i) = min(profileSpeed(i), reachableSpeed);
-            end
-        end
-
-        function speedLimit = computeCornerSpeedLimit(obj, curvature, maxLateralAccel)
-            vm = obj.vehicleManager;
-            absKappa = abs(curvature(:));
-            speedLimit = vm.maxSpeed * ones(size(absKappa));
-
-            cornerIdx = absKappa > obj.curvatureTol;
-            speedLimit(cornerIdx) = sqrt(maxLateralAccel ./ absKappa(cornerIdx));
-            speedLimit = min(speedLimit, vm.maxSpeed);
-        end
-
-        function brake = computeBrakeCommand(obj, speedError)
-            % COMPUTEBRAKECOMMAND Gradual proportional brake from speed error.
-            %   No longer floored at minBrakeCommand; the new pedal map
-            %   (computePedals) produces gradual [0,1] brake commands. Kept for
-            %   any callers that want a direct speed-error -> brake mapping.
-            brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = max(0, min(1, brake));
-        end
-
-        function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            absKappa = abs(curvature);
-            nPts = numel(curvature);
-            apexDistance = inf;
-            atApex = false;
-            inActiveCorner = false;
-            afterApex = false;
-
-            if idx > nPts || all(absKappa <= obj.curvatureTol)
-                return;
-            end
-            if obj.isSteadyCircleControl()
-                idx = max(1, min(idx, nPts));
-                inActiveCorner = absKappa(idx) > obj.curvatureTol;
-                return;
-            end
-
-            [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
-            if ~found
-                return;
-            end
-
-            apexS = obj.computeApexS(arcLen, segmentStart, segmentEnd);
-            apexDistance = apexS - s;
-            inActiveCorner = idx >= segmentStart && idx <= segmentEnd && ...
-                absKappa(idx) > obj.curvatureTol;
-            afterApex = inActiveCorner && s >= apexS;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                inActiveCorner;
-        end
-
-        function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            steer = 0;
-            steeringUsageFrac = 0;
-
-            [segmentStart, segmentEnd, turnSign, found] = obj.findCornerSegment(idx);
-            if ~found
-                return;
-            end
-
-            segmentStartS = arcLen(segmentStart);
-            segmentEndS = arcLen(segmentEnd);
-            segmentLength = max(segmentEndS - segmentStartS, eps);
-            phase = (s - segmentStartS) / segmentLength;
-            phase = max(0, min(1, phase));
-
-            if obj.isSteadyCircleControl()
-                steeringUsageFrac = 1;
+        function val = fieldOr(obj, s, name, default)
+            % FIELDOR Return s.name if present and nonempty, else default.
+            % Robust to both structs and objects.
+            if obj.hasField(s, name)
+                val = s.(name);
             else
-                apexPhaseClamped = obj.getClampedApexPhase();
-                if phase <= apexPhaseClamped
-                    steeringUsageFrac = sin((pi / 2) * phase / apexPhaseClamped);
-                else
-                    steeringUsageFrac = sin((pi / 2) * (1 - phase) / (1 - apexPhaseClamped));
-                end
+                val = default;
             end
-            peakKappa = max(abs(curvature(segmentStart:segmentEnd)));
-            peakSteer = atan(obj.vehicleManager.wheelbase * peakKappa) * obj.steeringUsage;
-            peakSteer = min(obj.maxSteeringAngle, peakSteer);
-
-            steer = turnSign * peakSteer * steeringUsageFrac;
-        end
-
-        function scale = computeLongitudinalCommandScale(obj, steeringUsageFrac)
-            lateralUse = max(0, min(1, abs(steeringUsageFrac)));
-            ellipseScale = sqrt(max(0, 1 - lateralUse^2));
-            reserve = max(0, min(1, obj.minLongitudinalCommandScale));
-            scale = reserve + (1 - reserve) * ellipseScale;
-        end
-
-        function [segmentStart, segmentEnd, turnSign, found] = findCornerSegment(obj, idx)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            absKappa = abs(curvature);
-            nPts = numel(curvature);
-            segmentStart = 1;
-            segmentEnd = 1;
-            turnSign = 0;
-            found = false;
-
-            if idx > nPts || all(absKappa <= obj.curvatureTol)
-                return;
-            end
-            idx = max(1, min(idx, nPts));
-            [lapStartIdx, lapEndIdx] = obj.getLapIndexBounds(idx, arcLen);
-
-            if absKappa(idx) > obj.curvatureTol
-                segmentStart = idx;
-                turnSign = sign(curvature(idx));
-                while segmentStart > lapStartIdx && ...
-                        absKappa(segmentStart - 1) > obj.curvatureTol && ...
-                        sign(curvature(segmentStart - 1)) == turnSign
-                    segmentStart = segmentStart - 1;
-                end
-            else
-                nextCornerOffset = find( ...
-                    absKappa(idx:lapEndIdx) > obj.curvatureTol, 1, 'first');
-                if isempty(nextCornerOffset)
-                    return;
-                end
-                segmentStart = idx + nextCornerOffset - 1;
-                turnSign = sign(curvature(segmentStart));
-            end
-
-            segmentEnd = segmentStart;
-            while segmentEnd < lapEndIdx && ...
-                    absKappa(segmentEnd + 1) > obj.curvatureTol && ...
-                    sign(curvature(segmentEnd + 1)) == turnSign
-                segmentEnd = segmentEnd + 1;
-            end
-
-            found = true;
-        end
-
-        function [lapStartIdx, lapEndIdx] = getLapIndexBounds(obj, idx, arcLen)
-            nPts = numel(arcLen);
-            lapStartIdx = 1;
-            lapEndIdx = nPts;
-            if ~obj.trackClosedLoop || isempty(obj.trackLapBreakS) || ...
-                    numel(obj.trackLapBreakS) < 2
-                return;
-            end
-
-            idx = max(1, min(idx, nPts));
-            s = arcLen(idx);
-            lapIdx = find(obj.trackLapBreakS <= s + 1e-9, 1, 'last');
-            if isempty(lapIdx)
-                lapIdx = 1;
-            end
-            lapIdx = min(max(lapIdx, 1), numel(obj.trackLapBreakS) - 1);
-
-            startS = obj.trackLapBreakS(lapIdx);
-            endS = obj.trackLapBreakS(lapIdx + 1);
-            lapStartIdx = find(arcLen >= startS - 1e-9, 1, 'first');
-            lapEndIdx = find(arcLen <= endS + 1e-9, 1, 'last');
-            if isempty(lapStartIdx)
-                lapStartIdx = 1;
-            end
-            if isempty(lapEndIdx)
-                lapEndIdx = nPts;
-            end
-            lapStartIdx = max(1, min(lapStartIdx, nPts));
-            lapEndIdx = max(lapStartIdx, min(lapEndIdx, nPts));
-        end
-
-        function apexS = computeApexS(obj, arcLen, segmentStart, segmentEnd)
-            apexPhaseClamped = obj.getClampedApexPhase();
-            segmentStartS = arcLen(segmentStart);
-            segmentEndS = arcLen(segmentEnd);
-            apexS = segmentStartS + apexPhaseClamped * (segmentEndS - segmentStartS);
-        end
-
-        function apexPhaseClamped = getClampedApexPhase(obj)
-            apexPhaseClamped = max(0.05, min(0.95, obj.apexPhase));
         end
     end
 end

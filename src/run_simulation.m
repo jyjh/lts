@@ -16,7 +16,7 @@ clear; clc; close all;
 %  SELECT TRACK TYPE
 %  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn', '2026enduro'
 %  ====================================================================
-trackType = 'autocross';
+trackType = '2026enduro';
 
 %% ====================================================================
 %  SELECT VEHICLE CONFIGURATION

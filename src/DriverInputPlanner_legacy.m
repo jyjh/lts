@@ -1,4 +1,4 @@
-classdef DriverInputPlanner
+classdef DriverInputPlanner_legacy
     % DRIVERINPUTPLANNER Builds open-loop controls from track reference data.
     %
     % The planner treats the track centerline as a reference for estimating
@@ -24,7 +24,7 @@ classdef DriverInputPlanner
     end
 
     methods
-        function obj = DriverInputPlanner(vehicleManager, driverModelOrMaxSteer)
+        function obj = DriverInputPlanner_legacy(vehicleManager, driverModelOrMaxSteer)
             obj.vehicleManager = vehicleManager;
             if nargin >= 2
                 if isnumeric(driverModelOrMaxSteer)
@@ -138,7 +138,7 @@ classdef DriverInputPlanner
             brakeRef = zeros(n, 1);
             throttleRef = zeros(n, 1);
             for i = 1:n
-                [throttleRef(i), brakeRef(i)] = DriverInputPlanner.computePedals( ...
+                [throttleRef(i), brakeRef(i)] = DriverInputPlanner_legacy.computePedals( ...
                     axRef(i), F_drive_full(i), F_resistance(i), ...
                     vm.totalMass, brakeForceAccel(i));
                 % Traction-circle cap: at a corner apex the lateral grip demand
