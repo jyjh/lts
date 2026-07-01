@@ -176,6 +176,7 @@ function cfg = baseline()
     cfg.powertrain = struct( ...
         'matFile', '', ...
         'efficiency', 0.92, ...          % Drivetrain efficiency [0-1]
+        'motorRotorInertia', 0.07, ...   % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to rear wheels
         'differential', struct('type', 'open'));
 
     %% ====================================================================

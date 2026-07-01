@@ -13,6 +13,7 @@ classdef SimpleTire < components.Tire.TireModel
         peakSlipRatio      = 0.10  % Slip ratio at peak longitudinal force
         loadSensitivityExp = -0.1  % Load sensitivity exponent (negative = mu drops with load)
         wheelInertia       = 0.5   % Wheel rotational inertia per corner [kg*m^2]
+        allowReverseRotation = false  % See PacejkaTire.allowReverseRotation
         FL                        % TireState front-left
         FR                        % TireState front-right
         RL                        % TireState rear-left
@@ -124,16 +125,25 @@ classdef SimpleTire < components.Tire.TireModel
             kappa = max(-1, min(1, kappa));
         end
 
-        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt)
+        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
+            %   Optional inertia override [kg*m^2]; defaults to obj.wheelInertia.
             omega = cornerState.angularVelocity;
             R = cornerState.wheelRadius;
             Fx = cornerState.Fx;
+            I = obj.wheelInertia;
+            if nargin >= 6 && ~isempty(inertia) && inertia > 0
+                I = inertia;  % per-wheel override (driven axle: +reflected rotor)
+            end
 
             netTorque = driveTorque - sign(omega) * brakeTorque - Fx * R;
-            omega = omega + (netTorque / obj.wheelInertia) * dt;
+            omega = omega + (netTorque / I) * dt;
 
-            cornerState.angularVelocity = max(0, omega);
+            % One-direction clutch unless reverse rotation is enabled.
+            if ~obj.allowReverseRotation
+                omega = max(0, omega);
+            end
+            cornerState.angularVelocity = omega;
         end
 
         function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)

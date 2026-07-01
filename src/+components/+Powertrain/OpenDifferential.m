@@ -20,7 +20,7 @@ classdef OpenDifferential < components.Powertrain.DifferentialComponent
             out.TL = 0.5 * totalWheelTorque;
             out.TR = 0.5 * totalWheelTorque;
             % Carrier speed is the mean; allow speed differentiation.
-            out.carrierOmega = 0.5 * (max(omegaL, 0) + max(omegaR, 0));
+            out.carrierOmega = 0.5 * (omegaL + omegaR);
         end
 
         function locked = locksWheels(~)

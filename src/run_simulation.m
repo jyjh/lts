@@ -14,9 +14,9 @@ clear; clc; close all;
 
 %% ====================================================================
 %  SELECT TRACK TYPE
-%  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn', '2025enduro'
+%  Options: 'straight10', 'straight', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn', '2026enduro'
 %  ====================================================================
-trackType = '2025enduro';
+trackType = 'autocross';
 
 %% ====================================================================
 %  SELECT VEHICLE CONFIGURATION
@@ -41,8 +41,8 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 %% ====================================================================
 %  BUILD TRACK
 %  ====================================================================
-if lower(trackType) == "2025enduro"
-    track = components.WaypointTrack.loadMat('tracks/2025_endurance_track_pixel_units.mat');
+if lower(trackType) == "2026enduro"
+    track = components.WaypointTrack.loadMat('tracks/2026_endurance_track_pixel_units.mat');
 else
     track = components.TestTrack(trackType);
 end

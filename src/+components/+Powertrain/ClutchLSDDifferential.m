@@ -26,8 +26,11 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
         ramp = 0.5
 
         % Speed-sensitive (viscous) locking gain [N*m*s/rad]. Adds locking
-        % torque proportional to the wheel speed difference.
-        speedGain = 0.0
+        % torque proportional to the wheel speed difference so the clutch
+        % actually resists relative wheelspin rather than only statically
+        % re-biasing torque. A small nonzero default keeps the LSD from
+        % limit-cycling; set 0 for a pure torque-sensitive plate LSD.
+        speedGain = 2.0
 
         % Maximum torque bias ratio T_slow / T_fast [-]. A typical 1.5-way
         % clutch LSD runs ~1.5-3.0. inf disables the cap.
@@ -51,8 +54,9 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
 
         function out = solveDrive(obj, totalWheelTorque, omegaL, omegaR, ~, ~)
             totalWheelTorque = max(0, totalWheelTorque);
-            omegaL = max(omegaL, 0);
-            omegaR = max(omegaR, 0);
+            % omegaL/omegaR may be negative when reverse rotation is enabled;
+            % the carrier mean and slower-wheel identification both work with
+            % signed speeds, so no clamp here.
 
             base = 0.5 * totalWheelTorque;
 
@@ -68,6 +72,13 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
 
             Tlock = obj.preload + obj.ramp * totalWheelTorque + obj.speedGain * dw;
             Tlock = max(0, Tlock);
+            % Cap the locking torque so it can never exceed the open-diff base
+            % torque. Without this, a high preload relative to a low commanded
+            % total torque (e.g. preload=20 at T_total=10) drives the fast-side
+            % torque negative, which inverts the bias and breaks TL+TR ==
+            % T_total after the non-negative clamp. Capping at base - eps keeps
+            % both sides strictly non-negative before any further processing.
+            Tlock = min(Tlock, base - eps);
 
             TL = base;
             TR = base;
@@ -79,15 +90,11 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
                 TL = TL - Tlock;
             end
 
-            % Enforce the maximum bias ratio on the conserved (un-clamped)
-            % torques, THEN clamp to non-negative. Applying the cap before the
-            % clamp keeps TL + TR == totalWheelTorque: the cap pulls the
-            % over-biased (fast) side up toward maxSide/biasRatio and takes
-            % the excess from the slow side, preserving the sum. Clamping
-            % first would zero a negative fast side and create torque.
+            % Enforce the maximum bias ratio on the now-guaranteed-non-negative
+            % torques. applyBiasRatio rescales the lesser (fast) side up to
+            % maxSide/biasRatio and pulls the excess from the slow side, which
+            % preserves TL + TR == totalWheelTorque exactly.
             [TL, TR] = obj.applyBiasRatio(TL, TR);
-            TL = max(0, TL);
-            TR = max(0, TR);
 
             out.TL = TL;
             out.TR = TR;
@@ -105,7 +112,15 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
 
     methods (Access = private)
         function [TL, TR] = applyBiasRatio(obj, TL, TR)
-            % Cap |T_slow/T_fast| at biasRatio without changing the total.
+            % APPLYBIASRATIO Cap T_high / T_low at biasRatio, preserving total.
+            %   When the requested split exceeds the bias ratio, redistribute
+            %   to the maximum allowed split. For total torque T and bias
+            %   ratio b, the capped split is T_high = T*b/(b+1),
+            %   T_low = T/(b+1) (the closed-form solution of
+            %   T_high/T_low = b with T_high + T_low = T). The earlier
+            %   incremental rescale was wrong: it computed the floor from the
+            %   pre-transfer max side, so raising the low side and pulling
+            %   from the high side overshot and collapsed the bias.
             if ~isfinite(obj.biasRatio) || obj.biasRatio <= 0
                 return;
             end
@@ -113,20 +128,19 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
             if total <= eps
                 return;
             end
-            maxSide = max(TL, TR);
-            minSide = min(TL, TR);
-            cappedMin = maxSide / obj.biasRatio;
-            if minSide < cappedMin
-                % Rescale the lesser side up to the cap and pull the excess
-                % from the greater side so the total is preserved.
-                minSide = cappedMin;
-                if TL <= TR
-                    TL = minSide;
-                    TR = total - TL;
-                else
-                    TR = minSide;
-                    TL = total - TR;
-                end
+            ratio = max(TL, TR) / max(min(TL, TR), eps);
+            if ratio <= obj.biasRatio
+                return;   % within the allowed bias
+            end
+            b = obj.biasRatio;
+            highSide = total * b / (b + 1);
+            lowSide  = total / (b + 1);
+            if TL >= TR
+                TL = highSide;
+                TR = lowSide;
+            else
+                TR = highSide;
+                TL = lowSide;
             end
         end
     end

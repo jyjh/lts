@@ -41,7 +41,7 @@ classdef Simulator
         % do not change during a simulation, so capability/value lookups that
         % the hot loop used to repeat every step (isa/ismethod/isprop) are
         % resolved once on first use and memoized here. NaN/empty = uncached.
-        cachedWheelInertia = NaN
+        cachedWheelInertia = struct([])
         cachedHasChassis
         cachedDiffLocksWheels
         cachedTireHasBatchUpdate
@@ -118,6 +118,16 @@ classdef Simulator
             vm.powertrain.updateStateFromDrivenWheels(carrierOmega0);
             totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
 
+            % Off-throttle motoring/regen drag on the driven axle (opt-in via
+            % motoringDragTorque / regenEnabled on the powertrain; 0 when off,
+            % so baseline behavior is unchanged). Applied equally to both rear
+            % wheels as a coastdown braking torque opposing rotation.
+            T_coast_rear = 0;
+            if ismethod(vm.powertrain, 'computeCoastdownTorque')
+                T_coast_rear = 0.5 * vm.powertrain.computeCoastdownTorque( ...
+                    state.speed, throttle);
+            end
+
             % --- WHEEL TORQUE SETUP ---
             % RWD assumption: drive torque only on rear wheels.
             % Brake distribution: fixed front/rear bias from VehicleManager.
@@ -126,12 +136,12 @@ classdef Simulator
             % Rear drive torque is split by the differential model. If no
             % differential is configured, fall back to the legacy 50/50 open
             % behavior (mean-speed carrier).
-            wheelInertia = obj.getWheelInertia();
+            inertia = obj.getWheelInertia();  % struct FL/FR/RL/RR
             diffOut = obj.solveDifferential( ...
                 totalDriveTorque, vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
-                wheelInertia, obj.dt);
-            T_drive_RL = diffOut.TL;
-            T_drive_RR = diffOut.TR;
+                inertia.RL, obj.dt);
+            T_drive_RL = diffOut.TL + T_coast_rear;
+            T_drive_RR = diffOut.TR + T_coast_rear;
 
             % --- BRAKE TORQUE ---
             brakeCommand = max(0, min(1, brake));
@@ -164,19 +174,19 @@ classdef Simulator
 
             nWheelIter = max(1, round(obj.wheelSolveIterations));
             for iter = 1:nWheelIter
-                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt);
-                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt);
+                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL);
+                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR);
+                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL);
+                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt, inertia.RR);
 
                 % Re-solve the differential at the updated wheel speeds so a
                 % locked diff enforces a common speed and an LSD re-biases
                 % torque. Driven-wheel speed then feeds the powertrain.
                 diffOut = obj.solveDifferential( ...
                     totalDriveTorque, vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
-                    wheelInertia, obj.dt);
-                T_drive_RL = diffOut.TL;
-                T_drive_RR = diffOut.TR;
+                    inertia.RL, obj.dt);
+                T_drive_RL = diffOut.TL + T_coast_rear;
+                T_drive_RR = diffOut.TR + T_coast_rear;
 
                 % A locked differential mechanically forces both driven
                 % wheels to the carrier speed.
@@ -1458,19 +1468,31 @@ classdef Simulator
             kappa = max(-1, min(1, kappa));
         end
 
-        function I = getWheelInertia(obj)
+        function inertia = getWheelInertia(obj)
             % GETWHEELINERTIA Per-wheel rotational inertia [kg*m^2].
-            %   Memoized: wheel inertia is a run invariant.
-            if ~isnan(obj.cachedWheelInertia)
-                I = obj.cachedWheelInertia;
+            %   Returns a struct with FL/FR/RL/RR. The driven (rear) axle
+            %   includes the motor rotor inertia reflected through ratio^2 so
+            %   the motor mass is felt at the contact patch during launch and
+            %   wheelspin transients. Front (undriven) wheels use the bare
+            %   wheel+tire inertia. Memoized: inertias are run invariants.
+            if ~isempty(obj.cachedWheelInertia)
+                inertia = obj.cachedWheelInertia;
                 return;
             end
             vm = obj.vehicleManager;
-            I = 0.5;
+            baseI = 0.5;
             if ~isempty(vm.tire) && isprop(vm.tire, 'wheelInertia')
-                I = vm.tire.wheelInertia;
+                baseI = vm.tire.wheelInertia;
             end
-            obj.cachedWheelInertia = I;
+            % Reflect motor rotor inertia to the driven axle (RWD: rear).
+            drivenI = baseI;
+            if ~isempty(vm.powertrain) && ...
+                    isa(vm.powertrain, 'components.Powertrain.PowertrainComponent') && ...
+                    ismethod(vm.powertrain, 'getReflectedRotorInertia')
+                drivenI = baseI + vm.powertrain.getReflectedRotorInertia();
+            end
+            inertia = struct('FL', baseI, 'FR', baseI, 'RL', drivenI, 'RR', drivenI);
+            obj.cachedWheelInertia = inertia;
         end
 
         function out = solveDifferential(obj, totalWheelTorque, omegaL, omegaR, wheelInertia, dt)
@@ -1486,7 +1508,7 @@ classdef Simulator
                 totalWheelTorque = max(0, totalWheelTorque);
                 out.TL = 0.5 * totalWheelTorque;
                 out.TR = 0.5 * totalWheelTorque;
-                out.carrierOmega = 0.5 * (max(omegaL, 0) + max(omegaR, 0));
+                out.carrierOmega = 0.5 * (omegaL + omegaR);
             end
         end
 

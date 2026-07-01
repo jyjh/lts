@@ -57,6 +57,13 @@ classdef PacejkaTire < components.Tire.TireModel
         % extra coast-down drag.
         bearingDragCoeff = 0
 
+        % Allow wheel angular velocity to go negative (true reverse rotation).
+        % Default false: a one-direction clutch clamps omega >= 0, which is
+        % stable for forward lap-time simulation. Set true when the powertrain
+        % is regen/reverse-capable so coastdown/regen drag can fully spin a
+        % wheel down. VehicleManager sets this from the powertrain.
+        allowReverseRotation = false
+
         % Cache peak-mu scans by rounded load/camber/speed.
         peakMuCache
 
@@ -321,9 +328,10 @@ classdef PacejkaTire < components.Tire.TireModel
             kappa = max(-1, min(1, kappa));
         end
         
-        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt)
+        function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
             %   updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
+            %   updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt, inertia)
             %
             %   Rotational equation of motion:
             %     I * d(omega)/dt = T_drive - sign*T_brake - Fx*R - T_resist
@@ -345,10 +353,18 @@ classdef PacejkaTire < components.Tire.TireModel
             %     driveTorque - Net drive torque at this wheel [Nm]
             %     brakeTorque - Brake torque at this wheel [Nm] (positive magnitude)
             %     dt          - Timestep [s]
+            %     inertia     - Optional per-wheel inertia override [kg*m^2].
+            %                   Defaults to obj.wheelInertia. The Simulator
+            %                   passes wheel+tire+reflected-rotor inertia on
+            %                   the driven axle so the motor mass is felt at
+            %                   the contact patch.
 
             omega = cornerState.angularVelocity;
             R     = cornerState.wheelRadius;
             I     = obj.wheelInertia;
+            if nargin >= 6 && ~isempty(inertia) && inertia > 0
+                I = inertia;  % per-wheel override (driven axle: +reflected rotor)
+            end
             Fx    = cornerState.Fx;  % from previous tire evaluation
 
             % Net torque: drive accelerates, brake and tire Fx decelerate
@@ -374,8 +390,11 @@ classdef PacejkaTire < components.Tire.TireModel
             % Euler integration
             omega_new = omega + alpha * dt;
 
-            % Prevent wheel from spinning backwards (one-direction clutch)
-            if omega_new < 0
+            % Prevent wheel from spinning backwards (one-direction clutch),
+            % unless reverse rotation is explicitly enabled (regen/reverse-
+            % capable powertrain). The clamp keeps forward lap-time sim stable;
+            % when lifted, sign(omega) terms above handle negative rotation.
+            if ~obj.allowReverseRotation && omega_new < 0
                 omega_new = 0;
             end
 

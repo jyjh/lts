@@ -44,6 +44,11 @@ classdef PowertrainState < handle
         
         % Drivetrain efficiency used for this state update [0-1]
         drivetrainEfficiency = 1
+
+        % Allow negative motor/wheel angular velocity (reverse rotation). When
+        % false (default) omega is clamped >= 0 for stable forward-only sim.
+        % The powertrain sets this true when regen/coastdown is enabled.
+        allowReverseRotation = false
     end
     
     methods
@@ -58,9 +63,11 @@ classdef PowertrainState < handle
             drivenWheelAngularVelocity = drivenWheelAngularVelocity(:);
             drivenWheelAngularVelocity = drivenWheelAngularVelocity( ...
                 isfinite(drivenWheelAngularVelocity));
-            
+
             if isempty(drivenWheelAngularVelocity)
                 avgWheelOmega = 0;
+            elseif obj.allowReverseRotation
+                avgWheelOmega = mean(drivenWheelAngularVelocity);
             else
                 avgWheelOmega = mean(max(0, drivenWheelAngularVelocity));
             end
@@ -75,7 +82,9 @@ classdef PowertrainState < handle
         
         function updateFromVehicleSpeed(obj, vehicleSpeed, wheelRadius, gearRatio)
             % UPDATEFROMVEHICLESPEED Fallback for standalone/non-wheel tests.
-            vehicleSpeed = max(0, vehicleSpeed);
+            if ~obj.allowReverseRotation
+                vehicleSpeed = max(0, vehicleSpeed);
+            end
             wheelRadius = max(wheelRadius, eps);
             wheelOmega = vehicleSpeed / wheelRadius;
             obj.updateFromDrivenWheels(wheelOmega, gearRatio);

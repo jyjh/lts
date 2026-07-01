@@ -14,28 +14,48 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         totalGearRatio = 3        % Final drive ratio [-]
         wheelRadius = 0.228        % Effective tire radius [m]
         drivetrainEfficiency = 0.92  % Additional drivetrain efficiency [0-1]
+        motorRotorInertia = 0.07    % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to wheels
+        % --- Coastdown / regen (off-throttle motoring) ---
+        % Both default OFF to preserve baseline behavior. When regenEnabled is
+        % true the motor also lifts the omega>=0 / speed>=0 clamps so it can
+        % track reverse rotation and apply a coastdown drag torque.
+        regenEnabled = false            % Apply regenerative braking at off-throttle
+        motoringDragTorque = 0          % Motor coastdown drag torque [Nm] (motor-side), 0 = off
+        regenTorqueLimitNm = 30         % Max regen torque (motor-side) at off-throttle [Nm]
+        regenEnabledSpeedFloor = 1.0    % Vehicle speed below which regen tapers to 0 [m/s]
         maxVehicleSpeed = 0         % Highest speed in the MAT tractive map [m/s]
         maxEngineTorque = 0         % Compatibility alias for existing scripts [Nm]
         maxEngineRPM = 0            % Compatibility alias for existing scripts [rpm]
-        rpmFalloffStartRPM = 0      % RPM where torque falloff starts [rpm]
-        rpmFalloffFactor = 1.0      % Falloff exponent: 1=linear, >1=steeper
+        baseSpeedRPM = 5000         % Motor physical base speed (field-weakening onset) [rpm]
+        rpmFalloffStartRPM = 0      % RPM above which constant-power rolloff is applied [rpm]
+        rpmFalloffFactor = 1.0      % Deprecated: ignored. Kept for config back-compat.
         rpmLimitRPM = 6500          % Hard motor RPM cap [rpm]
         rpmLimitHysteresisRPM = 50  % Rev-limiter release band [rpm]
     end
-    
+
+    properties (Dependent)
+        % True when the powertrain may produce reverse rotation / coastdown
+        % drag, so callers (tire/differential) can lift omega>=0 clamps.
+        reverseCapable
+    end
+
     methods
-        function obj = EMRAX228Powertrain(matFilePath, drivetrainEfficiency)
+        function obj = EMRAX228Powertrain(matFilePath, drivetrainEfficiency, motorRotorInertia)
             % EMRAX228POWERTRAIN Construct from EMRAX228CC Single_4.5.mat
             %   EMRAX228Powertrain()
             %   EMRAX228Powertrain(matFilePath)
             %   EMRAX228Powertrain(matFilePath, drivetrainEfficiency)
-            
+            %   EMRAX228Powertrain(matFilePath, drivetrainEfficiency, motorRotorInertia)
+
             if nargin < 1 || isempty(matFilePath)
                 classDir = fileparts(mfilename('fullpath'));
                 matFilePath = fullfile(classDir, 'EMRAX228CC Single_4.5.mat');
             end
             if nargin >= 2
                 obj.drivetrainEfficiency = max(0, min(1, drivetrainEfficiency));
+            end
+            if nargin >= 3 && ~isempty(motorRotorInertia)
+                obj.motorRotorInertia = max(0, motorRotorInertia);
             end
             obj.state = components.Powertrain.PowertrainState();
             
@@ -84,6 +104,12 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             end
             
             obj.maxEngineTorque = max(obj.torqueCurveNm);
+            % The constant-power rolloff is anchored at the top of the measured
+            % map. The EMRAX .mat already encodes partial field-weakening
+            % through its full RPM range, so we trust the measured force up to
+            % the table's end and apply T proportional to 1/rpm only for the
+            % extrapolation beyond it (up to rpmLimitRPM). baseSpeedRPM remains
+            % the documented physical base speed for reference/telemetry.
             obj.rpmFalloffStartRPM = max(obj.motorRPMCurve);
             obj.maxEngineRPM = obj.rpmLimitRPM;
             obj.maxVehicleSpeed = max(obj.speedCurve);
@@ -136,12 +162,14 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
             % Update motor RPM from driven-wheel angular velocity [rad/s].
+            obj.state.allowReverseRotation = obj.reverseCapable;
             obj.state.updateFromDrivenWheels( ...
                 drivenWheelAngularVelocity, obj.totalGearRatio);
         end
-        
+
         function updateStateFromVehicleSpeed(obj, vehicleSpeed)
             % Fallback update for callers without wheel rotational state.
+            obj.state.allowReverseRotation = obj.reverseCapable;
             obj.state.updateFromVehicleSpeed( ...
                 vehicleSpeed, obj.wheelRadius, obj.totalGearRatio);
         end
@@ -169,20 +197,65 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         
         function torque = getMaxTorque(obj, engineSpeed)
             % Interpolate max EMRAX motor torque at motor speed [rpm].
+            % Derived from the same wheel-force path as computeDriveTorque so
+            % telemetry (GraphPlotter) and the sim agree on a single source of
+            % truth: T_motor = F_wheel * R / (ratio * efficiency).
             engineSpeed = max(0, engineSpeed);
-
-            if engineSpeed >= obj.rpmLimitRPM
-                torque = 0;
-            elseif engineSpeed <= obj.rpmFalloffStartRPM
-                torque = obj.lookupMappedMotorTorque(engineSpeed);
+            fullThrottleForce = obj.lookupTractiveForceByRPM(engineSpeed);
+            if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
+                torque = fullThrottleForce * obj.wheelRadius / ...
+                    (obj.totalGearRatio * obj.drivetrainEfficiency);
             else
-                torque = obj.lookupMappedMotorTorque(obj.rpmFalloffStartRPM) * ...
-                    obj.computeRPMFalloffMultiplier(engineSpeed);
+                torque = 0;
             end
         end
         
         function ratio = getTotalGearRatio(obj)
             ratio = obj.totalGearRatio;
+        end
+
+        function I = getReflectedRotorInertia(obj)
+            % GETREFLECTEDROTORINERTIA Motor rotor inertia reflected to the
+            %   driven wheels [kg*m^2]. A gear ratio couples the rotor to the
+            %   wheels so the effective rotational inertia seen at each wheel
+            %   is I_motor * ratio^2 (per half-shaft). This is added to the
+            %   bare wheel+tire inertia on the driven axle only.
+            I = obj.motorRotorInertia * obj.totalGearRatio^2;
+        end
+
+        function tf = get.reverseCapable(obj)
+            % True when the powertrain may rotate backward / apply coastdown
+            % drag. Callers use this to gate omega>=0 clamps.
+            tf = obj.regenEnabled || obj.motoringDragTorque > 0;
+        end
+
+        function T = computeCoastdownTorque(obj, vehicleSpeed, throttle)
+            % COMPUTECOASTDOWNTORQUE Off-throttle motoring/regen torque
+            %   reflected to the driven axle [Nm] (signed, opposing rotation).
+            %   Returns 0 when both regen and motoring drag are disabled, so
+            %   baseline (flags off) is unaffected. Negative = braking.
+            %
+            %   - Motoring drag: always opposes motor spin (motor-side torque
+            %     reflected through the ratio), applied whenever > 0.
+            %   - Regen: at off-throttle (throttle == 0) and forward speed, a
+            %     braking torque up to regenTorqueLimitNm, tapered to 0 below
+            %     regenEnabledSpeedFloor and never strong enough to reverse the
+            %     wheels.
+            T = 0;
+            motorSign = sign(obj.state.motorAngularVelocity);
+            if motorSign == 0 && vehicleSpeed > 0
+                motorSign = 1;  % forward coastdown from rest-forward
+            end
+            if obj.motoringDragTorque > 0
+                T = T - motorSign * obj.motoringDragTorque * obj.totalGearRatio;
+            end
+            if obj.regenEnabled && throttle == 0 && vehicleSpeed > 0
+                % Taper regen to zero near rest so it cannot reverse the car.
+                taper = min(1, vehicleSpeed / max(obj.regenEnabledSpeedFloor, eps));
+                T_regen = obj.regenTorqueLimitNm * obj.totalGearRatio * ...
+                    obj.drivetrainEfficiency * taper;
+                T = T - motorSign * T_regen;
+            end
         end
         
         function eff = getDrivetrainEfficiency(obj)
@@ -201,14 +274,16 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             force = interp1(obj.motorRPMCurve, obj.tractiveForceCurveN, ...
                 motorRPM, 'linear');
         end
-        
-        function torque = lookupMappedMotorTorque(obj, motorRPM)
-            rawRPM = obj.vehicleSpeedToMotorRPM(obj.torqueSpeedCurve);
-            motorRPM = max(rawRPM(1), min(rawRPM(end), motorRPM));
-            torque = interp1(rawRPM, obj.torqueCurveNm, motorRPM, 'linear');
-        end
-        
+
         function multiplier = computeRPMFalloffMultiplier(obj, motorRPM)
+            % Constant-power field-weakening rolloff, anchored at the top of
+            % the measured map (rpmFalloffStartRPM = max(motorRPMCurve)). The
+            % EMRAX .mat already encodes the constant-torque/early field-
+            % weakening region through its full RPM range, so we trust the
+            % measured force up to the table end and apply T proportional to
+            % 1/rpm only for the extrapolation beyond it. The previous linear
+            % falloff drove torque to 0 at the rev limit (e.g. 1194 N at
+            % 6000 rpm vs the correct ~2240 N) — a large over-declaration.
             if motorRPM <= obj.rpmFalloffStartRPM
                 multiplier = 1;
                 return;
@@ -217,10 +292,8 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
                 multiplier = 0;
                 return;
             end
-            
-            falloffRange = max(obj.rpmLimitRPM - obj.rpmFalloffStartRPM, eps);
-            remainingFraction = (obj.rpmLimitRPM - motorRPM) / falloffRange;
-            multiplier = remainingFraction ^ max(obj.rpmFalloffFactor, eps);
+            % Constant power: T(rpm) = T_anchor * rpmFalloffStartRPM / rpm.
+            multiplier = obj.rpmFalloffStartRPM / motorRPM;
             multiplier = max(0, min(1, multiplier));
         end
         
