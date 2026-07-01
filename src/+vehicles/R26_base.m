@@ -22,17 +22,17 @@ function cfg = baseline()
     %  the ground. Pitch/roll inertia are derived in SimpleChassis from
     %  mass + geometry; only yaw inertia is specified here.
     %  ====================================================================
-    cfg.totalMass            = 256;      % Total mass with driver [kg] (Assume 68kg driver)
+    cfg.totalMass            = 264;      % Total mass with driver [kg]
     cfg.wheelbase            = 1.558;    % Wheelbase [m]
     cfg.trackWidth           = 1.21;     % Track width [m]
     cfg.cgHeight             = 0.3;      % CG height above ground [m]
     cfg.yawInertia           = 130;      % Yaw inertia about CG [kg*m^2]
     cfg.airDensity           = 1.225;    % Air density [kg/m^3]
-    cfg.staticFrontWeight    = 0.50;     % Static front weight distribution [0-1]
-    cfg.brakeBiasFront       = 0.60;     % Brake force fraction to front axle [0-1]
-    cfg.brakeForceCoefficient = 0.70;    % Brake force capacity as fraction of normal load (no ABS)
+    cfg.staticFrontWeight    = 0.5038;     % Static front weight distribution [0-1]
+    cfg.brakeBiasFront       = 0.60;     % Brake force fraction to front axle [0-1] TODO
+    cfg.brakeForceCoefficient = 0.70;    % Brake force capacity as fraction of normal load (no ABS) TODO
     cfg.maxSpeed             = 80;       % Soft speed limiter [m/s] (~288 km/h)
-    cfg.unsprungMass         = 25;       % Per-corner unsprung mass [kg]
+    cfg.unsprungMass         = 25;       % Per-corner unsprung mass [kg] TODO
 
     %% ====================================================================
     %  AERODYNAMICS
@@ -82,19 +82,19 @@ function cfg = baseline()
     %  ====================================================================
 
     cfg.suspension.front = struct( ...
-        'springRate', 45000, ...         % Heave spring rate [N/m]
-        'dampingCoeff', 3000, ...        % Compression (bump) damping [N*s/m]
-        'reboundCoeff', 4500);           % Rebound (droop) damping [N*s/m]
+        'springRate', 43780, ...         % Heave spring rate [N/m]
+        'dampingCoeff', 3000, ...        % Compression (bump) damping [N*s/m] TODO
+        'reboundCoeff', 4500);           % Rebound (droop) damping [N*s/m] TODO
 
     cfg.suspension.rear = struct( ...
-        'springRate', 42000, ...         % Heave spring rate [N/m] (slightly softer)
-        'dampingCoeff', 2800, ...        % Compression (bump) damping [N*s/m]
-        'reboundCoeff', 4200);           % Rebound (droop) damping [N*s/m]
+        'springRate', 39400, ...         % Heave spring rate [N/m] (slightly softer)
+        'dampingCoeff', 2800, ...        % Compression (bump) damping [N*s/m] TODO
+        'reboundCoeff', 4200);           % Rebound (droop) damping [N*s/m] TODO
 
-    cfg.suspension.motionRatio    = 0.95;     % Installation motion ratio (wheel<->spring)
-    cfg.suspension.bumpStopLength = 0.025;    % Free travel before bump stop engages [m]
-    cfg.suspension.bumpStopRate   = 200000;   % Bump stop stiffness [N/m]
-    cfg.suspension.tireSpringRate = 200000;   % Vertical tire stiffness [N/m]
+    cfg.suspension.motionRatio    = 1;     % Installation motion ratio (wheel<->spring)
+    cfg.suspension.bumpStopLength = 0.025;    % Free travel before bump stop engages [m] TODO
+    cfg.suspension.bumpStopRate   = 200000;   % Bump stop stiffness [N/m] TODO
+    cfg.suspension.tireSpringRate = 200000;   % Vertical tire stiffness [N/m] TODO
 
     % Suspension geometry: per-axle lookup tables indexed by wheel travel
     % [m] (bump/compression = positive, rebound = negative). Values are
@@ -104,7 +104,7 @@ function cfg = baseline()
     %   motionRatioCurve [-] referenced to the wheel
     %   rollCenterHeight [m] above ground (drives the geometric load transfer)
     % Vehicle-level wheelbase/track/weight are pulled from the VehicleManager
-    % at construction, so they are not duplicated here.
+    % at construction, so they are not duplicated here. TODO
     cfg.suspension.geometry.front = struct( ...
         'travelGrid',       [-0.05 0 0.05], ...
         'camberCurve',      [0.5 0 -1.5] * pi / 180, ...   % gains neg. camber in bump
@@ -118,10 +118,9 @@ function cfg = baseline()
         'motionRatioCurve', [0.94 0.95 0.96], ...
         'rollCenterHeight', 0.045);                        % a bit higher = stable platform
     % Steering model. steerInput is treated as a road-wheel angle by default.
-    %   ackermann: 0 = parallel steer, 1 = ideal Ackermann. 0.8872 is a
-    %   typical FSAE value (mostly-Ackermann for tight corners).
+    %   ackermann: 0 = parallel steer, 1 = ideal Ackermann.
     cfg.suspension.geometry.steering = struct( ...
-        'steeringRatio',      1.0, ...
+        'steeringRatio',      4.856, ...
         'ackermann',          0.8872, ...
         'maxWheelSteerAngle', 0.6, ...                      % [rad] (~34 deg) road-wheel cap
         'rearSteerRatio',     0.0);
@@ -162,7 +161,7 @@ function cfg = baseline()
         'pitchDamping', 6000, ...        % [N*m*s/rad]
         'rollStiffness', 55000, ...      % [N*m/rad] (legacy whole-car average)
         'rollDamping', 5000, ...         % [N*m*s/rad]
-        'torsionalRigidity', 229183, ... % [N*m/rad] couples front vs rear roll (twist); ~4000 N*m/deg
+        'torsionalRigidity', 162518, ... % [N*m/rad] couples front vs rear roll (twist); ~4000 N*m/deg
         'torsionalDamping', 2000);       % [N*m*s/rad] damps the twist rate
 
     %% ====================================================================
