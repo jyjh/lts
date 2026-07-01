@@ -32,6 +32,15 @@ classdef DriverModel < handle
         steeringUsage    = 1.0    % Fraction of path curvature converted to steer
         maxSteeringAngle = 0.6    % Steering angle limit [rad]
         minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
+        % Traction-circle coupling for the active (planned) path: the throttle
+        % is scaled down as lateral grip demand grows, so the car lifts into a
+        % coast at the apex (max lateral grip) rather than holding cruise
+        % throttle that would eat the rear axle's cornering capacity. The
+        % reserve is the minimum throttle fraction kept even at peak lateral
+        % demand; 0 gives a pure lift-off coast through the apex.
+        tractionCircleReserve = 0      % Min throttle fraction at peak lateral grip [0-1]
+        trailBrakeReserve = 0.30       % Min brake fraction kept at peak lateral grip (trail-braking) [0-1]
+        corneringGripMargin = 0.95     % Lateral-grip fraction at which throttle is fully reserved
         apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
         stanleyGain      = 1.5    % Cross-track correction gain
         stanleySoftening = 1.5    % Low-speed softening term [m/s]

@@ -81,6 +81,8 @@ classdef DriverInputPlanner
             F_drive_full = zeros(n, 1);
             F_resistance = zeros(n, 1);
             brakeForceAccel = zeros(n, 1);
+            driveScale = zeros(n, 1);      % traction-circle throttle cap per point
+            brakeScale = zeros(n, 1);      % traction-circle brake cap per point
             for i = 1:n
                 limits = obj.estimateGGVLimits(vTarget(i), initialState);
                 maxBrakeAccel(i) = limits.maxBrakeAccel;
@@ -101,11 +103,16 @@ classdef DriverInputPlanner
             speedPlan = vTarget;
             speedPlan(1) = min(max(initialState.speed, 0), vTarget(1));
             for i = 1:n
-                limits = obj.estimateGGVLimits(speedPlan(i), initialState);
+                % Pass curvature so drive/brake force is traction-circle-capped:
+                % at a corner apex little longitudinal capacity remains, so the
+                % plan commands coast/partial instead of saturating throttle.
+                limits = obj.estimateGGVLimits(speedPlan(i), initialState, curvature(i));
                 maxDriveAccel(i) = limits.maxDriveAccel;
                 F_drive_full(i) = limits.F_drive_full;
                 F_resistance(i) = limits.F_resistance;
                 brakeForceAccel(i) = limits.brakeForceAccel;
+                driveScale(i) = limits.driveScale;
+                brakeScale(i) = limits.brakeScale;
                 if i < n
                     ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
                     axCap = max(maxDriveAccel(i), 0);
@@ -134,6 +141,13 @@ classdef DriverInputPlanner
                 [throttleRef(i), brakeRef(i)] = DriverInputPlanner.computePedals( ...
                     axRef(i), F_drive_full(i), F_resistance(i), ...
                     vm.totalMass, brakeForceAccel(i));
+                % Traction-circle cap: at a corner apex the lateral grip demand
+                % leaves little longitudinal capacity, so cap the throttle
+                % toward driveScale (0 -> pure coast) and the brake toward
+                % brakeScale (trail-brake taper). This makes the planned pedals
+                % apex-aware: lift into the apex, coast through it, drive out.
+                throttleRef(i) = min(throttleRef(i), driveScale(i));
+                brakeRef(i) = min(brakeRef(i), brakeScale(i));
             end
 
             profile = struct( ...
@@ -194,10 +208,12 @@ classdef DriverInputPlanner
             plannedCoast = input.throttle <= 0 && input.brake <= 0;
             % Coast-aware hold: when the feedforward plan calls for coast AND
             % the planned axRef indicates the car is meant to be slowing (drag
-            % doing the work, not holding speed), tolerate small speed drift
-            % without pedaling so lift-off coast plateaus survive. When axRef is
-            % near zero (maintain-speed coast) the feedback still trims, since
-            % holding speed against drag needs throttle.
+            % doing the work), tolerate small speed drift without pedaling so
+            % lift-off coast plateaus survive. When axRef is near zero (a
+            % maintain-speed coast, e.g. holding speed against drag on a
+            % straight), the feedback still trims throttle to hold target speed.
+            % Apex coasts come from the planner's traction-circle cap, which
+            % drives the planned pedals to zero independently of this hold.
             planningToSlow = input.axRef < -obj.coastAxRefThreshold;
             if plannedCoast && planningToSlow && actualSpeed >= 0.5 && ...
                     abs(speedError) <= obj.coastSpeedTolerance
@@ -229,7 +245,15 @@ classdef DriverInputPlanner
             input.brake = max(0, min(1, input.brake));
         end
 
-        function limits = estimateGGVLimits(obj, speed, templateState)
+        function limits = estimateGGVLimits(obj, speed, templateState, curvature)
+            % ESTIMATEGGVLIMITS Vehicle longitudinal/lateral capability at a speed.
+            %   When curvature [1/m] is supplied, drive and brake force are
+            %   further capped by the traction circle so a corner apex (high
+            %   lateral grip demand) leaves little longitudinal capacity ->
+            %   the plan commands coast/partial there, not full throttle.
+            if nargin < 4 || isempty(curvature) || ~isfinite(curvature)
+                curvature = 0;
+            end
             vm = obj.vehicleManager;
             tempState = templateState;
             tempState.vehicleManager = vm;
@@ -252,6 +276,9 @@ classdef DriverInputPlanner
             corneringUsage = 0.98;
             brakingUsage = 0.98;
             driveUsage = 0.98;
+            trailBrakeReserve = 0.30;
+            tractionReserve = 0;
+            corneringGripMargin = 0.95;
             if ~isempty(obj.driverModel)
                 if isprop(obj.driverModel, 'corneringUsage')
                     corneringUsage = obj.driverModel.corneringUsage;
@@ -262,10 +289,32 @@ classdef DriverInputPlanner
                 if isprop(obj.driverModel, 'driveUsage')
                     driveUsage = obj.driverModel.driveUsage;
                 end
+                if isprop(obj.driverModel, 'trailBrakeReserve')
+                    trailBrakeReserve = obj.driverModel.trailBrakeReserve;
+                end
+                if isprop(obj.driverModel, 'tractionCircleReserve')
+                    tractionReserve = obj.driverModel.tractionCircleReserve;
+                end
+                if isprop(obj.driverModel, 'corneringGripMargin')
+                    corneringGripMargin = obj.driverModel.corneringGripMargin;
+                end
             end
             corneringUsage = max(0, min(1, corneringUsage));
             brakingUsage = max(0, min(1, brakingUsage));
             driveUsage = max(0, min(1, driveUsage));
+
+            % --- Traction-circle longitudinal cap from lateral demand ---
+            % At a corner the tires spend grip on ay = v^2 * |kappa|; only the
+            % remainder is available longitudinally. driveScale collapses to
+            % tractionReserve (0 -> coast) at peak lateral demand; brakeScale
+            % trails to trailBrakeReserve (gentler, for trail-braking).
+            ay = tempState.speed^2 * abs(curvature);
+            ayMax = max(corneringUsage * tireAccel, 0.1);
+            margin = max(1e-3, min(1, corneringGripMargin));
+            latUse = min(ay / ayMax / margin, 1);
+            ellipse = sqrt(max(0, 1 - latUse^2));
+            driveScale = max(0, min(1, tractionReserve)) + (1 - max(0, min(1, tractionReserve))) * ellipse;
+            brakeScale = max(0, min(1, trailBrakeReserve)) + (1 - max(0, min(1, trailBrakeReserve))) * ellipse;
 
             % --- Forward drive capability (speed- and load-dependent) ---
             % Full-throttle wheel force from the powertrain map, capped by the
@@ -299,6 +348,14 @@ classdef DriverInputPlanner
             limits.maxDriveAccel = maxDriveAccel;      % Net forward accel capability [m/s^2]
             limits.coastDecel = coastDecel;            % Free lift-off decel [m/s^2]
             limits.brakeForceAccel = brakeForceAccel;  % Hydraulic-brake-only decel per unit brake [m/s^2]
+            % Traction-circle output caps applied to the planned pedals: at a
+            % corner apex the lateral grip demand leaves little longitudinal
+            % capacity, so the throttle is capped toward driveScale (0 -> coast)
+            % and the brake toward brakeScale (trail-brake). Applied to the
+            % pedal OUTPUT (not the force input) so the ratio in computePedals
+            % is not distorted.
+            limits.driveScale = driveScale;
+            limits.brakeScale = brakeScale;
         end
     end
 
