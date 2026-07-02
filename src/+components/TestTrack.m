@@ -15,8 +15,8 @@ classdef TestTrack < components.WaypointTrack
     methods
         function obj = TestTrack(trackType)
             % TESTTRACK Create a procedural test track
-            %   trackType: 'straight10', 'straight', 'oval', 'skidpad',
-            %              'autocross', 'busstop', 'slalom', '90turn'
+            %   trackType: 'straight10', 'straight', 'straight75', 'oval',
+            %              'skidpad', 'autocross', 'busstop', 'slalom', '90turn'
             %   Default is 'oval'
 
             % WaypointTrack() runs implicitly with no args (Closed defaults to
@@ -30,6 +30,8 @@ classdef TestTrack < components.WaypointTrack
                     obj = buildStraight10(obj);
                 case 'straight'
                     obj = buildStraight(obj);
+                case 'straight75'
+                    obj = buildStraight75(obj);
                 case 'oval'
                     obj = buildOval(obj);
                 case 'skidpad'
@@ -75,6 +77,14 @@ classdef TestTrack < components.WaypointTrack
             x = (0:ds:200)';
             y = zeros(size(x));
             obj = setPoints(obj, [x, y], false, 'straight');
+        end
+
+        function obj = buildStraight75(obj)
+            % 75m straight for FSAE Acceleration event validation
+            ds = 1;  % 1m spacing
+            x = (0:ds:75)';
+            y = zeros(size(x));
+            obj = setPoints(obj, [x, y], false, 'straight75');
         end
 
         function obj = buildOval(obj)
