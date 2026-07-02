@@ -1,4 +1,4 @@
-function cfg = baseline()
+function cfg = R26_base()
     % BASELINE Reference FSAE car configuration
     %
     % Returns a fully-populated VehicleConfig describing the current baseline
@@ -15,6 +15,8 @@ function cfg = baseline()
     % Units: SI throughout (m, kg, N, s, rad, Pa).
 
     cfg = VehicleConfig();
+
+    cfg.name = "R26_base";
 
     %% ====================================================================
     %  VEHICLE-LEVEL CONSTANTS
@@ -97,7 +99,7 @@ function cfg = baseline()
     % Steering model. steerInput is treated as a road-wheel angle by default.
     %   ackermann: 0 = parallel steer, 1 = ideal Ackermann.
     cfg.suspension.geometry.steering = struct( ...
-        'steeringRatio',      4.856, ...
+        'steeringRatio',      1, ...
         'ackermann',          0.8872, ...
         'maxWheelSteerAngle', 0.6, ...                      % [rad] (~34 deg) road-wheel cap
         'rearSteerRatio',     0.0);
@@ -153,7 +155,7 @@ function cfg = baseline()
         'matFile', '', ...
         'efficiency', 0.92, ...          % Drivetrain efficiency [0-1]
         'motorRotorInertia', 0.07, ...   % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to rear wheels
-        'differential', struct('type', 'open'));
+        'differential', struct('type', 'lsd'));
 
     %% ====================================================================
     %  TIRE

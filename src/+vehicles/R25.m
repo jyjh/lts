@@ -11,6 +11,7 @@ function cfg = R25()
 
     cfg = VehicleConfig();
 
+    cfg.name = "R25";
     %% ====================================================================
     %  VEHICLE-LEVEL CONSTANTS
     %  Mass includes the driver. x forward, y left, z up; CG height from
@@ -20,7 +21,7 @@ function cfg = R25()
     cfg.totalMass                    = 264;        %  [CSV r10: 196 kg + 68.0 kg driver] (kg, with driver)
     cfg.wheelbase                    = 1.528;      %  [CSV r8: 1528 mm] [m]
     cfg.trackWidth                   = 1.21;       %  [CSV r8: Front Track 1210 mm] [m]
-    cfg.cgHeight                     = 256;        %  [CSV r9: 256 (unit column says 'mm' but value is clearly metres; kept as 256 m per baseline/R26)] [m]
+    cfg.cgHeight                     = 0.256;        %  [CSV r9: 256 (unit column says 'mm' but value is clearly metres; kept as 256 m per baseline/R26)] [m]
     cfg.yawInertia                   = 130;        %  [not in spec sheet -- baseline default 130] [kg*m^2]
     cfg.airDensity                   = 1.225;      % [kg/m^3] (ISA standard; CSV aero r131 was evaluated at rho=1.162)
     cfg.staticFrontWeight            = 0.5095;     %  [CSV r11: 50.95% front] [0-1]
@@ -82,7 +83,7 @@ function cfg = R25()
         'motionRatioCurve', [0.94 0.95 0.96], ...
         'rollCenterHeight', 0.050496);                        %   [CSV r33: 50.496 mm]
     cfg.suspension.geometry.steering = struct( ...
-        'steeringRatio',      0.257, ...
+        'steeringRatio',      1, ...
         'ackermann',          1.0207, ...
         'maxWheelSteerAngle', 0.6, ...                      % [not in spec sheet] [rad] (~34 deg)
         'rearSteerRatio',     0.0);

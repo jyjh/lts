@@ -18,6 +18,7 @@ classdef VehicleConfig
     % settings, not car properties).
 
     properties
+        name = "VehicleConfig"
         % ----------------------------------------------------------------
         % Vehicle-level constants
         %   Mass is car + driver; all lengths in [m]. CG height is measured
@@ -52,6 +53,7 @@ classdef VehicleConfig
             % VEHICLECONFIG Construct with baseline defaults.
             %   Every sub-system struct is pre-populated so individual
             %   fields can be overridden later (cfg.aero.ClA = 4.2).
+            obj.name = "VehicleConfig";
 
             % --- Aero: whole car ---
             %   The aero resultant is positioned at (xPosition, zPosition) where

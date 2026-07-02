@@ -208,8 +208,8 @@ def extract(rows, driver_mass):
     if r:
         cg = parse_num(val_after(r, "cg height"))
         if cg is not None:
-            s.cgHeight = cg
-            s.add_direct("cgHeight", cg,
+            s.cgHeight = cg / 1000
+            s.add_direct("cgHeight", cg / 1000,
                          f"CSV r9: {cg:g} (unit column says 'mm' but value is "
                          f"clearly metres; kept as {cg:g} m per baseline/R26)")
 
@@ -275,6 +275,7 @@ def extract(rows, driver_mass):
         sr = parse_num(val_after(r, "steer ratio"))
         if sr is not None:
             s.steeringRatio = sr
+            s.steeringRatio = 1 # Manual override, due to the way the simulator works currently. TODO
             s.add_direct("suspension.geometry.steering.steeringRatio",
                          sr, "CSV r39")
 
