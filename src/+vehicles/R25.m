@@ -27,7 +27,7 @@ function cfg = R25()
     cfg.brakeBiasFront               = 0.6;        %  TODO derivable: CSV r46: line pressures F 14.524/R 20.836 bar, r44 pistons F4/R2 => front clamp-fraction ~ 0.582 (rough; ignores piston bore 25 vs 25.4 mm). Verify against bias bar. [0-1]
     cfg.brakeForceCoefficient        = 0.7;        %  TODO derivable: CSV r46 is a 'Force @ 1g Deceleration' table; the system is sized for ~1g but brakeForceCoefficient is tyre-limited capacity. baseline 0.70 left as-is.
     cfg.maxSpeed                     = 80;         %  [not in spec sheet -- baseline default 80] [m/s] (~288 km/h)
-    cfg.unsprungMass                 = 25;         %  TODO derivable: CSV r47-53 list upright/hub/bearing/axle/brake components as text (no clean per-corner mass). Sum them manually if needed; baseline 25 kg/corner left as-is. [kg/corner]
+    cfg.unsprungMass                 = 9.3;         %  TODO derivable: CSV r47-53 list upright/hub/bearing/axle/brake components as text (no clean per-corner mass). Sum them manually if needed; baseline 25 kg/corner left as-is. [kg/corner]
 
     %% ====================================================================
     %  AERODYNAMICS

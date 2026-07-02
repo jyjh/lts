@@ -30,6 +30,9 @@ config = vehicles.baseline();
 %  ====================================================================
 singleWindow = false;
 
+% Set to false to skip all graphs after the simulation completes.
+showPlots = false;
+
 % Export MoTeC CSV and .ld files after the simulation completes.
 exportMoTeC = true;
 
@@ -103,7 +106,9 @@ end
 %% ====================================================================
 %  PLOT RESULTS
 %  ====================================================================
-GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, vehicle.aero, singleWindow);
+if showPlots
+    GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, vehicle.aero, singleWindow);
+end
 
 % --- Summary ---
 speedKmh = stateLog.speedKmh;

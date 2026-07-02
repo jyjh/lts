@@ -32,7 +32,7 @@ function cfg = baseline()
     cfg.brakeBiasFront       = 0.60;     % Brake force fraction to front axle [0-1] TODO
     cfg.brakeForceCoefficient = 0.70;    % Brake force capacity as fraction of normal load (no ABS) TODO
     cfg.maxSpeed             = 80;       % Soft speed limiter [m/s] (~288 km/h)
-    cfg.unsprungMass         = 25;       % Per-corner unsprung mass [kg] TODO
+    cfg.unsprungMass         = 9.3;       % Per-corner unsprung mass [kg] TODO
 
     %% ====================================================================
     %  AERODYNAMICS

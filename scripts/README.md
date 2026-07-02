@@ -1,6 +1,23 @@
 # scripts/
 
-Code-generation and maintenance tooling for the FSAE lap-time simulator.
+Code-generation and analysis tooling for the FSAE lap-time simulator.
+
+## MATLAB utility scripts
+
+Standalone diagnostic scripts. Run them by name from MATLAB — each auto-addpaths
+`src/` and writes a PNG to `exports/` (created if missing). Set `configName` at
+the top to switch vehicle configs.
+
+- **`powertrain_power_curve.m`** — plots the configured powertrain's motor
+  torque, motor power, wheel tractive force, and wheel torque curves, sampled via
+  the `EMRAX228Powertrain` public API over a dense RPM grid (so the
+  constant-power rolloff and rev-limit cut match what the simulator sees). Prints
+  peak torque/power/force and the map-end / rev-limit speeds to the console.
+  Saves `exports/powertrain_power_curve.png`.
+- **`theoretical_acceleration_75m.m`** — best-case 75 m straight-line
+  acceleration estimate, full-throttle force capped by rear-axle tire grip from
+  the active `.tir` file. Saves
+  `exports/theoretical_acceleration_75m_diagnostics.png`.
 
 ## generate_vehicle.py
 
