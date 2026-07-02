@@ -52,6 +52,34 @@ verifyEqual(testCase, chassis.state.aeroPitchMoment, 50, 'AbsTol', 1e-12);
 verifyGreaterThan(testCase, chassis.getPitchAngle(), 0);
 end
 
+function testVehicleConfigBuildLinksChassisAndUsesSprungMass(testCase)
+config = vehicles.baseline();
+vehicle = VehicleManager.fromConfig(config, components.TestTrack('straight10'), 0.001);
+
+expectedSprungMass = config.totalMass - 4 * config.unsprungMass;
+verifyEqual(testCase, vehicle.chassis.sprungMass, expectedSprungMass, 'AbsTol', 1e-12);
+verifyFalse(testCase, isempty(vehicle.chassis.suspension));
+verifyFalse(testCase, isempty(vehicle.suspension.chassis));
+end
+
+function testTwistUsesSeparateFrontAndRearRollForCornerKinematics(testCase)
+state = components.Chassis.ChassisState();
+wheelbase = 1.6;
+trackWidth = 1.2;
+state.frontRollAngle = 0.10;
+state.rearRollAngle = 0.02;
+state.frontRollRate = 0.30;
+state.rearRollRate = 0.05;
+
+state.updateCornerKinematics(wheelbase, trackWidth, 0.5);
+
+frontRollDisplacement = state.cornerDisplacement.FR - state.cornerDisplacement.FL;
+rearRollDisplacement = state.cornerDisplacement.RR - state.cornerDisplacement.RL;
+verifyEqual(testCase, frontRollDisplacement, state.frontRollAngle * trackWidth, 'AbsTol', 1e-12);
+verifyEqual(testCase, rearRollDisplacement, state.rearRollAngle * trackWidth, 'AbsTol', 1e-12);
+verifyNotEqual(testCase, frontRollDisplacement, rearRollDisplacement);
+end
+
 function testAlgebraicSuspensionFallbackStillComputesLoads(testCase)
 config = vehicles.baseline();
 vehicle = VehicleManager([], [], [], [], []);

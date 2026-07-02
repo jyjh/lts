@@ -87,6 +87,7 @@ classdef PacejkaTire < components.Tire.TireModel
             
             % Load shared tire constants
             obj.tireConstants = components.Tire.TireConstants(tirFilePath);
+            obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
             
             % Create per-corner state objects
             obj.FL = components.Tire.TireState();
@@ -117,8 +118,9 @@ classdef PacejkaTire < components.Tire.TireModel
             %   surface and scaled by surfaceMu/surfaceMuReference.
             %   Mutates cornerState in-place with computed forces and moments.
 
-            [surfaceMu, dt, longSpeed, computePeakMu] = ...
+            [surfaceMu, dt, longSpeed, computePeakMu, relaxationMode] = ...
                 obj.parseCornerOptionalArgs(varargin{:});
+            relaxationMode = obj.resolveRelaxationMode(dt, relaxationMode);
             
             % Store inputs
             cornerState.normalForce = normalLoad;
@@ -129,14 +131,14 @@ classdef PacejkaTire < components.Tire.TireModel
             % transient (force-producing) slip. With relaxationLength = 0
             % the transient slip equals the steady-state slip (baseline).
             [alpha, kappa] = obj.applyRelaxation( ...
-                cornerState, ssAlpha, ssKappa, longSpeed, dt);
+                cornerState, ssAlpha, ssKappa, longSpeed, dt, relaxationMode);
 
             cornerState.ssSlipAngle = ssAlpha;
             cornerState.ssSlipRatio = ssKappa;
             % Commit the advanced lagged state only when dt > 0; during
             % intermediate wheel-solve iterations (dt = 0) preserve the
             % previous lagged slip for the next physics step.
-            if dt > 0
+            if strcmp(relaxationMode, 'advance') && dt > 0
                 cornerState.slipAngle = alpha;
                 cornerState.slipRatio = kappa;
             end
@@ -476,7 +478,7 @@ classdef PacejkaTire < components.Tire.TireModel
                 slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
                 kappa_FL, kappa_FR, kappa_RL, kappa_RR, ...
                 camber_FL, camber_FR, camber_RL, camber_RR, dt, longSpeeds, ...
-                surfaceMu, computePeakMu)
+                surfaceMu, computePeakMu, relaxationMode)
             % UPDATEALLCORNERS Evaluate all four corners at once
             %   updateAllCorners(Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
             %       slipAngle_FL, slipAngle_FR, slipAngle_RL, slipAngle_RR, ...
@@ -512,6 +514,10 @@ classdef PacejkaTire < components.Tire.TireModel
             if nargin < 21 || isempty(computePeakMu)
                 computePeakMu = true;
             end
+            if nargin < 22
+                relaxationMode = '';
+            end
+            relaxationMode = obj.resolveRelaxationMode(dt, relaxationMode);
 
             Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
             ssAlpha = max(-0.3, min(0.3, ...
@@ -536,8 +542,9 @@ classdef PacejkaTire < components.Tire.TireModel
                 states{i}.ssSlipRatio = ssKappa(i);
                 states{i}.camberAngle = gamma(i);
                 [alpha(i), kappa(i)] = obj.applyRelaxation( ...
-                    states{i}, ssAlpha(i), ssKappa(i), longSpeeds(i), dt);
-                if dt > 0
+                    states{i}, ssAlpha(i), ssKappa(i), longSpeeds(i), dt, ...
+                    relaxationMode);
+                if strcmp(relaxationMode, 'advance') && dt > 0
                     % Commit the advanced lagged state for next step.
                     states{i}.slipAngle = alpha(i);
                     states{i}.slipRatio = kappa(i);
@@ -623,7 +630,7 @@ classdef PacejkaTire < components.Tire.TireModel
     end
     
     methods (Access = private)
-        function [alpha, kappa] = applyRelaxation(obj, cornerState, ssAlpha, ssKappa, longSpeed, dt)
+        function [alpha, kappa] = applyRelaxation(obj, cornerState, ssAlpha, ssKappa, longSpeed, dt, relaxationMode)
             % APPLYRELAXATION First-order contact-patch slip lag
             %   sigma * d(alpha)/dt + V * alpha = V * alpha_ss
             % Solved with the exact, unconditionally-stable exponential form
@@ -631,9 +638,26 @@ classdef PacejkaTire < components.Tire.TireModel
             % which is stable for any dt (explicit Euler would be stiff here).
             % With relaxationLength = 0 the transient slip equals ss (baseline).
             sigma = obj.relaxationLength;
+            if nargin < 7 || isempty(relaxationMode)
+                relaxationMode = obj.resolveRelaxationMode(dt, '');
+            end
             if sigma <= 0 || dt <= 0
+                if strcmp(relaxationMode, 'hold') && sigma > 0
+                    alpha = cornerState.slipAngle;
+                    kappa = cornerState.slipRatio;
+                    return;
+                end
                 alpha = ssAlpha;
                 kappa = ssKappa;
+                return;
+            end
+            if strcmp(relaxationMode, 'steady')
+                alpha = ssAlpha;
+                kappa = ssKappa;
+                return;
+            elseif strcmp(relaxationMode, 'hold')
+                alpha = cornerState.slipAngle;
+                kappa = cornerState.slipRatio;
                 return;
             end
 
@@ -762,11 +786,12 @@ classdef PacejkaTire < components.Tire.TireModel
             Mz = outputs(:,6) * surfaceScale;
         end
 
-        function [surfaceMu, dt, longSpeed, computePeakMu] = parseCornerOptionalArgs(obj, varargin)
+        function [surfaceMu, dt, longSpeed, computePeakMu, relaxationMode] = parseCornerOptionalArgs(obj, varargin)
             surfaceMu = obj.surfaceMuReference;
             dt = 0;
             longSpeed = obj.tireConstants.refVelocity;
             computePeakMu = true;
+            relaxationMode = '';
 
             nArgs = numel(varargin);
             if nArgs == 0
@@ -784,6 +809,9 @@ classdef PacejkaTire < components.Tire.TireModel
                 if nArgs >= 4 && ~isempty(varargin{4})
                     computePeakMu = logical(varargin{4});
                 end
+                if nArgs >= 5 && ~isempty(varargin{5})
+                    relaxationMode = varargin{5};
+                end
             end
 
             if isempty(surfaceMu)
@@ -794,6 +822,24 @@ classdef PacejkaTire < components.Tire.TireModel
             end
             if isempty(longSpeed)
                 longSpeed = obj.tireConstants.refVelocity;
+            end
+        end
+
+        function mode = resolveRelaxationMode(~, dt, mode)
+            if nargin < 3 || isempty(mode)
+                if dt > 0
+                    mode = 'advance';
+                else
+                    mode = 'steady';
+                end
+                return;
+            end
+
+            mode = lower(char(mode));
+            validModes = {'advance', 'steady', 'hold'};
+            if ~any(strcmp(mode, validModes))
+                error('PacejkaTire:InvalidRelaxationMode', ...
+                    'relaxationMode must be advance, steady, or hold.');
             end
         end
 
@@ -826,13 +872,17 @@ classdef PacejkaTire < components.Tire.TireModel
 
         function Vx = computeMFevalSpeed(obj, longitudinalSpeed)
             if isnan(obj.cachedMFevalLowSpeed)
-                lowSpeedLimit = 0.1;
-                if isfield(obj.tireConstants.params, 'VXLOW')
-                    lowSpeedLimit = max(lowSpeedLimit, obj.tireConstants.params.VXLOW);
-                end
-                obj.cachedMFevalLowSpeed = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
+                obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
             end
             Vx = max(abs(longitudinalSpeed), obj.cachedMFevalLowSpeed);
+        end
+
+        function lowSpeed = resolveMFevalLowSpeed(obj)
+            lowSpeedLimit = 0.1;
+            if isfield(obj.tireConstants.params, 'VXLOW')
+                lowSpeedLimit = max(lowSpeedLimit, obj.tireConstants.params.VXLOW);
+            end
+            lowSpeed = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
         end
 
         function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params, longitudinalSpeed)

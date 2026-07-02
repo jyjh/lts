@@ -898,7 +898,7 @@ classdef DriverModel < handle
             end
 
             maxBrakeForce = min(vm.brakeForceCoefficient * totalNormalLoad, brakeGripLimit);
-            rollingResistance = 0.015 * totalNormalLoad;
+            rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
             brakeLimitedAccel = ...
                 (maxBrakeForce + F_drag + rollingResistance) / vm.totalMass;
 
@@ -937,6 +937,23 @@ classdef DriverModel < handle
                 obj.minLookaheadDist, ...
                 speed * obj.lookaheadTime, ...
                 brakeDistance * obj.brakingLookahead + obj.minLookaheadDist]);
+        end
+
+        function crr = getRollingResistanceCoeff(obj)
+            crr = 0.015;
+            tire = obj.getVehicleManagerValue('tire', []);
+            if isempty(tire)
+                return;
+            end
+            if isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            elseif isobject(tire) && isprop(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            end
+            if isempty(crr) || ~isfinite(crr)
+                crr = 0.015;
+            end
+            crr = max(crr, 0);
         end
 
         function profileSpeed = computeBackwardSpeedProfile(obj, profileS, curvature, maxLateralAccel, maxBrakeAccel)

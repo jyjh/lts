@@ -82,7 +82,10 @@ classdef (Abstract) AeroComponent
             F_downforce = obj.computeDownforce(vehicleState);
             F_drag = obj.computeDrag(vehicleState);
             xi = obj.getLongitudinalPosition();
-            zi = obj.getNominalHeight();
+            zi = obj.computeEffectiveHeight(vehicleState);
+            if isempty(zi) || ~isfinite(zi)
+                zi = obj.getNominalHeight();
+            end
 
             frontFrac = (b + xi) / wb;
             frontFrac = max(0, min(1, frontFrac));

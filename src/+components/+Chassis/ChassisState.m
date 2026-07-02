@@ -79,15 +79,28 @@ classdef ChassisState < handle
             rearArm = wheelbase * staticFrontWeight;
             halfTrack = trackWidth / 2;
 
-            obj.cornerDisplacement.FL = obj.heave - obj.pitchAngle * frontArm - obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.FR = obj.heave - obj.pitchAngle * frontArm + obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.RL = obj.heave + obj.pitchAngle * rearArm - obj.rollAngle * halfTrack;
-            obj.cornerDisplacement.RR = obj.heave + obj.pitchAngle * rearArm + obj.rollAngle * halfTrack;
+            frontRoll = obj.frontRollAngle;
+            rearRoll = obj.rearRollAngle;
+            frontRollRate = obj.frontRollRate;
+            rearRollRate = obj.rearRollRate;
+            if frontRoll == 0 && rearRoll == 0 && obj.rollAngle ~= 0
+                frontRoll = obj.rollAngle;
+                rearRoll = obj.rollAngle;
+            end
+            if frontRollRate == 0 && rearRollRate == 0 && obj.rollRate ~= 0
+                frontRollRate = obj.rollRate;
+                rearRollRate = obj.rollRate;
+            end
 
-            obj.cornerVelocity.FL = obj.heaveRate - obj.pitchRate * frontArm - obj.rollRate * halfTrack;
-            obj.cornerVelocity.FR = obj.heaveRate - obj.pitchRate * frontArm + obj.rollRate * halfTrack;
-            obj.cornerVelocity.RL = obj.heaveRate + obj.pitchRate * rearArm - obj.rollRate * halfTrack;
-            obj.cornerVelocity.RR = obj.heaveRate + obj.pitchRate * rearArm + obj.rollRate * halfTrack;
+            obj.cornerDisplacement.FL = obj.heave - obj.pitchAngle * frontArm - frontRoll * halfTrack;
+            obj.cornerDisplacement.FR = obj.heave - obj.pitchAngle * frontArm + frontRoll * halfTrack;
+            obj.cornerDisplacement.RL = obj.heave + obj.pitchAngle * rearArm - rearRoll * halfTrack;
+            obj.cornerDisplacement.RR = obj.heave + obj.pitchAngle * rearArm + rearRoll * halfTrack;
+
+            obj.cornerVelocity.FL = obj.heaveRate - obj.pitchRate * frontArm - frontRollRate * halfTrack;
+            obj.cornerVelocity.FR = obj.heaveRate - obj.pitchRate * frontArm + frontRollRate * halfTrack;
+            obj.cornerVelocity.RL = obj.heaveRate + obj.pitchRate * rearArm - rearRollRate * halfTrack;
+            obj.cornerVelocity.RR = obj.heaveRate + obj.pitchRate * rearArm + rearRollRate * halfTrack;
         end
     end
 end

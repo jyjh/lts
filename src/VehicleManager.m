@@ -199,7 +199,8 @@ classdef VehicleManager
             suspension.warmup(vehicle.totalMass, dt);
 
             %% ---- Chassis attitude model (heave/pitch/roll DOFs) ----
-            chassis = components.Chassis.SimpleChassis(vehicle);
+            sprungMass = max(config.totalMass - 4 * config.unsprungMass, eps);
+            chassis = components.Chassis.SimpleChassis(vehicle, sprungMass);
             % Apply configured platform stiffness/damping.
             chassis.heaveStiffness     = config.chassis.heaveStiffness;
             chassis.heaveDamping       = config.chassis.heaveDamping;
@@ -216,8 +217,9 @@ classdef VehicleManager
                     struct('Fz_front', 0, 'Fz_rear', 0), dt);
             end
             % Link chassis <-> suspension so both roll models share stiffness.
-            chassis.setSuspension(suspension);
+            chassis = chassis.setSuspension(suspension);
             suspension.chassis = chassis;
+            vehicle.suspension = suspension;
             vehicle.chassis = chassis;
             fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF, torsional rigidity %.0f N*m/deg)\n', ...
                 chassis.torsionalRigidity * pi / 180);

@@ -93,6 +93,20 @@ verifyEqual(testCase, corner.Mz, 0.5 * dryMz, 'RelTol', 1e-12);
 verifyEqual(testCase, corner.peakMu, 0.5 * dryPeakMu, 'RelTol', 1e-12);
 end
 
+function testHoldRelaxationUsesCommittedLaggedSlip(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0.30;
+corner = tire.FL;
+corner.slipAngle = 0;
+corner.slipRatio = 0;
+
+tire.updateCorner(corner, 1000, 0, 0.8, 0, 1.2, 0, 20, true, 'hold');
+
+verifyEqual(testCase, corner.slipAngle, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, corner.slipRatio, 0, 'AbsTol', 1e-12);
+verifyLessThan(testCase, abs(corner.Fx), 100);
+end
+
 function testZeroSpeedWheelBrakingUsesRoadLongitudinalSpeed(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;

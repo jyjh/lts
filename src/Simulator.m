@@ -1,4 +1,4 @@
-classdef Simulator
+classdef Simulator < handle
     % SIMULATOR Physics engine and simulation loop for vehicle dynamics
     %
     % Core concept: given a VehicleState and driver inputs, progress the
@@ -31,6 +31,11 @@ classdef Simulator
         % update. 1 reproduces the legacy explicit-Euler behavior; 2-3 is
         % the recommended semi-implicit default.
         wheelSolveIterations = 2
+
+        % Telemetry logging mode. "full" preserves the existing rich log;
+        % "lean" records only core lap/state/control/aggregate force channels
+        % for profiling and benchmark runs.
+        telemetryMode = "full"
 
         % Internal: track whether maxSpeed warning was issued (warn once)
         warnedMaxSpeed = false
@@ -207,9 +212,11 @@ classdef Simulator
                 % patch lag) advances only on the final iteration so the
                 % lag time constant is not shrunk by the sub-iteration.
                 if iter < nWheelIter
-                    tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0, false);
+                    tireData = obj.updatePlanarTireForces( ...
+                        tireInputState, cornerLoads, 0, false, 'steady');
                 else
-                    tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, obj.dt);
+                    tireData = obj.updatePlanarTireForces( ...
+                        tireInputState, cornerLoads, obj.dt, true, 'advance');
                 end
             end
             dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
@@ -226,7 +233,8 @@ classdef Simulator
                 % Re-evaluate tire forces at the corrected loads with dt = 0: the
                 % contact-patch relaxation already advanced once on the final
                 % wheel-solve iteration above, so it must not advance again here.
-                tireData = obj.updatePlanarTireForces(tireInputState, cornerLoads, 0);
+                tireData = obj.updatePlanarTireForces( ...
+                    tireInputState, cornerLoads, 0, true, 'hold');
                 dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
             end
 
@@ -443,7 +451,11 @@ classdef Simulator
             % Pre-allocate telemetry log
             maxSteps = round(trackLen / (max(initialState.speed, 5) * obj.dt) * 5);
             maxSteps = max(maxSteps, 100000);
-            stateLog = struct( ...
+            leanTelemetry = obj.isLeanTelemetry();
+            if leanTelemetry
+                stateLog = obj.createLeanStateLog(maxSteps);
+            else
+                stateLog = struct( ...
                 'time',        zeros(maxSteps, 1), ...
                 's',           zeros(maxSteps, 1), ...
                 'controlS',    zeros(maxSteps, 1), ...
@@ -591,8 +603,9 @@ classdef Simulator
                 'tireFy_RL',    zeros(maxSteps, 1), ...
                 'tireFy_RR',    zeros(maxSteps, 1), ...
                 'aeroFz_front', zeros(maxSteps, 1), ...
-                'aeroFz_rear',  zeros(maxSteps, 1) ...
-            );
+                    'aeroFz_rear',  zeros(maxSteps, 1) ...
+                );
+            end
             
             % Working state (will be updated each step)
             currentState = initialState;
@@ -716,86 +729,88 @@ classdef Simulator
                     stateLog.aeroFz_front(step) = forces.aeroFz_front;
                     stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
                     
-                    % Per-corner suspension telemetry
-                    susp = vm.suspension;
-                    stateLog.Fz_FL(step)       = susp.frontLeft.state.tireNormalForce;
-                    stateLog.Fz_FR(step)       = susp.frontRight.state.tireNormalForce;
-                    stateLog.Fz_RL(step)       = susp.rearLeft.state.tireNormalForce;
-                    stateLog.Fz_RR(step)       = susp.rearRight.state.tireNormalForce;
-                    stateLog.suspensionForce_FL(step) = susp.frontLeft.state.suspensionForce;
-                    stateLog.suspensionForce_FR(step) = susp.frontRight.state.suspensionForce;
-                    stateLog.suspensionForce_RL(step) = susp.rearLeft.state.suspensionForce;
-                    stateLog.suspensionForce_RR(step) = susp.rearRight.state.suspensionForce;
-                    stateLog.antiRollBarForce_FL(step) = susp.frontLeft.state.antiRollBarForce;
-                    stateLog.antiRollBarForce_FR(step) = susp.frontRight.state.antiRollBarForce;
-                    stateLog.antiRollBarForce_RL(step) = susp.rearLeft.state.antiRollBarForce;
-                    stateLog.antiRollBarForce_RR(step) = susp.rearRight.state.antiRollBarForce;
-                    stateLog.suspensionDemand_FL(step) = susp.frontLeft.state.demandedLoad;
-                    stateLog.suspensionDemand_FR(step) = susp.frontRight.state.demandedLoad;
-                    stateLog.suspensionDemand_RL(step) = susp.rearLeft.state.demandedLoad;
-                    stateLog.suspensionDemand_RR(step) = susp.rearRight.state.demandedLoad;
-                    stateLog.tireDeflection_FL(step) = susp.frontLeft.state.tireDeflection;
-                    stateLog.tireDeflection_FR(step) = susp.frontRight.state.tireDeflection;
-                    stateLog.tireDeflection_RL(step) = susp.rearLeft.state.tireDeflection;
-                    stateLog.tireDeflection_RR(step) = susp.rearRight.state.tireDeflection;
-                    stateLog.damperPos_FL(step) = susp.frontLeft.state.damperPosition;
-                    stateLog.damperPos_FR(step) = susp.frontRight.state.damperPosition;
-                    stateLog.damperPos_RL(step) = susp.rearLeft.state.damperPosition;
-                    stateLog.damperPos_RR(step) = susp.rearRight.state.damperPosition;
-                    stateLog.damperVel_FL(step) = susp.frontLeft.state.damperVelocity;
-                    stateLog.damperVel_FR(step) = susp.frontRight.state.damperVelocity;
-                    stateLog.damperVel_RL(step) = susp.rearLeft.state.damperVelocity;
-                    stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
-                    stateLog.sprungPosition_FL(step) = susp.frontLeft.state.sprungPosition;
-                    stateLog.sprungPosition_FR(step) = susp.frontRight.state.sprungPosition;
-                    stateLog.sprungPosition_RL(step) = susp.rearLeft.state.sprungPosition;
-                    stateLog.sprungPosition_RR(step) = susp.rearRight.state.sprungPosition;
-                    stateLog.unsprungPosition_FL(step) = susp.frontLeft.state.unsprungPosition;
-                    stateLog.unsprungPosition_FR(step) = susp.frontRight.state.unsprungPosition;
-                    stateLog.unsprungPosition_RL(step) = susp.rearLeft.state.unsprungPosition;
-                    stateLog.unsprungPosition_RR(step) = susp.rearRight.state.unsprungPosition;
-                    stateLog.sprungVelocity_FL(step) = susp.frontLeft.state.sprungVelocity;
-                    stateLog.sprungVelocity_FR(step) = susp.frontRight.state.sprungVelocity;
-                    stateLog.sprungVelocity_RL(step) = susp.rearLeft.state.sprungVelocity;
-                    stateLog.sprungVelocity_RR(step) = susp.rearRight.state.sprungVelocity;
-                    stateLog.unsprungVelocity_FL(step) = susp.frontLeft.state.unsprungVelocity;
-                    stateLog.unsprungVelocity_FR(step) = susp.frontRight.state.unsprungVelocity;
-                    stateLog.unsprungVelocity_RL(step) = susp.rearLeft.state.unsprungVelocity;
-                    stateLog.unsprungVelocity_RR(step) = susp.rearRight.state.unsprungVelocity;
-                    stateLog.wheelTravel_FL(step) = susp.frontLeft.state.wheelTravel;
-                    stateLog.wheelTravel_FR(step) = susp.frontRight.state.wheelTravel;
-                    stateLog.wheelTravel_RL(step) = susp.rearLeft.state.wheelTravel;
-                    stateLog.wheelTravel_RR(step) = susp.rearRight.state.wheelTravel;
-                    stateLog.camber_FL(step)    = susp.frontLeft.state.camberAngle;
-                    stateLog.camber_FR(step)    = susp.frontRight.state.camberAngle;
-                    stateLog.camber_RL(step)    = susp.rearLeft.state.camberAngle;
-                    stateLog.camber_RR(step)    = susp.rearRight.state.camberAngle;
-                    stateLog.toe_FL(step)       = susp.frontLeft.state.toeAngle;
-                    stateLog.toe_FR(step)       = susp.frontRight.state.toeAngle;
-                    stateLog.toe_RL(step)       = susp.rearLeft.state.toeAngle;
-                    stateLog.toe_RR(step)       = susp.rearRight.state.toeAngle;
-                    stateLog.wheelSteer_FL(step) = susp.frontLeft.state.steerAngle;
-                    stateLog.wheelSteer_FR(step) = susp.frontRight.state.steerAngle;
-                    stateLog.wheelSteer_RL(step) = susp.rearLeft.state.steerAngle;
-                    stateLog.wheelSteer_RR(step) = susp.rearRight.state.steerAngle;
-                    
-                    % Per-corner tire telemetry (slip, wheel speed, forces)
-                    stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
-                    stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
-                    stateLog.slipRatio_RL(step) = vm.tire.RL.slipRatio;
-                    stateLog.slipRatio_RR(step) = vm.tire.RR.slipRatio;
-                    stateLog.omega_FL(step)     = vm.tire.FL.angularVelocity;
-                    stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
-                    stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
-                    stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
-                    stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
-                    stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
-                    stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
-                    stateLog.tireFx_RR(step)    = vm.tire.RR.Fx;
-                    stateLog.tireFy_FL(step)    = vm.tire.FL.Fy;
-                    stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
-                    stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
-                    stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
+                    if ~leanTelemetry
+                        % Per-corner suspension telemetry
+                        susp = vm.suspension;
+                        stateLog.Fz_FL(step)       = susp.frontLeft.state.tireNormalForce;
+                        stateLog.Fz_FR(step)       = susp.frontRight.state.tireNormalForce;
+                        stateLog.Fz_RL(step)       = susp.rearLeft.state.tireNormalForce;
+                        stateLog.Fz_RR(step)       = susp.rearRight.state.tireNormalForce;
+                        stateLog.suspensionForce_FL(step) = susp.frontLeft.state.suspensionForce;
+                        stateLog.suspensionForce_FR(step) = susp.frontRight.state.suspensionForce;
+                        stateLog.suspensionForce_RL(step) = susp.rearLeft.state.suspensionForce;
+                        stateLog.suspensionForce_RR(step) = susp.rearRight.state.suspensionForce;
+                        stateLog.antiRollBarForce_FL(step) = susp.frontLeft.state.antiRollBarForce;
+                        stateLog.antiRollBarForce_FR(step) = susp.frontRight.state.antiRollBarForce;
+                        stateLog.antiRollBarForce_RL(step) = susp.rearLeft.state.antiRollBarForce;
+                        stateLog.antiRollBarForce_RR(step) = susp.rearRight.state.antiRollBarForce;
+                        stateLog.suspensionDemand_FL(step) = susp.frontLeft.state.demandedLoad;
+                        stateLog.suspensionDemand_FR(step) = susp.frontRight.state.demandedLoad;
+                        stateLog.suspensionDemand_RL(step) = susp.rearLeft.state.demandedLoad;
+                        stateLog.suspensionDemand_RR(step) = susp.rearRight.state.demandedLoad;
+                        stateLog.tireDeflection_FL(step) = susp.frontLeft.state.tireDeflection;
+                        stateLog.tireDeflection_FR(step) = susp.frontRight.state.tireDeflection;
+                        stateLog.tireDeflection_RL(step) = susp.rearLeft.state.tireDeflection;
+                        stateLog.tireDeflection_RR(step) = susp.rearRight.state.tireDeflection;
+                        stateLog.damperPos_FL(step) = susp.frontLeft.state.damperPosition;
+                        stateLog.damperPos_FR(step) = susp.frontRight.state.damperPosition;
+                        stateLog.damperPos_RL(step) = susp.rearLeft.state.damperPosition;
+                        stateLog.damperPos_RR(step) = susp.rearRight.state.damperPosition;
+                        stateLog.damperVel_FL(step) = susp.frontLeft.state.damperVelocity;
+                        stateLog.damperVel_FR(step) = susp.frontRight.state.damperVelocity;
+                        stateLog.damperVel_RL(step) = susp.rearLeft.state.damperVelocity;
+                        stateLog.damperVel_RR(step) = susp.rearRight.state.damperVelocity;
+                        stateLog.sprungPosition_FL(step) = susp.frontLeft.state.sprungPosition;
+                        stateLog.sprungPosition_FR(step) = susp.frontRight.state.sprungPosition;
+                        stateLog.sprungPosition_RL(step) = susp.rearLeft.state.sprungPosition;
+                        stateLog.sprungPosition_RR(step) = susp.rearRight.state.sprungPosition;
+                        stateLog.unsprungPosition_FL(step) = susp.frontLeft.state.unsprungPosition;
+                        stateLog.unsprungPosition_FR(step) = susp.frontRight.state.unsprungPosition;
+                        stateLog.unsprungPosition_RL(step) = susp.rearLeft.state.unsprungPosition;
+                        stateLog.unsprungPosition_RR(step) = susp.rearRight.state.unsprungPosition;
+                        stateLog.sprungVelocity_FL(step) = susp.frontLeft.state.sprungVelocity;
+                        stateLog.sprungVelocity_FR(step) = susp.frontRight.state.sprungVelocity;
+                        stateLog.sprungVelocity_RL(step) = susp.rearLeft.state.sprungVelocity;
+                        stateLog.sprungVelocity_RR(step) = susp.rearRight.state.sprungVelocity;
+                        stateLog.unsprungVelocity_FL(step) = susp.frontLeft.state.unsprungVelocity;
+                        stateLog.unsprungVelocity_FR(step) = susp.frontRight.state.unsprungVelocity;
+                        stateLog.unsprungVelocity_RL(step) = susp.rearLeft.state.unsprungVelocity;
+                        stateLog.unsprungVelocity_RR(step) = susp.rearRight.state.unsprungVelocity;
+                        stateLog.wheelTravel_FL(step) = susp.frontLeft.state.wheelTravel;
+                        stateLog.wheelTravel_FR(step) = susp.frontRight.state.wheelTravel;
+                        stateLog.wheelTravel_RL(step) = susp.rearLeft.state.wheelTravel;
+                        stateLog.wheelTravel_RR(step) = susp.rearRight.state.wheelTravel;
+                        stateLog.camber_FL(step)    = susp.frontLeft.state.camberAngle;
+                        stateLog.camber_FR(step)    = susp.frontRight.state.camberAngle;
+                        stateLog.camber_RL(step)    = susp.rearLeft.state.camberAngle;
+                        stateLog.camber_RR(step)    = susp.rearRight.state.camberAngle;
+                        stateLog.toe_FL(step)       = susp.frontLeft.state.toeAngle;
+                        stateLog.toe_FR(step)       = susp.frontRight.state.toeAngle;
+                        stateLog.toe_RL(step)       = susp.rearLeft.state.toeAngle;
+                        stateLog.toe_RR(step)       = susp.rearRight.state.toeAngle;
+                        stateLog.wheelSteer_FL(step) = susp.frontLeft.state.steerAngle;
+                        stateLog.wheelSteer_FR(step) = susp.frontRight.state.steerAngle;
+                        stateLog.wheelSteer_RL(step) = susp.rearLeft.state.steerAngle;
+                        stateLog.wheelSteer_RR(step) = susp.rearRight.state.steerAngle;
+
+                        % Per-corner tire telemetry (slip, wheel speed, forces)
+                        stateLog.slipRatio_FL(step) = vm.tire.FL.slipRatio;
+                        stateLog.slipRatio_FR(step) = vm.tire.FR.slipRatio;
+                        stateLog.slipRatio_RL(step) = vm.tire.RL.slipRatio;
+                        stateLog.slipRatio_RR(step) = vm.tire.RR.slipRatio;
+                        stateLog.omega_FL(step)     = vm.tire.FL.angularVelocity;
+                        stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
+                        stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
+                        stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
+                        stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
+                        stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
+                        stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
+                        stateLog.tireFx_RR(step)    = vm.tire.RR.Fx;
+                        stateLog.tireFy_FL(step)    = vm.tire.FL.Fy;
+                        stateLog.tireFy_FR(step)    = vm.tire.FR.Fy;
+                        stateLog.tireFy_RL(step)    = vm.tire.RL.Fy;
+                        stateLog.tireFy_RR(step)    = vm.tire.RR.Fy;
+                    end
                 end
                 
                 % Advance state
@@ -862,6 +877,87 @@ classdef Simulator
             state.refCurvature = trackData.curvature(1);
             state.curvature = state.refCurvature;
             state.mu = trackData.mu(1);
+        end
+
+        function tf = isLeanTelemetry(obj)
+            tf = lower(string(obj.telemetryMode)) == "lean";
+        end
+
+        function stateLog = createLeanStateLog(~, maxSteps)
+            stateLog = struct( ...
+                'time',        zeros(maxSteps, 1), ...
+                's',           zeros(maxSteps, 1), ...
+                'controlS',    zeros(maxSteps, 1), ...
+                'x',           zeros(maxSteps, 1), ...
+                'y',           zeros(maxSteps, 1), ...
+                'yaw',         zeros(maxSteps, 1), ...
+                'vx',          zeros(maxSteps, 1), ...
+                'vy',          zeros(maxSteps, 1), ...
+                'bodySlipAngle', zeros(maxSteps, 1), ...
+                'speed',       zeros(maxSteps, 1), ...
+                'speedKmh',    zeros(maxSteps, 1), ...
+                'controlTime', zeros(maxSteps, 1), ...
+                'ax',          zeros(maxSteps, 1), ...
+                'ay',          zeros(maxSteps, 1), ...
+                'yawRate',     zeros(maxSteps, 1), ...
+                'yawAccel',    zeros(maxSteps, 1), ...
+                'refS',        zeros(maxSteps, 1), ...
+                'refHeading',  zeros(maxSteps, 1), ...
+                'refCurvature', zeros(maxSteps, 1), ...
+                'lateralError', zeros(maxSteps, 1), ...
+                'onTrack',     false(maxSteps, 1), ...
+                'trackWidth',  zeros(maxSteps, 1), ...
+                'trackLimitMargin', zeros(maxSteps, 1), ...
+                'throttle',    zeros(maxSteps, 1), ...
+                'brake',       zeros(maxSteps, 1), ...
+                'brakeRequested', zeros(maxSteps, 1), ...
+                'steer',       zeros(maxSteps, 1), ...
+                'targetSpeed', NaN(maxSteps, 1), ...
+                'axRef',       NaN(maxSteps, 1), ...
+                'targetLateralError', NaN(maxSteps, 1), ...
+                'lineCurvature', NaN(maxSteps, 1), ...
+                'speedError',  NaN(maxSteps, 1), ...
+                'curvature',   zeros(maxSteps, 1), ...
+                'heading',     zeros(maxSteps, 1), ...
+                'F_downforce', zeros(maxSteps, 1), ...
+                'F_drag',      zeros(maxSteps, 1), ...
+                'F_drive',     zeros(maxSteps, 1), ...
+                'F_brake',     zeros(maxSteps, 1), ...
+                'F_tire_long', zeros(maxSteps, 1), ...
+                'F_tire_lat',  zeros(maxSteps, 1), ...
+                'yawMoment',   zeros(maxSteps, 1), ...
+                'rollResistance', zeros(maxSteps, 1), ...
+                'F_brake_front', zeros(maxSteps, 1), ...
+                'F_brake_rear', zeros(maxSteps, 1), ...
+                'F_brake_FL',  zeros(maxSteps, 1), ...
+                'F_brake_FR',  zeros(maxSteps, 1), ...
+                'F_brake_RL',  zeros(maxSteps, 1), ...
+                'F_brake_RR',  zeros(maxSteps, 1), ...
+                'brakeGrip_FL', zeros(maxSteps, 1), ...
+                'brakeGrip_FR', zeros(maxSteps, 1), ...
+                'brakeGrip_RL', zeros(maxSteps, 1), ...
+                'brakeGrip_RR', zeros(maxSteps, 1), ...
+                'driveTorqueTotal', zeros(maxSteps, 1), ...
+                'driveTorque_RL', zeros(maxSteps, 1), ...
+                'driveTorque_RR', zeros(maxSteps, 1), ...
+                'brakeTorque_FL', zeros(maxSteps, 1), ...
+                'brakeTorque_FR', zeros(maxSteps, 1), ...
+                'brakeTorque_RL', zeros(maxSteps, 1), ...
+                'brakeTorque_RR', zeros(maxSteps, 1), ...
+                'motorRPM',    zeros(maxSteps, 1), ...
+                'motorTorque', zeros(maxSteps, 1), ...
+                'wheelTorque', zeros(maxSteps, 1), ...
+                'drivenWheelRPM', zeros(maxSteps, 1), ...
+                'rpmLimitActive', false(maxSteps, 1), ...
+                'pitchAngle',  zeros(maxSteps, 1), ...
+                'rollAngle',   zeros(maxSteps, 1), ...
+                'frontRollAngle', zeros(maxSteps, 1), ...
+                'rearRollAngle',  zeros(maxSteps, 1), ...
+                'twistAngle',     zeros(maxSteps, 1), ...
+                'rideHeight',  zeros(maxSteps, 1), ...
+                'aeroFz_front', zeros(maxSteps, 1), ...
+                'aeroFz_rear',  zeros(maxSteps, 1) ...
+            );
         end
 
         function laps = getTrackWarmupLaps(~, track)
@@ -1217,6 +1313,49 @@ classdef Simulator
                 end
             end
 
+            localHitBoundary = (bestIdx == searchStart && searchStart > 1) || ...
+                (bestIdx == searchEnd && searchEnd < nSegments);
+            fallbackDistance = max(2 * trackData.trackHalfWidth, 5);
+            if (localHitBoundary || bestDist2 > fallbackDistance^2) && ...
+                    (searchStart > 1 || searchEnd < nSegments)
+                bestDist2 = inf;
+                bestIdx = 1;
+                bestT = 0;
+                bestPoint = trackData.points(1, :);
+                for segIdx = 1:nSegments
+                    p0 = trackData.points(segIdx, :);
+                    if hasSegmentCache
+                        v = trackData.segmentVectors(segIdx, :);
+                        invLen2 = trackData.segmentInvLen2(segIdx);
+                    else
+                        p1 = trackData.points(segIdx + 1, :);
+                        v = p1 - p0;
+                        len2 = dot(v, v);
+                        if len2 > eps
+                            invLen2 = 1 / len2;
+                        else
+                            invLen2 = 0;
+                        end
+                    end
+                    if invLen2 <= 0
+                        t = 0;
+                        projectedPoint = p0;
+                    else
+                        t = dot(queryPoint - p0, v) * invLen2;
+                        t = max(0, min(1, t));
+                        projectedPoint = p0 + t * v;
+                    end
+
+                    dist2 = sum((queryPoint - projectedPoint).^2);
+                    if dist2 < bestDist2
+                        bestDist2 = dist2;
+                        bestIdx = segIdx;
+                        bestT = t;
+                        bestPoint = projectedPoint;
+                    end
+                end
+            end
+
             if hasSegmentCache
                 segmentLength = trackData.segmentLengths(bestIdx);
             else
@@ -1267,7 +1406,7 @@ classdef Simulator
                 'onTrack', onTrack);
         end
 
-        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt, computePeakMu)
+        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt, computePeakMu, relaxationMode)
             % UPDATEPLANARTIREFORCES Evaluate tire forces and assemble body
             % forces / yaw moment from all four corners.
             %   tireData = updatePlanarTireForces(state, cornerLoads)
@@ -1282,6 +1421,13 @@ classdef Simulator
             end
             if nargin < 5 || isempty(computePeakMu)
                 computePeakMu = true;
+            end
+            if nargin < 6 || isempty(relaxationMode)
+                if dt > 0
+                    relaxationMode = 'advance';
+                else
+                    relaxationMode = 'steady';
+                end
             end
             vm = obj.vehicleManager;
             kin = obj.getCornerKinematics(state.steer);
@@ -1335,7 +1481,7 @@ classdef Simulator
                     slipRatios(1), slipRatios(2), slipRatios(3), slipRatios(4), ...
                     kin.FL.camberAngle, kin.FR.camberAngle, ...
                     kin.RL.camberAngle, kin.RR.camberAngle, dt, longSpeedVec, ...
-                    surfaceMu, computePeakMu);
+                    surfaceMu, computePeakMu, relaxationMode);
             else
                 % Fallback for tire models without a batch update: evaluate
                 % each corner individually. Wheel omega is integrated in the
@@ -1347,7 +1493,7 @@ classdef Simulator
                     vm.tire.updateCorner(tireState, cornerLoads.(corner), ...
                         slipAngles(i), slipRatios(i), ...
                         cornerKin.camberAngle, surfaceMu, dt, longSpeeds(i), ...
-                        computePeakMu);
+                        computePeakMu, relaxationMode);
                 end
             end
 

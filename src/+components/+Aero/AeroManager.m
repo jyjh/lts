@@ -106,7 +106,10 @@ classdef AeroManager < components.Aero.AeroComponent
                 Fi = comp.computeDownforce(vehicleState);
                 Di = comp.computeDrag(vehicleState);
                 xi = comp.getLongitudinalPosition();  % +forward of CG
-                zi = comp.getNominalHeight();          % height above ground
+                zi = comp.computeEffectiveHeight(vehicleState);  % height above ground
+                if isempty(zi) || ~isfinite(zi)
+                    zi = comp.getNominalHeight();
+                end
                 
                 % Resolve downforce to axles via moment balance about CG
                 frontFrac = (b + xi) / wb;

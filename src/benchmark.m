@@ -7,13 +7,15 @@
 %   addpath('src'); benchmark            % default track = 'skidpad'
 %   addpath('src'); benchmark('skidpad')
 %   addpath('src'); benchmark('autocross', 2)   % optional repeat count
+%   addpath('src'); benchmark('skidpad', 2, "lean")
 %
 % Set profileOn = true below to also capture a MATLAB profile.
 
-function benchmark(trackType, repeats)
+function benchmark(trackType, repeats, telemetryMode)
     arguments
         trackType string = 'skidpad'
         repeats (1,1) double = 1
+        telemetryMode string = "full"
     end
 
     profileOn = false;
@@ -39,6 +41,7 @@ function benchmark(trackType, repeats)
         vehicle   = VehicleManager.fromConfig(config, track, dt);
         driver    = DriverModel(vehicle);
         simulator = Simulator(vehicle, driver, dt);
+        simulator.telemetryMode = telemetryMode;
         initState = VehicleState('s', 0, 'speed', 0.1);
         t0 = tic;
         [stateLog, lapTime] = simulator.simulate(initState, track);
@@ -55,8 +58,8 @@ function benchmark(trackType, repeats)
     % Report best/median across repeats (first run includes JIT warmup).
     [bestWall, bestIdx] = min(wallTimes);
     simSeconds = stepCounts(bestIdx) * dt;
-    fprintf('\n=== BENCHMARK (%s, dt=%.0fms, %d run%s) ===\n', ...
-        trackType, dt * 1000, repeats, ternary(repeats > 1, 's', ''));
+    fprintf('\n=== BENCHMARK (%s, %s telemetry, dt=%.0fms, %d run%s) ===\n', ...
+        trackType, telemetryMode, dt * 1000, repeats, ternary(repeats > 1, 's', ''));
     fprintf('Lap time:      %.3f s\n', lapTimes(bestIdx));
     fprintf('Sim steps:     %d  (%.2f s simulated)\n', stepCounts(bestIdx), simSeconds);
     fprintf('Wall time:     %.3f s (best of %d)\n', bestWall, repeats);

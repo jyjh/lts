@@ -198,17 +198,18 @@ classdef DriverInputPlanner
         function input = sampleAtProgress(obj, profile, s, actualSpeed)
             sProfile = profile.s(:);
             s = max(sProfile(1), min(sProfile(end), s));
+            [idx0, idx1, frac] = obj.profileInterpolationBracket(sProfile, s);
 
             input = struct( ...
-                'throttle', interp1(sProfile, profile.throttle(:), s, 'linear'), ...
-                'brake', interp1(sProfile, profile.brake(:), s, 'linear'), ...
-                'steer', interp1(sProfile, profile.steer(:), s, 'linear'), ...
-                'targetSpeed', interp1(sProfile, profile.vTarget(:), s, 'linear'), ...
-                'axRef', interp1(sProfile, profile.axRef(:), s, 'linear'), ...
-                'targetLateralError', obj.interpProfileField(profile, 'targetLateralError', sProfile, s, 0), ...
-                'lineHeading', obj.interpProfileField(profile, 'lineHeading', sProfile, s, NaN), ...
-                'lineCurvature', obj.interpProfileField(profile, 'lineCurvature', sProfile, s, NaN), ...
-                'lineS', obj.interpProfileField(profile, 'lineS', sProfile, s, NaN), ...
+                'throttle', obj.interpProfileVector(profile.throttle, idx0, idx1, frac, 0), ...
+                'brake', obj.interpProfileVector(profile.brake, idx0, idx1, frac, 0), ...
+                'steer', obj.interpProfileVector(profile.steer, idx0, idx1, frac, 0), ...
+                'targetSpeed', obj.interpProfileVector(profile.vTarget, idx0, idx1, frac, NaN), ...
+                'axRef', obj.interpProfileVector(profile.axRef, idx0, idx1, frac, NaN), ...
+                'targetLateralError', obj.interpProfileField(profile, 'targetLateralError', idx0, idx1, frac, 0), ...
+                'lineHeading', obj.interpProfileField(profile, 'lineHeading', idx0, idx1, frac, NaN), ...
+                'lineCurvature', obj.interpProfileField(profile, 'lineCurvature', idx0, idx1, frac, NaN), ...
+                'lineS', obj.interpProfileField(profile, 'lineS', idx0, idx1, frac, NaN), ...
                 'speedError', NaN);
 
             input.throttle = max(0, min(1, input.throttle));
@@ -474,14 +475,81 @@ classdef DriverInputPlanner
             end
         end
 
-        function value = interpProfileField(~, profile, fieldName, sProfile, s, defaultValue)
+        function value = interpProfileField(obj, profile, fieldName, idx0, idx1, frac, defaultValue)
             value = defaultValue;
             if isfield(profile, fieldName)
                 values = profile.(fieldName);
-                if numel(values) == numel(sProfile)
-                    value = interp1(sProfile, values(:), s, 'linear');
-                end
+                value = obj.interpProfileVector(values, idx0, idx1, frac, defaultValue);
             end
+        end
+
+        function [idx0, idx1, frac] = profileInterpolationBracket(~, sProfile, s)
+            n = numel(sProfile);
+            if n <= 1
+                idx0 = 1;
+                idx1 = 1;
+                frac = 0;
+                return;
+            end
+
+            idx1 = find(sProfile >= s, 1, 'first');
+            if isempty(idx1)
+                idx1 = n;
+            end
+            if idx1 <= 1
+                idx0 = 1;
+                idx1 = 1;
+                frac = 0;
+                return;
+            end
+
+            idx0 = idx1 - 1;
+            ds = sProfile(idx1) - sProfile(idx0);
+            if ds <= eps || ~isfinite(ds)
+                frac = 0;
+            else
+                frac = (s - sProfile(idx0)) / ds;
+                frac = max(0, min(1, frac));
+            end
+        end
+
+        function value = interpProfileVector(~, values, idx0, idx1, frac, defaultValue)
+            value = defaultValue;
+            if isempty(values)
+                return;
+            end
+            values = values(:);
+            if numel(values) < max(idx0, idx1)
+                return;
+            end
+            if idx0 == idx1
+                value = values(idx0);
+            else
+                value = values(idx0) + frac * (values(idx1) - values(idx0));
+            end
+        end
+
+        function crr = getRollingResistanceCoeff(obj)
+            crr = 0.015;
+            vm = obj.vehicleManager;
+            if isempty(vm)
+                return;
+            end
+            tire = [];
+            if isstruct(vm) && isfield(vm, 'tire')
+                tire = vm.tire;
+            elseif isobject(vm) && isprop(vm, 'tire')
+                tire = vm.tire;
+            end
+            if isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            elseif isobject(tire) && isprop(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            end
+            if isempty(crr) || ~isfinite(crr)
+                crr = 0.015;
+            end
+            crr = max(crr, 0);
         end
 
         function limits = estimateGGVLimits(obj, speed, templateState, curvature)
@@ -509,7 +577,7 @@ classdef DriverInputPlanner
             tireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
 
             brakeForce = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
-            rollingResistance = 0.015 * totalNormalLoad;
+            rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
             brakeAccel = (brakeForce + F_drag + rollingResistance) / vm.totalMass;
 
             corneringUsage = 0.98;

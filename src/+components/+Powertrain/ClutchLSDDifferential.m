@@ -78,7 +78,7 @@ classdef ClutchLSDDifferential < components.Powertrain.DifferentialComponent
             % torque negative, which inverts the bias and breaks TL+TR ==
             % T_total after the non-negative clamp. Capping at base - eps keeps
             % both sides strictly non-negative before any further processing.
-            Tlock = min(Tlock, base - eps);
+            Tlock = min(Tlock, max(base - eps, 0));
 
             TL = base;
             TR = base;

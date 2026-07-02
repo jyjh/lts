@@ -116,6 +116,16 @@ verifyGreaterThanOrEqual(testCase, out.TL, 0);
 verifyGreaterThanOrEqual(testCase, out.TR, 0);
 end
 
+function testLSDZeroTorqueCannotProduceNegativeTorque(testCase)
+diff = components.Powertrain.ClutchLSDDifferential('preload', 20);
+
+out = diff.solveDrive(0, 40, 60, 0.5, 0.001);
+
+verifyEqual(testCase, out.TL + out.TR, 0, 'AbsTol', 1e-12);
+verifyGreaterThanOrEqual(testCase, out.TL, 0);
+verifyGreaterThanOrEqual(testCase, out.TR, 0);
+end
+
 function testLSDBiasesTowardSlowerWheel(testCase)
 % Fix 4: the slower wheel receives more torque than the faster one.
 diff = components.Powertrain.ClutchLSDDifferential('preload', 0, 'ramp', 0.5);

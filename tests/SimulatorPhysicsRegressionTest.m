@@ -43,6 +43,17 @@ verifyEqual(testCase, suspension.algebraicCalls, 0);
 verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
+function testSimulatorCachesPersistAcrossMethodCalls(testCase)
+vehicle = VehicleManager([], [], [], [], []);
+simulator = Simulator(vehicle, [], 0.001);
+
+tf = simulator.hasChassis();
+
+verifyFalse(testCase, tf);
+verifyFalse(testCase, isempty(simulator.cachedHasChassis));
+verifyEqual(testCase, simulator.cachedHasChassis, false);
+end
+
 function initializeWheelSpeeds(tire, speed)
 corners = {tire.FL, tire.FR, tire.RL, tire.RR};
 for i = 1:numel(corners)

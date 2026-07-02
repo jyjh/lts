@@ -99,7 +99,7 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 obj.wheelbase, obj.trackWidth, obj.staticFrontWeight);
         end
 
-        function setSuspension(obj, suspension)
+        function obj = setSuspension(obj, suspension)
             % SETSUSPENSION Optional link to the suspension manager so the
             % chassis roll model can read the per-axle wheel-rate roll
             % stiffness (springs + anti-roll bars), keeping the two roll

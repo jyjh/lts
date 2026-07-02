@@ -52,6 +52,18 @@ verifyEqual(testCase, input.throttle, 1, 'AbsTol', 1e-12);
 verifyEqual(testCase, input.brake, 0, 'AbsTol', 1e-12);
 end
 
+function testFallbackDriverUsesConfiguredRollingResistance(testCase)
+[lowDriver, lowState] = createStraightDriverWithCrr(0);
+[highDriver, highState] = createStraightDriverWithCrr(0.10);
+
+[lowThrottle, lowBrake] = lowDriver.computeInputs(lowState);
+[highThrottle, highBrake] = highDriver.computeInputs(highState);
+
+verifyEqual(testCase, lowBrake, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, highBrake, 0, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, highThrottle, lowThrottle);
+end
+
 function [driver, trackData, baseLength] = createSkidpadDriver(rearSlip)
 track = components.TestTrack('skidpad');
 simulator = Simulator([], [], 0.001);
@@ -117,6 +129,20 @@ state.lateralError = lateralError;
 state.mu = ref.mu;
 
 input = driver.computeInput(state, ref);
+end
+
+function [driver, state] = createStraightDriverWithCrr(crr)
+config = vehicles.baseline();
+config.maxSpeed = 10;
+config.tire.rollingResistanceCoeff = crr;
+track = components.TestTrack('straight10');
+vehicle = VehicleManager.fromConfig(config, track, 0.001);
+driver = DriverModel(vehicle);
+driver.throttleRampTime = 0;
+driver.brakeRampTime = 0;
+driver.steeringRampTime = 0;
+state = VehicleState('s', 0, 'speed', 10, 'vx', 10, 'yaw', 0, 'x', 0, 'y', 0);
+state.vehicleManager = vehicle;
 end
 
 function ref = referenceAtS(trackData, s, lateralError)

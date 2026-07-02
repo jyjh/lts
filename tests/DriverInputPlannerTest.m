@@ -49,6 +49,15 @@ verifyLessThan(testCase, overSpeed.brake, 0.5);
 verifyEqual(testCase, overSpeed.throttle, 0, 'AbsTol', 1e-12);
 end
 
+function testPlannerUsesConfiguredRollingResistance(testCase)
+lowProfile = createStraightProfileWithCrr(0);
+highProfile = createStraightProfileWithCrr(0.10);
+
+verifyEqual(testCase, max(lowProfile.brake), 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, max(highProfile.brake), 0, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, mean(highProfile.throttle), mean(lowProfile.throttle));
+end
+
 function testRacingLineUsesOutsideApexOutsideOnNinetyTurn(testCase)
 [profile, trackData, vehicle] = createPlannedProfile(components.TestTrack('90turn'));
 [iStart, iEnd] = findCornerSegment(trackData.curvature, 1);
@@ -219,6 +228,19 @@ initialState = VehicleState('s', 0, 'speed', 0.1);
 initialState.vehicleManager = vehicle;
 trackData = createTrackData(track);
 profile = planner.buildOpenLoopProfile(initialState, trackData);
+end
+
+function profile = createStraightProfileWithCrr(crr)
+config = vehicles.baseline();
+config.maxSpeed = 10;
+config.tire.rollingResistanceCoeff = crr;
+track = components.TestTrack('straight10');
+vehicle = VehicleManager.fromConfig(config, track, 0.001);
+driver = DriverModel(vehicle);
+planner = DriverInputPlanner(vehicle, driver);
+initialState = VehicleState('s', 0, 'speed', 10);
+initialState.vehicleManager = vehicle;
+profile = planner.buildOpenLoopProfile(initialState, createTrackData(track));
 end
 
 function trackData = createTrackData(track)
