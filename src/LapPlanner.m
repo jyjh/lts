@@ -61,7 +61,7 @@ classdef LapPlanner
             % edge by `lineEdgeMargin` so the closed-loop driver has room to
             % follow it without overshooting off-track. lineUsage is a further
             % fraction of what remains.
-            lineEdgeMargin = LapPlanner.fieldOr(opts, 'lineEdgeMargin', 0.55);
+            lineEdgeMargin = LapPlanner.fieldOr(opts, 'lineEdgeMargin', 0.50);
             wMax = (halfWidth - lineEdgeMargin) * max(0.5, min(0.99, lineUsage));
             wMax = max(0, wMax);
 
@@ -177,6 +177,10 @@ classdef LapPlanner
             line.curvature = curvature(:);
             line.heading = lineHeading(:);
             line.offsetW = w(:);
+            line.trackHalfWidth = halfWidth;
+            line.edgeMargin = lineEdgeMargin;
+            line.maxOffsetW = wMax;
+            line.closedLoop = closed;
         end
 
         function profile = buildVelocityProfile(line, vehicleManager, initialState, opts)

@@ -42,7 +42,8 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 %  BUILD TRACK
 %  ====================================================================
 if lower(trackType) == "2026enduro"
-    track = components.WaypointTrack.loadMat('tracks/2026_endurance_track_pixel_units.mat');
+    track = components.WaypointTrack.loadMat('tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
+    track.Width = 5.0;
 else
     track = components.TestTrack(trackType);
 end

@@ -41,6 +41,7 @@ classdef DriverModel < handle
 
         % ---- Racing line ----
         lineUsage = 0.78          % Fraction of half-width the line may use
+        lineEdgeMargin = 0.50     % Minimum margin from either track edge [m]
 
         % ---- Preview steering ----
         % The feedforward curvature term (atan(L*kappa)) is the primary steer
@@ -65,7 +66,8 @@ classdef DriverModel < handle
         understeerYawErr = 0.05   % Yaw-rate deficit [rad/s] that triggers breathe
 
         % ---- Longitudinal control ----
-        launchSpeedThreshold = 3.0  % Below this speed, pin throttle to launch [m/s]
+        launchSpeedThreshold = 3.0  % Launch only below this speed [m/s]
+        launchLatGThreshold = 0.05  % ...and below this lateral demand [g]
         kSpeed       = 0.5        % Speed-error -> accel feedback gain
         % Traction-circle taper. ay = v^2*|kappa| uses up lateral grip; the
         % remaining longitudinal fraction is the ellipse below. The throttle
@@ -130,6 +132,7 @@ classdef DriverModel < handle
             obj.lastIndex = 1;
 
             lineOpts = struct('lineUsage', obj.lineUsage, ...
+                'lineEdgeMargin', obj.lineEdgeMargin, ...
                 'maxSteeringAngle', obj.maxSteeringAngle, ...
                 'wheelbase', obj.vehicleManager.wheelbase);
             obj.racingLine = LapPlanner.buildRacingLine(trackData, lineOpts);
@@ -181,7 +184,8 @@ classdef DriverModel < handle
             % Drive-slip traction control (rear slip ratio).
             throttle = obj.applyDriveSlipLimit(throttle, state);
 
-            % Launch: from a standstill (or near it) while still below target
+            % Launch: from a standstill (or near it) with low lateral demand
+            % and low vehicle
             % speed, a driver pins the throttle and releases the brake —
             % otherwise edge/understeer brakes can hold the car at a stop and
             % the pedal filter never releases. The steer is also faded toward
@@ -192,12 +196,7 @@ classdef DriverModel < handle
             if ~isfinite(vTarget)
                 vTarget = state.speed;   % NaN/inf guard: don't fight the plan
             end
-            % Launch: whenever the car is nearly stopped, pin throttle and
-            % release brake so it always makes forward progress (a real driver
-            % never stalls on track). This also breaks any low-speed limit
-            % cycle. The "below target" check is dropped: from a standstill the
-            % driver always wants to get moving.
-            if state.speed < obj.launchSpeedThreshold
+            if obj.isLaunchScenario(idx, state)
                 throttle = 1;
                 brake = 0;
                 % At a standstill, cap the steer well below full lock so the
@@ -583,6 +582,35 @@ classdef DriverModel < handle
             else
                 k = obj.racingLine.curvature(idx);
             end
+        end
+
+        function tf = isLaunchScenario(obj, idx, state)
+            % ISLAUNCHSCENARIO Require low speed and low lateral demand.
+            % A slow slalom or hairpin can be below the launch speed threshold
+            % while still carrying lateral acceleration, so keep the normal
+            % controller active whenever measured or planned lateral G is real.
+            if state.speed >= obj.launchSpeedThreshold
+                tf = false;
+                return;
+            end
+
+            g = 9.80665;
+            if ~isempty(obj.vehicleManager) && obj.hasField(obj.vehicleManager, 'g')
+                g = obj.vehicleManager.g;
+            end
+
+            measuredLatG = 0;
+            if obj.hasField(state, 'ay') && isfinite(state.ay)
+                measuredLatG = abs(state.ay) / max(g, eps);
+            end
+
+            plannedLatG = 0;
+            kappaLine = obj.lineCurvature(idx);
+            if isfinite(kappaLine)
+                plannedLatG = state.speed^2 * abs(kappaLine) / max(g, eps);
+            end
+
+            tf = max(measuredLatG, plannedLatG) <= obj.launchLatGThreshold;
         end
 
         function e = crossTrackError(obj, observation)

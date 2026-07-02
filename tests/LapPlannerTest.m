@@ -35,6 +35,14 @@ maxOffset = max(abs(line.offsetW));
 verifyLessThanOrEqual(testCase, maxOffset, trackData.trackHalfWidth * 0.9 + 1e-6);
 end
 
+function testRacingLineLeavesDefaultEdgeMargin(testCase)
+trackData = straightCornerStraightTrackData();
+line = LapPlanner.buildRacingLine(trackData);
+verifyEqual(testCase, line.edgeMargin, 0.50, 'AbsTol', 1e-12);
+verifyLessThanOrEqual(testCase, max(abs(line.offsetW)), ...
+    trackData.trackHalfWidth - line.edgeMargin + 1e-6);
+end
+
 function trackData = straightCornerStraightTrackData()
 % A straight-corner-straight layout where corner-cutting is actually
 % possible (unlike an isolated arc, which is already min-curvature). Entry

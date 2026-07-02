@@ -160,3 +160,38 @@ gInput = driver.computeInput(gripped, obsAt(cornerIdx, lineOff));
 uInput = driver.computeInput(understeering, obsAt(cornerIdx, lineOff));
 verifyLessThanOrEqual(testCase, uInput.throttle, gInput.throttle + 1e-9);
 end
+
+function testLaunchRecoveryDoesNotTriggerDuringLowSpeedCornering(testCase)
+% Slow cornering below launchSpeedThreshold must not be treated as a launch
+% or spin-recovery scenario when the car is carrying lateral acceleration.
+[driver, ~] = makeDriver();
+cornerIdx = 50;
+lineOff = driver.racingLine.offsetW(cornerIdx);
+state = onLineState(driver, cornerIdx, ...
+    'speed', 2.0, ...
+    'vx', 2.0, ...
+    'ay', 0.20 * driver.vehicleManager.g, ...
+    'yawRate', 0.2);
+driver.stuckTimer = round(2.0 / driver.inputDt);
+
+input = driver.computeInput(state, obsAt(cornerIdx, lineOff));
+
+verifyGreaterThan(testCase, abs(input.steer), 0.02);
+verifyEqual(testCase, driver.stuckTimer, 0);
+end
+
+function testLaunchPinsThrottleOnlyWhenLateralDemandIsLow(testCase)
+[driver, ~] = makeDriver();
+straightIdx = 20;
+lineOff = driver.racingLine.offsetW(straightIdx);
+state = onLineState(driver, straightIdx, ...
+    'speed', 1.0, ...
+    'vx', 1.0, ...
+    'ay', 0, ...
+    'yawRate', 0);
+
+input = driver.computeInput(state, obsAt(straightIdx, lineOff));
+
+verifyEqual(testCase, input.throttle, 1, 'AbsTol', 1e-12);
+verifyEqual(testCase, input.brake, 0, 'AbsTol', 1e-12);
+end
