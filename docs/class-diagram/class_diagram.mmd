@@ -86,11 +86,6 @@ classDiagram
         +computeDrag(vehicleState)
     }
 
-    class SimpleAero {
-        +computeDownforce(vehicleState)
-        +computeDrag(vehicleState)
-    }
-
     class SuspensionComponent {
         <<abstract>>
         +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)*
@@ -254,8 +249,6 @@ classDiagram
     AeroComponent <|-- FrontWing
     AeroComponent <|-- RearWing
     AeroComponent <|-- UnderbodyFloor
-    AeroComponent <|-- SimpleAero
-
     SuspensionComponent <|-- SuspensionManager
     PowertrainComponent <|-- EMRAX228Powertrain
     TireModel <|-- PacejkaTire

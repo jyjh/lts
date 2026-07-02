@@ -42,7 +42,7 @@ See the [class diagram](class-diagram/) for a fuller relationship map.
 - `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
 - `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
-- `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction. `SimpleTire` is deprecated.
+- `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction.
 - `VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
 ## Usage
@@ -81,8 +81,8 @@ src/VehicleManager.m                         Component and vehicle-parameter con
 src/VehicleState.m                           Vehicle dynamic state
 src/+components/+Aero/                       Aero components and manager
 src/+components/+Suspension/                 Four-corner transient suspension
-src/+components/+Powertrain/                 Simple and EMRAX powertrains
-src/+components/+Tire/                       Pacejka tire model and deprecated SimpleTire
+src/+components/+Powertrain/                 EMRAX powertrain and differentials
+src/+components/+Tire/                       Pacejka tire model
 src/+components/TestTrack.m                  Built-in test tracks
 src/GraphPlotter.m                           Simulation dashboards
 ```

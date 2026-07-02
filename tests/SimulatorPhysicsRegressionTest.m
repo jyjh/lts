@@ -3,11 +3,8 @@ tests = functiontests(localfunctions);
 end
 
 function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
-warningState = warning('query', 'components:Tire:SimpleTireDeprecated');
-cleanup = onCleanup(@() warning(warningState.state, 'components:Tire:SimpleTireDeprecated'));
-warning('off', 'components:Tire:SimpleTireDeprecated');
-
-tire = components.Tire.SimpleTire();
+tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire.relaxationLength = 0;
 powertrain = SimulatorZeroPowertrain();
 suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
 chassis = SimulatorChassisSpy();

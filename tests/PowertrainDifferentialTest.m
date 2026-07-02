@@ -57,12 +57,8 @@ verifyGreaterThan(testCase, expectedDriven, 0.5);
 end
 
 function testSimulatorSplitsReflectedRotorInertiaAcrossRearWheels(testCase)
-warningState = warning('query', 'components:Tire:SimpleTireDeprecated');
-cleanup = onCleanup(@() warning(warningState.state, 'components:Tire:SimpleTireDeprecated'));
-warning('off', 'components:Tire:SimpleTireDeprecated');
-
 pt = createPowertrain();
-tire = components.Tire.SimpleTire();
+tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.wheelInertia = 0.5;
 vehicle = VehicleManager([], [], pt, tire, []);
 simulator = Simulator(vehicle, [], 0.001);

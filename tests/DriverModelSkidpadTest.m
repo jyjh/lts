@@ -1,4 +1,4 @@
-function tests = DriverModelSkidpadTest_legacy
+function tests = DriverModelSkidpadTest
 tests = functiontests(localfunctions);
 end
 
@@ -68,7 +68,7 @@ vehicle = struct( ...
     'track', track, ...
     'wheelbase', 1.558, ...
     'tire', createTireState(rearSlip));
-driver = DriverModel_legacy(vehicle);
+driver = DriverModel(vehicle);
 driver.inputDt = 0.001;
 driver.throttleRampTime = 0;
 driver.brakeRampTime = 0;
@@ -78,7 +78,7 @@ driver.pedalReleaseFilterTime = 0;
 driver.pedalSwitchHoldTime = 0;
 driver.trackArcLen = arcLen;
 driver.trackCurvature = curvature(:);
-driver.inputPlanner = DriverInputPlanner_legacy([], driver);
+driver.inputPlanner = DriverInputPlanner([], driver);
 driver.inputProfile = createOpenLoopProfile(arcLen, curvature(:), vehicle.wheelbase);
 
 trackData = struct( ...

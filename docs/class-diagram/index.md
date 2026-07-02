@@ -36,11 +36,11 @@ The simulation separates vehicle configuration from simulation execution:
 
 | Abstract Base | Concrete Implementations |
 |---------------|--------------------------|
-| `components.Aero.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor`, `SimpleAero` |
+| `components.Aero.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor` |
 | `components.Suspension.SuspensionComponent` | `SuspensionManager` |
-| `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain`, `SimplePowertrain` |
+| `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain` |
 | `components.Chassis.ChassisComponent` | `SimpleChassis` |
-| `components.Tire.TireModel` | `PacejkaTire`; `SimpleTire` is deprecated |
+| `components.Tire.TireModel` | `PacejkaTire` |
 | `components.Track` | `WaypointTrack`; `TestTrack` (extends `WaypointTrack`) |
 
 ### Composition
@@ -58,7 +58,7 @@ The simulation separates vehicle configuration from simulation execution:
 | `SuspensionManager` | corner suspensions | `SimpleSuspension` |
 | `SimpleSuspension` | `state` | `SuspensionState` |
 | `PacejkaTire` | corner states | `TireState` |
-| `EMRAX228Powertrain` / `SimplePowertrain` | `state` | `PowertrainState` |
+| `EMRAX228Powertrain` | `state` | `PowertrainState` |
 
 ### Data Flow
 

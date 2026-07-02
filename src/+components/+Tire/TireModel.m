@@ -8,7 +8,6 @@ classdef (Abstract) TireModel
     %
     % Concrete implementations:
     %   - PacejkaTire — supported Pacejka Magic Formula model via MFeval
-    %   - SimpleTire  — deprecated legacy linear tire
     
     properties (Abstract)
         FL  % components.Tire.TireState front-left
