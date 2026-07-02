@@ -13,6 +13,12 @@ classdef DriverInputPlanner
         speedFeedbackDeadband = 0.20
         speedFeedbackThrottleBand = 1.0
         speedFeedbackBrakeBand = 1.0
+        speedFeedbackCorrectionGain = 0.35
+        racingLineEnabled = true
+        racingLineOffsetFraction = 0.65
+        racingLineCurvatureSmoothDistance = 6.0
+        racingLineOffsetSmoothDistance = 8.0
+        racingLineMinCornerLength = 2.0
         % When the feedforward plan calls for coast (both pedals zero) and the
         % speed error stays within this tolerance [m/s], the closed-loop layer
         % holds coast instead of pedaling to correct the small drift. This lets
@@ -55,7 +61,9 @@ classdef DriverInputPlanner
         function profile = buildOpenLoopProfile(obj, initialState, trackData)
             vm = obj.vehicleManager;
             n = trackData.nPts;
-            curvature = trackData.curvature(:);
+            line = obj.buildRacingLine(trackData);
+            curvature = line.planningCurvature(:);
+            lineDs = obj.computeLineDs(line.lineS);
             vTarget = vm.maxSpeed * ones(n, 1);
 
             % Iterating lets speed-dependent aero influence the GGV envelope
@@ -63,7 +71,8 @@ classdef DriverInputPlanner
             for iter = 1:3 %#ok<NASGU>
                 for i = 1:n
                     if abs(curvature(i)) > 1e-6
-                        limits = obj.estimateGGVLimits(vTarget(i), initialState);
+                        limits = obj.estimateGGVLimits( ...
+                            vTarget(i), initialState, curvature(i));
                         vTarget(i) = min(vm.maxSpeed, ...
                             sqrt(max(limits.maxLatAccel, 0.1) / abs(curvature(i))));
                     else
@@ -72,10 +81,10 @@ classdef DriverInputPlanner
                 end
             end
 
-            % Backward (braking) sweep: collect brake capability at the corner-
-            % limited envelope speed, then propagate the latest-feasible braking
-            % point upstream. Drive capability is not needed here; it is queried
-            % at the actual sweep speed during the forward pass below.
+            % Backward (braking) sweep: query brake capability at the current
+            % planned speed as the envelope is propagated upstream. This keeps
+            % decel requests bounded by the car's local capability rather than
+            % by a stale pre-sweep speed guess.
             maxBrakeAccel = zeros(n, 1);
             maxDriveAccel = zeros(n, 1);   % filled in during the forward sweep
             F_drive_full = zeros(n, 1);
@@ -83,16 +92,16 @@ classdef DriverInputPlanner
             brakeForceAccel = zeros(n, 1);
             driveScale = zeros(n, 1);      % traction-circle throttle cap per point
             brakeScale = zeros(n, 1);      % traction-circle brake cap per point
-            for i = 1:n
-                limits = obj.estimateGGVLimits(vTarget(i), initialState);
-                maxBrakeAccel(i) = limits.maxBrakeAccel;
-            end
-
             for i = n-1:-1:1
-                ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
+                limits = obj.estimateGGVLimits( ...
+                    vTarget(i + 1), initialState, curvature(i + 1));
+                maxBrakeAccel(i + 1) = limits.maxBrakeAccel;
+                ds = max(lineDs(i), 0.001);
                 reachableSpeed = sqrt(vTarget(i+1)^2 + 2 * maxBrakeAccel(i+1) * ds);
                 vTarget(i) = min(vTarget(i), reachableSpeed);
             end
+            maxBrakeAccel(1) = obj.estimateGGVLimits( ...
+                vTarget(1), initialState, curvature(1)).maxBrakeAccel;
 
             % Forward (acceleration) sweep. Drive capability is strongly
             % speed-dependent (traction-limited at low speed, power-limited at
@@ -114,7 +123,7 @@ classdef DriverInputPlanner
                 driveScale(i) = limits.driveScale;
                 brakeScale(i) = limits.brakeScale;
                 if i < n
-                    ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
+                    ds = max(lineDs(i), 0.001);
                     axCap = max(maxDriveAccel(i), 0);
                     reachableSpeed = sqrt(speedPlan(i)^2 + 2 * axCap * ds);
                     speedPlan(i+1) = min(vTarget(i+1), reachableSpeed);
@@ -123,13 +132,15 @@ classdef DriverInputPlanner
 
             axRef = zeros(n, 1);
             for i = 1:n-1
-                ds = max(trackData.arcLen(i+1) - trackData.arcLen(i), 0.001);
-                axRef(i) = (speedPlan(i+1)^2 - speedPlan(i)^2) / (2 * ds);
+                ds = max(lineDs(i), 0.001);
+                axRaw = (speedPlan(i+1)^2 - speedPlan(i)^2) / (2 * ds);
+                axRef(i) = max(-maxBrakeAccel(i), ...
+                    min(maxDriveAccel(i), axRaw));
             end
             axRef(n) = axRef(max(n-1, 1));
 
             maxSteer = obj.maxSteeringAngle;
-            steerRef = atan(vm.wheelbase * curvature);
+            steerRef = atan(vm.wheelbase * line.lineCurvature(:));
             steerRef = max(-maxSteer, min(maxSteer, steerRef));
 
             % Physics-based pedal map: each planned accel maps to partial
@@ -157,7 +168,11 @@ classdef DriverInputPlanner
                 'axRef', axRef, ...
                 'throttle', throttleRef, ...
                 'brake', brakeRef, ...
-                'steer', steerRef);
+                'steer', steerRef, ...
+                'targetLateralError', line.targetLateralError, ...
+                'lineHeading', line.lineHeading, ...
+                'lineCurvature', line.lineCurvature, ...
+                'lineS', line.lineS);
         end
 
         function input = sample(obj, profile, idx, actualSpeed)
@@ -167,9 +182,15 @@ classdef DriverInputPlanner
                 'brake', profile.brake(idx), ...
                 'steer', profile.steer(idx), ...
                 'targetSpeed', profile.vTarget(idx), ...
-                'axRef', profile.axRef(idx));
+                'axRef', profile.axRef(idx), ...
+                'targetLateralError', obj.sampleProfileField(profile, 'targetLateralError', idx, 0), ...
+                'lineHeading', obj.sampleProfileField(profile, 'lineHeading', idx, NaN), ...
+                'lineCurvature', obj.sampleProfileField(profile, 'lineCurvature', idx, NaN), ...
+                'lineS', obj.sampleProfileField(profile, 'lineS', idx, NaN), ...
+                'speedError', NaN);
 
             if nargin >= 4 && isfinite(actualSpeed)
+                input.speedError = actualSpeed - input.targetSpeed;
                 input = obj.applySpeedFeedback(input, actualSpeed);
             end
         end
@@ -183,12 +204,18 @@ classdef DriverInputPlanner
                 'brake', interp1(sProfile, profile.brake(:), s, 'linear'), ...
                 'steer', interp1(sProfile, profile.steer(:), s, 'linear'), ...
                 'targetSpeed', interp1(sProfile, profile.vTarget(:), s, 'linear'), ...
-                'axRef', interp1(sProfile, profile.axRef(:), s, 'linear'));
+                'axRef', interp1(sProfile, profile.axRef(:), s, 'linear'), ...
+                'targetLateralError', obj.interpProfileField(profile, 'targetLateralError', sProfile, s, 0), ...
+                'lineHeading', obj.interpProfileField(profile, 'lineHeading', sProfile, s, NaN), ...
+                'lineCurvature', obj.interpProfileField(profile, 'lineCurvature', sProfile, s, NaN), ...
+                'lineS', obj.interpProfileField(profile, 'lineS', sProfile, s, NaN), ...
+                'speedError', NaN);
 
             input.throttle = max(0, min(1, input.throttle));
             input.brake = max(0, min(1, input.brake));
 
             if nargin >= 4 && isfinite(actualSpeed)
+                input.speedError = actualSpeed - input.targetSpeed;
                 input = obj.applySpeedFeedback(input, actualSpeed);
             end
         end
@@ -226,12 +253,16 @@ classdef DriverInputPlanner
                 input.brake = 0;
                 throttleCorrection = (-speedError - deadband) / ...
                     max(obj.speedFeedbackThrottleBand, eps);
-                input.throttle = max(input.throttle, min(1, throttleCorrection));
+                throttleCorrection = min(1, ...
+                    obj.speedFeedbackCorrectionGain * throttleCorrection);
+                input.throttle = max(input.throttle, throttleCorrection);
             elseif speedError > deadband
                 input.throttle = 0;
                 brakeCorrection = (speedError - deadband) / ...
                     max(obj.speedFeedbackBrakeBand, eps);
-                input.brake = max(input.brake, min(1, brakeCorrection));
+                brakeCorrection = min(1, ...
+                    obj.speedFeedbackCorrectionGain * brakeCorrection);
+                input.brake = max(input.brake, brakeCorrection);
             else
                 if input.axRef >= 0
                     input.brake = 0;
@@ -243,6 +274,214 @@ classdef DriverInputPlanner
 
             input.throttle = max(0, min(1, input.throttle));
             input.brake = max(0, min(1, input.brake));
+        end
+
+        function line = buildRacingLine(obj, trackData)
+            n = trackData.nPts;
+            centerS = trackData.arcLen(:);
+            centerPoints = trackData.points;
+            centerHeading = trackData.heading(:);
+            centerCurvature = trackData.curvature(:);
+
+            line.targetLateralError = zeros(n, 1);
+            line.lineS = centerS;
+            line.lineHeading = centerHeading;
+            line.lineCurvature = centerCurvature;
+            line.planningCurvature = obj.smoothByDistance( ...
+                centerCurvature, centerS, obj.racingLineCurvatureSmoothDistance);
+
+            if ~obj.racingLineEnabled || n < 3 || obj.isSteadyCircle(trackData)
+                return;
+            end
+            if ~isfield(trackData, 'trackHalfWidth') || ...
+                    ~isfinite(trackData.trackHalfWidth) || trackData.trackHalfWidth <= 0
+                return;
+            end
+
+            offsetLimit = obj.computeRacingLineOffsetLimit(trackData.trackHalfWidth);
+            if offsetLimit <= 0
+                return;
+            end
+
+            smoothCurvature = line.planningCurvature;
+            cornerSegments = obj.findRacingLineCornerSegments( ...
+                centerS, smoothCurvature);
+            if isempty(cornerSegments)
+                return;
+            end
+
+            targetOffset = zeros(n, 1);
+            for segIdx = 1:size(cornerSegments, 1)
+                iStart = cornerSegments(segIdx, 1);
+                iEnd = cornerSegments(segIdx, 2);
+                turnSign = cornerSegments(segIdx, 3);
+                if iEnd <= iStart || turnSign == 0
+                    continue;
+                end
+                segmentS = centerS(iStart:iEnd);
+                segmentLength = max(segmentS(end) - segmentS(1), eps);
+                phase = (segmentS - segmentS(1)) / segmentLength;
+                targetOffset(iStart:iEnd) = obj.racingLineOffsetAtPhase( ...
+                    phase, turnSign, offsetLimit);
+            end
+
+            targetOffset = obj.smoothByDistance( ...
+                targetOffset, centerS, obj.racingLineOffsetSmoothDistance);
+            targetOffset = max(-offsetLimit, min(offsetLimit, targetOffset));
+
+            heading = unwrap(centerHeading);
+            normalX = -sin(heading);
+            normalY = cos(heading);
+            linePoints = centerPoints + [targetOffset .* normalX, targetOffset .* normalY];
+            lineDs = hypot(diff(linePoints(:,1)), diff(linePoints(:,2)));
+            lineS = [0; cumsum(lineDs)];
+            if numel(lineS) ~= n || lineS(end) <= eps
+                return;
+            end
+
+            lineHeading = components.Track.computeHeading(linePoints, false);
+            lineCurvature = components.Track.computeCurvature(linePoints, false);
+            lineCurvature = obj.smoothByDistance( ...
+                lineCurvature, centerS, obj.racingLineCurvatureSmoothDistance);
+            line.targetLateralError = targetOffset;
+            line.lineS = lineS;
+            line.lineHeading = lineHeading(:);
+            line.lineCurvature = lineCurvature(:);
+            line.planningCurvature = line.lineCurvature;
+        end
+
+        function offsetLimit = computeRacingLineOffsetLimit(obj, trackHalfWidth)
+            vm = obj.vehicleManager;
+            vehicleTrackWidth = 0;
+            if ~isempty(vm)
+                if isstruct(vm) && isfield(vm, 'trackWidth')
+                    vehicleTrackWidth = vm.trackWidth;
+                elseif isobject(vm) && isprop(vm, 'trackWidth')
+                    vehicleTrackWidth = vm.trackWidth;
+                end
+            end
+
+            edgeMargin = 0.75;
+            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'edgeSlowdownMargin')
+                edgeMargin = obj.driverModel.edgeSlowdownMargin;
+            end
+            cgMargin = max(0.5 * vehicleTrackWidth + 0.25, edgeMargin);
+            offsetLimit = trackHalfWidth - cgMargin;
+            offsetLimit = max(0, obj.racingLineOffsetFraction * offsetLimit);
+        end
+
+        function segments = findRacingLineCornerSegments(obj, s, curvature)
+            absKappa = abs(curvature(:));
+            if all(absKappa <= eps)
+                segments = zeros(0, 3);
+                return;
+            end
+
+            kappa95 = prctile(absKappa, 95);
+            threshold = max([1e-5, 0.15 * kappa95]);
+            active = absKappa > threshold;
+            signKappa = sign(curvature(:));
+            signKappa(~active) = 0;
+
+            segments = zeros(0, 3);
+            i = 1;
+            n = numel(curvature);
+            while i <= n
+                if signKappa(i) == 0
+                    i = i + 1;
+                    continue;
+                end
+                turnSign = signKappa(i);
+                iStart = i;
+                while i < n && signKappa(i + 1) == turnSign
+                    i = i + 1;
+                end
+                iEnd = i;
+                if s(iEnd) - s(iStart) >= obj.racingLineMinCornerLength
+                    segments(end + 1, :) = [iStart, iEnd, turnSign]; %#ok<AGROW>
+                end
+                i = i + 1;
+            end
+        end
+
+        function offset = racingLineOffsetAtPhase(obj, phase, turnSign, offsetLimit)
+            apexPhase = 0.5;
+            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'apexPhase')
+                apexPhase = obj.driverModel.apexPhase;
+            end
+            apexPhase = max(0.1, min(0.9, apexPhase));
+            phase = max(0, min(1, phase(:)));
+            offset = zeros(size(phase));
+
+            entry = phase <= apexPhase;
+            entryBlend = phase(entry) / max(apexPhase, eps);
+            offset(entry) = -turnSign * offsetLimit .* cos(pi * entryBlend);
+
+            exitBlend = (phase(~entry) - apexPhase) / max(1 - apexPhase, eps);
+            offset(~entry) = turnSign * offsetLimit .* cos(pi * exitBlend);
+        end
+
+        function values = smoothByDistance(~, values, s, smoothDistance)
+            values = values(:);
+            if numel(values) < 3 || smoothDistance <= 0 || ~isfinite(smoothDistance)
+                return;
+            end
+
+            ds = diff(s(:));
+            ds = ds(isfinite(ds) & ds > eps);
+            if isempty(ds)
+                return;
+            end
+            window = max(1, round(smoothDistance / median(ds)));
+            if window <= 1
+                return;
+            end
+            values = movmean(values, window, 'Endpoints', 'shrink');
+        end
+
+        function tf = isSteadyCircle(~, trackData)
+            tf = false;
+            if ~isfield(trackData, 'closedLoop') || ~trackData.closedLoop || ...
+                    ~isfield(trackData, 'curvature')
+                return;
+            end
+            curvature = trackData.curvature(:);
+            active = abs(curvature) > 1e-6;
+            if ~all(active)
+                return;
+            end
+            firstSign = sign(curvature(find(active, 1, 'first')));
+            tf = firstSign ~= 0 && all(sign(curvature(active)) == firstSign);
+        end
+
+        function lineDs = computeLineDs(~, lineS)
+            lineS = lineS(:);
+            if numel(lineS) < 2
+                lineDs = 0;
+                return;
+            end
+            lineDs = diff(lineS);
+            lineDs(~isfinite(lineDs) | lineDs <= 0) = 0.001;
+        end
+
+        function value = sampleProfileField(~, profile, fieldName, idx, defaultValue)
+            value = defaultValue;
+            if isfield(profile, fieldName)
+                values = profile.(fieldName);
+                if numel(values) >= idx
+                    value = values(idx);
+                end
+            end
+        end
+
+        function value = interpProfileField(~, profile, fieldName, sProfile, s, defaultValue)
+            value = defaultValue;
+            if isfield(profile, fieldName)
+                values = profile.(fieldName);
+                if numel(values) == numel(sProfile)
+                    value = interp1(sProfile, values(:), s, 'linear');
+                end
+            end
         end
 
         function limits = estimateGGVLimits(obj, speed, templateState, curvature)

@@ -427,7 +427,7 @@ def extract(rows, driver_mass):
             "25 kg/corner left as-is.")
 
     # ======================================================================
-    # Aero whole-car totals (r131/132) -> per-element TODO block
+    # Aero whole-car totals (r131/132) -> single whole-car aero component
     # ======================================================================
     r131 = find_row(rows, "forces")
     r132 = find_row(rows, "coefficients")
@@ -443,16 +443,49 @@ def extract(rows, driver_mass):
         rho_match = re.search(r"(?:ρ|rho)\s*=\s*([\d.]+)",
                               " ".join(r131), re.I)
         rho = float(rho_match.group(1)) if rho_match else None
-        cla = cl * area if (cl and area) else None
-        cda = cd * area if (cd and area) else None
+        cla = cl * area if (cl is not None and area is not None) else None
+        cda = cd * area if (cd is not None and area is not None) else None
         # Independent ClA implied by the downforce force balance at 80 kph.
         cla_force = None
         if df is not None and rho is not None:
             v = 80 / 3.6
             cla_force = df / (0.5 * rho * v * v)
+        cda_force = None
+        if drag is not None and rho is not None:
+            v = 80 / 3.6
+            cda_force = drag / (0.5 * rho * v * v)
+        front_frac = None
+        x_cp = None
+        if pf_aero is not None:
+            front_frac = pf_aero / 100.0 if pf_aero > 1.0 else pf_aero
+            wheelbase = getattr(s, "wheelbase", 1.558)
+            static_front = getattr(s, "staticFrontWeight", 0.50)
+            x_cp = wheelbase * (front_frac - static_front)
         s.aero_totals = dict(df=df, drag=drag, pf=pf_aero, cl=cl, cd=cd,
                              area=area, cla=cla, cda=cda, cla_force=cla_force,
-                             rho=rho)
+                             cda_force=cda_force, front_frac=front_frac,
+                             x_cp=x_cp, rho=rho)
+        if x_cp is not None:
+            s.add_direct(
+                "aero.xPosition", x_cp,
+                f"CSV r131: {pf_aero:g}% front CoP -> "
+                f"wheelbase*({front_frac:.4f}-staticFrontWeight)")
+        if cla is not None:
+            s.add_direct(
+                "aero.ClA", cla,
+                f"CSV r132: Cl {cl:g} * RefArea {area:g} m^2")
+        elif cla_force is not None:
+            s.add_direct(
+                "aero.ClA", cla_force,
+                f"CSV r131: downforce {df:g} N at 80 kph")
+        if cda is not None:
+            s.add_direct(
+                "aero.CdA", cda,
+                f"CSV r132: Cd {cd:g} * RefArea {area:g} m^2")
+        elif cda_force is not None:
+            s.add_direct(
+                "aero.CdA", cda_force,
+                f"CSV r131: drag {drag:g} N at 80 kph")
 
     # ======================================================================
     # TIER C -- present in CSV, no home in the config (reported, not emitted)
@@ -487,12 +520,7 @@ def extract(rows, driver_mass):
     missing_fields = [
         ("yawInertia", 130),
         ("maxSpeed", 80),
-        ("frontWing.xPosition / zPosition", "0.9 / 0.08"),
-        ("frontWing.pitchSensitivityClA / heightSensitivity", "-5.0 / 0.3"),
-        ("rearWing.xPosition / zPosition", "-0.85 / 0.45"),
-        ("rearWing.pitchSensitivityClA / heightSensitivity", "3.0 / 0.15"),
-        ("underbody.{xPosition,zPosition,ClA,CdA,pitchSensitivityClA,"
-         "stallHeight,heightExponent}", "see baseline"),
+        ("aero.pitchSensitivityClA", 0),
         ("suspension.bumpStopRate", 200000),
         ("suspension.tireSpringRate", 200000),
         ("suspension.geometry.*.travelGrid / motionRatioCurve", "baseline"),
@@ -611,16 +639,24 @@ def build_matlab(name, s):
     # ---- aerodynamics --------------------------------------------------
     A("    %% ====================================================================")
     A("    %  AERODYNAMICS")
-    A("    %  Each element produces downforce F = 0.5*rho*ClA*V^2 and drag")
-    A("    %  F = 0.5*rho*CdA*V^2. Wings use a linear ride-height model;")
-    A("    %  the floor uses an exponential ground-effect model.")
+    A("    %  Whole-car aero is represented by one resultant at the center of")
+    A("    %  pressure. xPosition > 0 is forward of CG, < 0 is behind. zPosition")
+    A("    %  is kept at CG height so drag adds no artificial pitch moment.")
     A("    %  ====================================================================")
+    aero_x = -0.084146
+    aero_cla = 4.10
+    aero_cda = 1.60
     if s.aero_totals:
         t = s.aero_totals
+        aero_x = t.get("x_cp") if t.get("x_cp") is not None else aero_x
+        aero_cla = (t.get("cla") if t.get("cla") is not None
+                    else t.get("cla_force") if t.get("cla_force") is not None
+                    else aero_cla)
+        aero_cda = (t.get("cda") if t.get("cda") is not None
+                    else t.get("cda_force") if t.get("cda_force") is not None
+                    else aero_cda)
         A("    % NOTE: the spec sheet (r131-132) gives WHOLE-CAR aero, measured at")
-        A("    % 80 kph. The config needs PER-ELEMENT maps, so the baseline")
-        A("    % frontWing/rearWing/underbody values below are KEPT AS-IS and must")
-        A("    % be apportioned manually. CSV whole-car totals:")
+        A("    % 80 kph. CSV whole-car totals:")
         bits = []
         if t.get("df") is not None:
             bits.append(f"Downforce {t['df']:.1f} N")
@@ -641,37 +677,21 @@ def build_matlab(name, s):
             pct = (t['cla_force'] / t['cla'] - 1) * 100
             A(f"    %   (downforce independently implies ClA ~ {t['cla_force']:.2f} "
               f"-- ~{pct:.0f}% above Cl*Area; CSV is internally inconsistent)")
-        A("    % TODO: scale each element's ClA/CdA to match these totals & %Front.")
-        A("    %       (baseline element sum: ClA 4.10 / CdA 1.60)")
+        if t.get("front_frac") is not None and t.get("x_cp") is not None:
+            A(f"    %   Center of pressure: {100*t['front_frac']:.2f}% front aero "
+              f"=> xPosition {t['x_cp']:.3f} m from CG.")
 
     A("")
-    A("    % Front wing (baseline values -- see TODO above).")
-    A("    cfg.frontWing = struct( ...")
-    A("        'xPosition', 0.9, ...            % [not in spec sheet] 0.9 m forward of CG")
-    A("        'zPosition', 0.08, ...           % [not in spec sheet]")
-    A("        'ClA', 1.6, ...                  % TODO: apportion from CSV whole-car ClA")
-    A("        'CdA', 0.35, ...                 % TODO: apportion from CSV whole-car CdA")
-    A("        'pitchSensitivityClA', -5.0, ... % [not in spec sheet] [1/rad]")
-    A("        'heightSensitivity', 0.3);       % [not in spec sheet]")
-    A("")
-    A("    % Rear wing (baseline values -- see TODO above).")
-    A("    cfg.rearWing = struct( ...")
-    A("        'xPosition', -0.85, ...          % [not in spec sheet]")
-    A("        'zPosition', 0.45, ...           % [not in spec sheet]")
-    A("        'ClA', 2.1, ...                  % TODO: apportion from CSV whole-car ClA")
-    A("        'CdA', 1.15, ...                 % TODO: apportion from CSV whole-car CdA")
-    A("        'pitchSensitivityClA', 3.0, ...  % [not in spec sheet] [1/rad]")
-    A("        'heightSensitivity', 0.15);      % [not in spec sheet]")
-    A("")
-    A("    % Underbody floor / diffuser (baseline values -- see TODO above).")
-    A("    cfg.underbody = struct( ...")
-    A("        'xPosition', 0.0, ...            % [not in spec sheet]")
-    A("        'zPosition', 0.035, ...          % [not in spec sheet]")
-    A("        'ClA', 0.4, ...                  % TODO: apportion from CSV whole-car ClA")
-    A("        'CdA', 0.10, ...                 % TODO: apportion from CSV whole-car CdA")
-    A("        'pitchSensitivityClA', -8.0, ... % [not in spec sheet] [1/rad]")
-    A("        'stallHeight', 0.015, ...        % [not in spec sheet] [m]")
-    A("        'heightExponent', 0.6);          % [not in spec sheet]")
+    A("    cfg.aero = struct( ...")
+    A(f"        'xPosition', {fmt(aero_x)}, ...      % "
+      f"{src_comment(s, 'aero.xPosition', '-0.084146')} [m from CG]")
+    A("        'zPosition', cfg.cgHeight, ...   % kept at CG height")
+    A(f"        'ClA', {fmt(aero_cla)}, ...                 % "
+      f"{src_comment(s, 'aero.ClA', '4.10')} [m^2]")
+    A(f"        'CdA', {fmt(aero_cda)}, ...                 % "
+      f"{src_comment(s, 'aero.CdA', '1.60')} [m^2]")
+    A("        'pitchSensitivityClA', 0.0);     % "
+      + src_comment(s, "aero.pitchSensitivityClA", "0.0") + " [1/rad]")
     A("")
 
     # ---- suspension ----------------------------------------------------

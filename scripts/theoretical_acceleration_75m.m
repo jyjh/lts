@@ -392,22 +392,15 @@ end
 
 function [Fdrag, FzFront, FzRear] = aeroForces(cfg, speed)
     q = 0.5 * cfg.airDensity * speed^2;
-    parts = {cfg.frontWing, cfg.rearWing, cfg.underbody};
-    Fdrag = 0;
-    FzFront = 0;
-    FzRear = 0;
+    p = cfg.aero;
     rearArm = cfg.wheelbase * cfg.staticFrontWeight;
 
-    for i = 1:numel(parts)
-        p = parts{i};
-        downforce = q * p.ClA;
-        drag = q * p.CdA;
-        frontFrac = (rearArm + p.xPosition) / cfg.wheelbase;
-        frontFrac = min(1, max(0, frontFrac));
-        FzFront = FzFront + downforce * frontFrac;
-        FzRear = FzRear + downforce * (1 - frontFrac);
-        Fdrag = Fdrag + drag;
-    end
+    downforce = q * p.ClA;
+    Fdrag = q * p.CdA;
+    frontFrac = (rearArm + p.xPosition) / cfg.wheelbase;
+    frontFrac = min(1, max(0, frontFrac));
+    FzFront = downforce * frontFrac;
+    FzRear = downforce * (1 - frontFrac);
 end
 
 function Vx = mfevalSpeed(tire, speed)

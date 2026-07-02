@@ -31,47 +31,22 @@ function cfg = R25()
 
     %% ====================================================================
     %  AERODYNAMICS
-    %  Each element produces downforce F = 0.5*rho*ClA*V^2 and drag
-    %  F = 0.5*rho*CdA*V^2. Wings use a linear ride-height model;
-    %  the floor uses an exponential ground-effect model.
+    %  Whole-car aero is represented by one resultant at the center of
+    %  pressure. xPosition > 0 is forward of CG, < 0 is behind. zPosition is
+    %  kept at CG height so drag adds no artificial pitch moment.
     %  ====================================================================
     % NOTE: the spec sheet (r131-132) gives WHOLE-CAR aero, measured at
-    % 80 kph. The config needs PER-ELEMENT maps, so the baseline
-    % frontWing/rearWing/underbody values below are KEPT AS-IS and must
-    % be apportioned manually. CSV whole-car totals:
+    % 80 kph. CSV whole-car totals:
     %   Downforce 1389.9 N  Drag 518.8 N  %Front 47.73
     %   Cl x RefArea(1.094 m^2) => ClA ~ 4.84  CdA ~ 1.81
     %   (downforce independently implies ClA ~ 4.84 -- ~-0% above Cl*Area; CSV is internally inconsistent)
-    % TODO: scale each element's ClA/CdA to match these totals & %Front.
-    %       (baseline element sum: ClA 4.10 / CdA 1.60)
-
-    % Front wing (baseline values -- see TODO above).
-    cfg.frontWing = struct( ...
-        'xPosition', 0.9, ...            % [not in spec sheet] 0.9 m forward of CG
-        'zPosition', 0.08, ...           % [not in spec sheet]
-        'ClA', 1.6, ...                  % TODO: apportion from CSV whole-car ClA
-        'CdA', 0.35, ...                 % TODO: apportion from CSV whole-car CdA
-        'pitchSensitivityClA', -5.0, ... % [not in spec sheet] [1/rad]
-        'heightSensitivity', 0.3);       % [not in spec sheet]
-
-    % Rear wing (baseline values -- see TODO above).
-    cfg.rearWing = struct( ...
-        'xPosition', -0.85, ...          % [not in spec sheet]
-        'zPosition', 0.45, ...           % [not in spec sheet]
-        'ClA', 2.1, ...                  % TODO: apportion from CSV whole-car ClA
-        'CdA', 1.15, ...                 % TODO: apportion from CSV whole-car CdA
-        'pitchSensitivityClA', 3.0, ...  % [not in spec sheet] [1/rad]
-        'heightSensitivity', 0.15);      % [not in spec sheet]
-
-    % Underbody floor / diffuser (baseline values -- see TODO above).
-    cfg.underbody = struct( ...
-        'xPosition', 0.0, ...            % [not in spec sheet]
-        'zPosition', 0.035, ...          % [not in spec sheet]
-        'ClA', 0.4, ...                  % TODO: apportion from CSV whole-car ClA
-        'CdA', 0.10, ...                 % TODO: apportion from CSV whole-car CdA
-        'pitchSensitivityClA', -8.0, ... % [not in spec sheet] [1/rad]
-        'stallHeight', 0.015, ...        % [not in spec sheet] [m]
-        'heightExponent', 0.6);          % [not in spec sheet]
+    % xPosition = wheelbase * (%Front - staticFrontWeight).
+    cfg.aero = struct( ...
+        'xPosition', -0.049202, ...      % [CSV r131: 47.73% front CoP]
+        'zPosition', cfg.cgHeight, ...   % Kept at CG height
+        'ClA', 4.84, ...                 % [CSV r132: Cl * RefArea]
+        'CdA', 1.81, ...                 % [CSV r132: Cd * RefArea]
+        'pitchSensitivityClA', 0.0);     % [not in spec sheet]
 
     %% ====================================================================
     %  SUSPENSION

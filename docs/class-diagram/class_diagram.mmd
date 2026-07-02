@@ -64,7 +64,11 @@ classDiagram
         +addComponent(aeroComp)
         +removeComponent(name)
         +computeForces(vehicleState)
-        +computePerComponent(vehicleState)
+    }
+
+    class WholeCarAero {
+        +computeDownforce(vehicleState)
+        +computeDrag(vehicleState)
     }
 
     class FrontWing {
@@ -246,6 +250,7 @@ classDiagram
     }
 
     AeroComponent <|-- AeroManager
+    AeroComponent <|-- WholeCarAero
     AeroComponent <|-- FrontWing
     AeroComponent <|-- RearWing
     AeroComponent <|-- UnderbodyFloor
@@ -257,7 +262,7 @@ classDiagram
 
     Simulator *-- VehicleManager : vehicleManager
     Simulator *-- DriverModel : driverModel
-    VehicleManager *-- AeroManager : aero
+    VehicleManager *-- AeroComponent : aero
     VehicleManager *-- SuspensionManager : suspension
     VehicleManager *-- PowertrainComponent : powertrain
     VehicleManager *-- TireModel : tire

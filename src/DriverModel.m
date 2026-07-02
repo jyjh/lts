@@ -243,8 +243,18 @@ classdef DriverModel < handle
                 input.steer = 0;
             end
 
-            headingError = obj.wrapAngle(ref.heading - state.yaw);
-            targetLateralError = obj.computeTargetLateralError(ref);
+            lineHeading = ref.heading;
+            if isfield(input, 'lineHeading') && isfinite(input.lineHeading)
+                lineHeading = input.lineHeading;
+            end
+            headingError = obj.wrapAngle(lineHeading - state.yaw);
+
+            if isfield(input, 'targetLateralError') && ...
+                    isfinite(input.targetLateralError)
+                targetLateralError = input.targetLateralError;
+            else
+                targetLateralError = obj.computeTargetLateralError(ref);
+            end
             lateralTrackingError = ref.lateralError - targetLateralError;
             crossTrackCorrection = atan2( ...
                 -obj.stanleyGain * lateralTrackingError, ...

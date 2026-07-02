@@ -11,10 +11,7 @@ The project uses a composition-based vehicle model. `VehicleManager` stores the 
 
 ```text
 VehicleManager
-|-- components.Aero.AeroManager
-|   |-- FrontWing
-|   |-- RearWing
-|   `-- UnderbodyFloor
+|-- components.Aero.WholeCarAero
 |-- components.Chassis.SimpleChassis
 |   `-- ChassisState
 |-- components.Suspension.SuspensionManager
@@ -37,7 +34,7 @@ See the [class diagram](class-diagram/) for a fuller relationship map.
 ## Simulation Model
 
 - `DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
-- `AeroManager` resolves positioned aero elements into front/rear downforce and total drag.
+- `WholeCarAero` resolves a single center-of-pressure aero resultant into front/rear downforce and total drag.
 - `SimpleChassis` tracks heave, pitch, and roll from accelerations plus aero pitch moments.
 - `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.

@@ -8,7 +8,7 @@ classdef VehicleConfig
     % config into a wired, ready-to-simulate VehicleManager.
     %
     % Sub-systems are nested structs so a car file can override a single
-    % field (e.g. cfg.frontWing.ClA = 2.0) without re-declaring the rest.
+    % field (e.g. cfg.aero.ClA = 4.2) without re-declaring the rest.
     % The constructor pre-populates every field with the baseline values, so
     % a car file only needs to spell out the values it wants to change — but
     % vehicles.baseline spells them all out as documentation/template.
@@ -38,9 +38,7 @@ classdef VehicleConfig
         % ----------------------------------------------------------------
         % Sub-systems (nested structs, initialized in the constructor)
         % ----------------------------------------------------------------
-        frontWing     % Front wing aero map (downforce/drag + pitch & height sensitivity)
-        rearWing      % Rear wing aero map
-        underbody     % Underbody floor / diffuser aero map (exponential ground effect)
+        aero          % Whole-car aero map (downforce/drag + center of pressure)
 
         suspension    % Springs, damping, ARBs, bump stops, kinematic geometry
         chassis       % Sprung-mass heave/pitch/roll platform stiffness & damping
@@ -53,47 +51,22 @@ classdef VehicleConfig
         function obj = VehicleConfig()
             % VEHICLECONFIG Construct with baseline defaults.
             %   Every sub-system struct is pre-populated so individual
-            %   fields can be overridden later (cfg.frontWing.ClA = 2.0).
+            %   fields can be overridden later (cfg.aero.ClA = 4.2).
 
-            % --- Aero: front wing ---
-            %   Aero elements are positioned at (xPosition, zPosition) where
-            %   xPosition > 0 is forward of CG, < 0 is behind. Each element
+            % --- Aero: whole car ---
+            %   The aero resultant is positioned at (xPosition, zPosition) where
+            %   xPosition > 0 is forward of CG, < 0 is behind. The component
             %   produces downforce F = 0.5*rho*ClA*V^2 and drag F = 0.5*rho*CdA*V^2.
-            %   pitchSensitivityClA [1/rad]: fractional ClA change per rad of
-            %     body pitch (nose-up positive); negative = loses DF nose-up.
-            %   Wings use a LINEAR ride-height model:
-            %     heightSensitivity = fractional ClA change per cm of height
-            %     deviation from nominal (FrontWing/RearWing only).
-            obj.frontWing = struct( ...
-                'xPosition', 0.9, ...
-                'zPosition', 0.08, ...
-                'ClA', 1.6, ...
-                'CdA', 0.35, ...
-                'pitchSensitivityClA', -5.0, ...
-                'heightSensitivity', 0.3);
-
-            % --- Aero: rear wing ---
-            obj.rearWing = struct( ...
-                'xPosition', -0.85, ...
-                'zPosition', 0.45, ...
-                'ClA', 2.1, ...
-                'CdA', 1.15, ...
-                'pitchSensitivityClA', 3.0, ...
-                'heightSensitivity', 0.15);
-
-            % --- Aero: underbody floor / diffuser ---
-            %   The floor uses an EXPONENTIAL ground-effect model (unlike the
-            %   wings' linear one):
-            %     heightFactor = (zPosition/effectiveZ)^heightExponent
-            %     stallHeight [m]: below this the floor stalls (DF collapses).
-            obj.underbody = struct( ...
-                'xPosition', 0.0, ...
-                'zPosition', 0.035, ...
-                'ClA', 0.4, ...
-                'CdA', 0.10, ...
-                'pitchSensitivityClA', -8.0, ...
-                'stallHeight', 0.015, ...
-                'heightExponent', 0.6);
+            %   xPosition is the center of pressure relative to the CG. A
+            %   front aero balance f maps to xPosition = wheelbase*(f-staticFrontWeight).
+            %   zPosition is kept at CG height by default so drag adds no
+            %   artificial pitch moment.
+            obj.aero = struct( ...
+                'xPosition', -0.084146, ...
+                'zPosition', obj.cgHeight, ...
+                'ClA', 4.10, ...
+                'CdA', 1.60, ...
+                'pitchSensitivityClA', 0.0);
 
             % --- Suspension ---
             %   front/rear (shared within an axle):

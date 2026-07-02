@@ -34,6 +34,72 @@ verifyGreaterThan(testCase, input.brake, 0);
 verifyLessThan(testCase, input.brake, 1);
 end
 
+function testModestSpeedErrorsDoNotForceFullPedals(testCase)
+planner = DriverInputPlanner([], 0.6);
+profile = createConstantSpeedProfile(0, 0);
+
+underSpeed = planner.sampleAtProgress(profile, 0.5, 8.8);
+overSpeed = planner.sampleAtProgress(profile, 0.5, 11.2);
+
+verifyGreaterThan(testCase, underSpeed.throttle, 0);
+verifyLessThan(testCase, underSpeed.throttle, 0.5);
+verifyEqual(testCase, underSpeed.brake, 0, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, overSpeed.brake, 0);
+verifyLessThan(testCase, overSpeed.brake, 0.5);
+verifyEqual(testCase, overSpeed.throttle, 0, 'AbsTol', 1e-12);
+end
+
+function testRacingLineUsesOutsideApexOutsideOnNinetyTurn(testCase)
+[profile, trackData, vehicle] = createPlannedProfile(components.TestTrack('90turn'));
+[iStart, iEnd] = findCornerSegment(trackData.curvature, 1);
+iEntry = min(iStart + 4, iEnd);
+iApex = round((iStart + iEnd) / 2);
+iExit = max(iEnd - 4, iStart);
+
+offset = profile.targetLateralError;
+verifyLessThan(testCase, offset(iEntry), -0.05);
+verifyGreaterThan(testCase, offset(iApex), 0.05);
+verifyLessThan(testCase, offset(iExit), -0.05);
+verifyLessThanOrEqual(testCase, max(abs(offset)), ...
+    trackData.trackHalfWidth - 0.5 * vehicle.trackWidth + 1e-9);
+end
+
+function testRacingLineHandlesLeftAndRightCorners(testCase)
+[profile, trackData, ~] = createPlannedProfile(components.TestTrack('busstop'));
+[leftStart, leftEnd] = findCornerSegment(trackData.curvature, 1);
+[rightStart, rightEnd] = findCornerSegment(trackData.curvature, -1);
+leftApex = round((leftStart + leftEnd) / 2);
+rightApex = round((rightStart + rightEnd) / 2);
+
+offset = profile.targetLateralError;
+verifyLessThan(testCase, offset(min(leftStart + 4, leftEnd)), -0.05);
+verifyGreaterThan(testCase, offset(leftApex), 0.05);
+verifyGreaterThan(testCase, offset(min(rightStart + 4, rightEnd)), 0.05);
+verifyLessThan(testCase, offset(rightApex), -0.05);
+end
+
+function testSlalomRacingLineOffsetIsSmooth(testCase)
+[profile, ~, ~] = createPlannedProfile(components.TestTrack('slalom'));
+
+offsetStep = abs(diff(profile.targetLateralError));
+verifyLessThan(testCase, max(offsetStep), 0.20);
+verifyGreaterThan(testCase, max(abs(profile.targetLateralError)), 0.05);
+end
+
+function testEnduranceProfileHasBoundedLongitudinalReference(testCase)
+repoRoot = fileparts(fileparts(mfilename('fullpath')));
+track = components.WaypointTrack.loadMat( ...
+    fullfile(repoRoot, 'tracks', ...
+    'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
+track.Width = 5.0;
+[profile, ~, ~] = createPlannedProfile(track);
+
+verifyGreaterThan(testCase, min(profile.axRef), -15);
+verifyLessThan(testCase, max(profile.axRef), 15);
+verifyTrue(testCase, isfield(profile, 'targetLateralError'));
+verifyTrue(testCase, isfield(profile, 'lineCurvature'));
+end
+
 % ============================================================
 % Physics-based pedal map (computePedals) unit tests.
 % Pure function — no VehicleManager required. Each test pins one
@@ -142,4 +208,62 @@ profile = struct( ...
     'throttle', throttle * ones(2, 1), ...
     'brake', brake * ones(2, 1), ...
     'steer', zeros(2, 1));
+end
+
+function [profile, trackData, vehicle] = createPlannedProfile(track)
+dt = 0.001;
+vehicle = VehicleManager.fromConfig(vehicles.baseline(), track, dt);
+driver = DriverModel(vehicle);
+planner = DriverInputPlanner(vehicle, driver);
+initialState = VehicleState('s', 0, 'speed', 0.1);
+initialState.vehicleManager = vehicle;
+trackData = createTrackData(track);
+profile = planner.buildOpenLoopProfile(initialState, trackData);
+end
+
+function trackData = createTrackData(track)
+points = track.getTrackPoints();
+arcLen = [0; cumsum(hypot(diff(points(:,1)), diff(points(:,2))))];
+closedLoop = false;
+if ismethod(track, 'isClosedLoop')
+    closedLoop = track.isClosedLoop();
+elseif isprop(track, 'Closed')
+    closedLoop = track.Closed;
+end
+trackData = struct( ...
+    'points', points, ...
+    'arcLen', arcLen, ...
+    'curvature', track.getCurvature(), ...
+    'mu', track.getSurfaceFriction(), ...
+    'heading', track.getHeading(), ...
+    'length', arcLen(end), ...
+    'trackWidth', track.getTrackWidth(), ...
+    'trackHalfWidth', track.getTrackWidth() / 2, ...
+    'closedLoop', logical(closedLoop), ...
+    'baseTrackLength', track.getTotalLength(), ...
+    'totalLaps', 1, ...
+    'lapBreakS', [0; track.getTotalLength()], ...
+    'nPts', size(points, 1));
+end
+
+function [iStart, iEnd] = findCornerSegment(curvature, turnSign)
+active = sign(curvature(:)) == turnSign & abs(curvature(:)) > 1e-3;
+idx = find(active);
+if isempty(idx)
+    error('DriverInputPlannerTest:MissingCorner', ...
+        'No corner segment found for turn sign %d.', turnSign);
+end
+breaks = [0; find(diff(idx) > 1); numel(idx)];
+bestLen = -inf;
+iStart = idx(1);
+iEnd = idx(end);
+for k = 1:numel(breaks)-1
+    runIdx = idx(breaks(k)+1:breaks(k+1));
+    runLen = numel(runIdx);
+    if runLen > bestLen
+        bestLen = runLen;
+        iStart = runIdx(1);
+        iEnd = runIdx(end);
+    end
+end
 end

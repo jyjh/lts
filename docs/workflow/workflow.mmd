@@ -1,7 +1,6 @@
 graph TD
     subgraph "Aero"
-        AeroInputs[ClA/CdA and component placement] --> AeroClasses[FrontWing / RearWing / UnderbodyFloor]
-        AeroClasses --> AeroManager[AeroManager]
+        AeroInputs[Whole-car ClA/CdA and front CoP] --> WholeCarAero[WholeCarAero]
     end
 
     subgraph "Suspension"
@@ -23,7 +22,7 @@ graph TD
         TestLayouts[TestTrack layouts] --> TrackObj[Track geometry, curvature, mu]
     end
 
-    AeroManager --> Vehicle[VehicleManager]
+    WholeCarAero --> Vehicle[VehicleManager]
     SuspManager --> Vehicle
     EMRAX --> Vehicle
     Pacejka --> Vehicle

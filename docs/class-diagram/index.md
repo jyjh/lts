@@ -17,7 +17,7 @@ The simulation separates vehicle configuration from simulation execution:
 | Pattern | Where | Purpose |
 |---------|-------|---------|
 | Strategy | `VehicleManager` accepts powertrain, tire, aero, suspension, and track component objects | Swap subsystem models without changing the simulation loop |
-| Composite | `AeroManager` aggregates multiple `AeroComponent` objects | Resolve several positioned aero elements as one aero system |
+| Strategy | `WholeCarAero` implements `AeroComponent` | Resolve whole-car aero without changing the simulation loop |
 | State object | `VehicleState`, `SuspensionState`, `TireState`, `PowertrainState` | Persist transient quantities across timesteps |
 
 ---
@@ -36,7 +36,7 @@ The simulation separates vehicle configuration from simulation execution:
 
 | Abstract Base | Concrete Implementations |
 |---------------|--------------------------|
-| `components.Aero.AeroComponent` | `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor` |
+| `components.Aero.AeroComponent` | `WholeCarAero`, `AeroManager`, `FrontWing`, `RearWing`, `UnderbodyFloor` |
 | `components.Suspension.SuspensionComponent` | `SuspensionManager` |
 | `components.Powertrain.PowertrainComponent` | `EMRAX228Powertrain` |
 | `components.Chassis.ChassisComponent` | `SimpleChassis` |
@@ -49,7 +49,7 @@ The simulation separates vehicle configuration from simulation execution:
 |-------|----------|------|
 | `Simulator` | `vehicleManager` | `VehicleManager` |
 | `Simulator` | `driverModel` | `DriverModel` |
-| `VehicleManager` | `aero` | `AeroManager` |
+| `VehicleManager` | `aero` | `AeroComponent` (`WholeCarAero` by default) |
 | `VehicleManager` | `chassis` | `SimpleChassis` |
 | `VehicleManager` | `suspension` | `SuspensionManager` |
 | `VehicleManager` | `powertrain` | `PowertrainComponent` |
@@ -66,7 +66,7 @@ The simulation separates vehicle configuration from simulation execution:
 
 1. Read current `VehicleState` and track curvature/friction/heading.
 2. Ask `DriverModel` for throttle and brake.
-3. Compute aero downforce and drag through `AeroManager`.
+3. Compute aero downforce and drag through the configured `AeroComponent`.
 4. Update chassis heave/pitch/roll and compute chassis-driven corner loads through `SuspensionManager`.
 5. Update `PowertrainState` from driven-wheel angular velocity and compute drive force from motor RPM.
 6. Solve wheel/contact speed and tire forces through the supported `PacejkaTire` model.

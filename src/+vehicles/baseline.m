@@ -36,42 +36,19 @@ function cfg = baseline()
 
     %% ====================================================================
     %  AERODYNAMICS
-    %  Each element is positioned at (xPosition, zPosition) — xPosition > 0
-    %  forward of CG, < 0 behind — and produces downforce F = 0.5*rho*ClA*V^2
-    %  and drag F = 0.5*rho*CdA*V^2. Wings use a linear ride-height model
-    %  (heightSensitivity = fractional ClA change per cm); the floor uses an
-    %  exponential ground-effect model (heightExponent + stallHeight).
-    %  pitchSensitivityClA [1/rad]: fractional ClA change per rad of body
-    %  pitch (nose-up positive); negative = loses downforce nose-up.
+    %  Whole-car aero is represented by one resultant at the center of
+    %  pressure. xPosition > 0 is forward of CG, < 0 is behind. zPosition is
+    %  kept at CG height so drag adds no artificial pitch moment.
     %  ====================================================================
 
-    % Front wing: ahead of front axle, very pitch/height sensitive.
-    cfg.frontWing = struct( ...
-        'xPosition', 0.9, ...            % 0.9 m forward of CG (ahead of front axle)
-        'zPosition', 0.08, ...           % 8 cm above reference plane
-        'ClA', 1.6, ...                  % Downforce coefficient * area [m^2]
-        'CdA', 0.35, ...                 % Drag coefficient * area [m^2]
-        'pitchSensitivityClA', -5.0, ... % Loses downforce when nose pitches up [1/rad]
-        'heightSensitivity', 0.3);       % Fractional ClA change per cm of height
-
-    % Rear wing: behind rear axle, moderate pitch sensitivity.
-    cfg.rearWing = struct( ...
-        'xPosition', -0.85, ...          % 0.85 m behind CG (behind rear axle)
-        'zPosition', 0.45, ...           % 45 cm above reference plane (high-mounted)
-        'ClA', 2.1, ...                  % Highest downforce element [m^2]
-        'CdA', 1.15, ...                 % Highest drag element [m^2]
-        'pitchSensitivityClA', 3.0, ...  % Gains downforce when nose pitches up [1/rad]
-        'heightSensitivity', 0.15);      % Fractional ClA change per cm of height
-
-    % Underbody floor / diffuser: near CG, extremely height sensitive.
-    cfg.underbody = struct( ...
-        'xPosition', 0.0, ...            % At CG
-        'zPosition', 0.035, ...          % 3.5 cm (nominal floor height)
-        'ClA', 0.4, ...                  % Moderate downforce [m^2]
-        'CdA', 0.10, ...                 % Very low drag [m^2]
-        'pitchSensitivityClA', -8.0, ... % Very pitch-sensitive (ground effect) [1/rad]
-        'stallHeight', 0.015, ...        % Downforce collapses below 1.5 cm [m]
-        'heightExponent', 0.6);          % Ground-effect curve exponent (higher = steeper)
+    % Single whole-car resultant. Values preserve the previous three-element
+    % total ClA/CdA and downforce-weighted center of pressure.
+    cfg.aero = struct( ...
+        'xPosition', -0.084146, ...      % Center of pressure, 44.6% front aero load
+        'zPosition', cfg.cgHeight, ...   % Drag resultant at CG height
+        'ClA', 4.10, ...                 % Downforce coefficient * area [m^2]
+        'CdA', 1.60, ...                 % Drag coefficient * area [m^2]
+        'pitchSensitivityClA', 0.0);     % Whole-car CSV aero has no pitch map
 
     %% ====================================================================
     %  SUSPENSION

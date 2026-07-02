@@ -14,7 +14,7 @@ classdef VehicleManager
 
     properties
         % Swappable component objects
-        aero        % components.Aero.AeroManager
+        aero        % components.Aero.AeroComponent
         chassis     % components.Chassis.ChassisComponent
         suspension  % components.Suspension.SuspensionManager
         powertrain  % components.PowertrainComponent
@@ -84,35 +84,15 @@ classdef VehicleManager
             fprintf('=== Building vehicle from config ===\n\n');
 
             %% ---- Aero ----
-            fw = config.frontWing;
-            frontWing = components.Aero.FrontWing( ...
-                fw.xPosition, fw.zPosition, fw.ClA, fw.CdA, ...
-                fw.pitchSensitivityClA, fw.heightSensitivity);
-            fprintf('Aero: FrontWing  | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                frontWing.xPosition, frontWing.ClA, frontWing.CdA);
-
-            rw = config.rearWing;
-            rearWing = components.Aero.RearWing( ...
-                rw.xPosition, rw.zPosition, rw.ClA, rw.CdA, ...
-                rw.pitchSensitivityClA, rw.heightSensitivity);
-            fprintf('Aero: RearWing   | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                rearWing.xPosition, rearWing.ClA, rearWing.CdA);
-
-            ub = config.underbody;
-            floor = components.Aero.UnderbodyFloor( ...
-                ub.xPosition, ub.zPosition, ub.ClA, ub.CdA, ...
-                ub.pitchSensitivityClA, ub.stallHeight, ub.heightExponent);
-            fprintf('Aero: Floor      | x=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                floor.xPosition, floor.ClA, floor.CdA);
-
-            aero = components.Aero.AeroManager();
-            aero = aero.addComponent(frontWing);
-            aero = aero.addComponent(rearWing);
-            aero = aero.addComponent(floor);
-            fprintf('Aero: AeroManager with %d components\n', aero.numComponents());
-            fprintf('  Total ClA=%.2f, Total CdA=%.2f\n', ...
-                frontWing.ClA + rearWing.ClA + floor.ClA, ...
-                frontWing.CdA + rearWing.CdA + floor.CdA);
+            aeroCfg = config.aero;
+            aero = components.Aero.WholeCarAero( ...
+                aeroCfg.xPosition, aeroCfg.zPosition, aeroCfg.ClA, aeroCfg.CdA, ...
+                VehicleManager.def(aeroCfg, 'pitchSensitivityClA', 0));
+            fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
+                aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+            fprintf('  Front aero balance at zero pitch: %.1f%%\n', ...
+                100 * max(0, min(1, ...
+                (config.wheelbase * config.staticFrontWeight + aero.xPosition) / config.wheelbase)));
             fprintf('\n');
 
             %% ---- Powertrain ----

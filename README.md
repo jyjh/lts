@@ -43,13 +43,44 @@ Edit `trackType` in `src/run_simulation.m` to switch between:
 - `busstop`
 - `slalom`
 - `90turn`
+- `2026enduro` — loads a `.mat` centerline from `tracks/` (see [Track files](#track-files))
 
 `skidpad` simulates one warmup lap before the timed lap; returned plots and
 MoTeC exports contain only the second lap.
 
+## Track files
+
+`2026enduro` and other real circuits are loaded from `.mat` files in `tracks/`
+via `components.WaypointTrack.loadMat`. These files are produced by the separate
+[`fsae track image tool`](https://github.com/jyjh/fsae-track-image-tool), which
+traces a track image into `[x, y]` waypoints.
+
+**Travel direction.** The exporter bakes the requested clockwise/anticlockwise
+direction into the ordering of `points_m` and also records it in a `direction`
+field. `loadMat` honors that order by default, and an explicit override can be
+passed to force a direction:
+
+```matlab
+track = components.WaypointTrack.loadMat('tracks/<file>.mat', 'Direction', 'anticlockwise');
+```
+
+If the override conflicts with the direction stored in the file (for example
+because the file is a **stale copy** that was re-exported the other way), the
+waypoints are reversed — keeping the start/finish point fixed — and a warning is
+emitted. `run_simulation.m` passes `'Direction', 'anticlockwise'` for the
+endurance track and prints the resolved direction at startup, so a wrong or
+stale track is obvious immediately. A file with no direction field at all also
+warns.
+
+**Updating a track.** The exporter writes to its own `examples/` directory; it
+does **not** touch this repo's `tracks/`. After re-running the exporter (with a
+changed `Direction` or otherwise), copy the new `.mat` into `tracks/` yourself.
+Note that `Direction` only reorders points *inside* the file — the filename is
+unchanged — so a re-export silently overwrites the previous output.
+
 ## Current Model
 
-- Multi-element aero system: `FrontWing`, `RearWing`, and `UnderbodyFloor` aggregated by `components.Aero.AeroManager`.
+- Whole-car aero system: `components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
 - Transient chassis platform: `components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
 - Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
 - Table-based suspension and steering geometry: `components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, and Ackermann steering presets. Switch `geometryPreset` in `src/run_simulation.m` between `neutral`, `baseline`, `high-camber-gain`, and `pro-ackermann`.

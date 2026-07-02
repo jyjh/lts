@@ -22,7 +22,7 @@ trackType = '2026enduro';
 %  SELECT VEHICLE CONFIGURATION
 %  Add new cars in src/+vehicles/<name>.m, then reference them here.
 %  ====================================================================
-config = vehicles.baseline();
+config = vehicles.R26_base();
 
 %% ====================================================================
 %  DISPLAY OPTIONS
@@ -45,13 +45,21 @@ fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 %  BUILD TRACK
 %  ====================================================================
 if lower(trackType) == "2026enduro"
-    track = components.WaypointTrack.loadMat('tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
+    % Direction is the FSAE endurance travel direction. The exporter also
+    % bakes this into points_m ordering, but passing it here makes the
+    % intent explicit and forces a flip + warning if the .mat on disk was
+    % re-exported in the opposite direction (or is a stale copy).
+    track = components.WaypointTrack.loadMat( ...
+        'tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
     track.Width = 5.0;
+    fprintf('Track: 2026 Endurance (''%s'', %.1f m, %d points, direction: %s)\n', ...
+        trackType, track.getTotalLength(), size(track.getTrackPoints(), 1), ...
+        track.getDirection());
 else
     track = components.TestTrack(trackType);
+    fprintf('Track: TestTrack (''%s'', %.1f m, %d points)\n', ...
+        trackType, track.getTotalLength(), size(track.getTrackPoints(), 1));
 end
-fprintf('Track: TestTrack (''%s'', %.1f m, %d points)\n', ...
-    trackType, track.getTotalLength(), size(track.getTrackPoints(), 1));
 fprintf('\n');
 
 %% ====================================================================
@@ -92,16 +100,6 @@ if exportMoTeC
         'EventName', 'FSAE LTS Simulation', ...
         'VehicleType', 'FSAE');
 end
-
-%% ====================================================================
-%  COMPUTE PER-COMPONENT AERO AT FINAL STATE (for reporting)
-%  ====================================================================
-% perComp = aero.computePerComponent(vehicle.state);  % vehicle.state has vehicleManager set
-% fprintf('\n=== Aero Component Breakdown (at final speed) ===\n');
-% for i = 1:numel(perComp)
-%     fprintf('  %-16s | DF=%7.1f N | Drag=%6.1f N | x=%.2f m\n', ...
-%         perComp(i).name, perComp(i).downforce, perComp(i).drag, perComp(i).xPosition);
-% end
 
 %% ====================================================================
 %  PLOT RESULTS
