@@ -35,10 +35,11 @@ python -m pip install cantools numpy
 
 ## Correlation Replay
 
-`run_correlation` replays a real MoTeC lap through the simulator. It extracts
-the measured throttle, brake, steer, and starting speed from a selected lap,
-uses those controls instead of `DriverModel`, then exports a new simulated CSV
-and `.ld` for overlay in MoTeC i2.
+`run_correlation` replays real MoTeC controls through the simulator. It extracts
+the measured throttle, brake, steer, and starting speed from a selected lap, or
+from the whole log when `Lap` is omitted, uses those controls instead of
+`DriverModel`, then exports a new simulated CSV and `.ld` for overlay in MoTeC
+i2.
 
 ```matlab
 addpath('src')
@@ -49,7 +50,9 @@ run_correlation( ...
     'Track', '2026enduro')
 ```
 
-Lap slicing uses the matching `.ldx` sidecar when `Lap` is supplied.
+Lap slicing uses 1-based public lap numbers and the matching `.ldx` sidecar
+when `Lap` is supplied. Omit `Lap` for logs that already contain one run, such
+as autocross.
 `run_correlation` defaults to `config/motec/r25_real_channel_map.json`, which
 scales and sign-flips the R25 real logger's `Steering.Angle` channel while
 leaving simulator-exported `Steer Raw` as direct road-wheel angle. The generic
@@ -76,9 +79,9 @@ left the reference track.
 
 If the log has no direct brake pedal channel, the default map derives
 `brake_ratio` from `Brake Pressure Front` and `Brake Pressure Rear`. It converts
-both pressures to bar, uses the larger front/rear normalized pressure, and
-assumes `full_scale_bar = 100` maps to a brake command of `1.0`; tune that value
-in a copied channel map for your logger/calibration.
+both pressures to bar, sums the front and rear pressure traces, maps the peak
+combined pressure in the imported log/window to `1.0`, and scales the remaining
+samples by the same peak.
 
 Edit `trackType` in `src/run_simulation.m` to switch between:
 

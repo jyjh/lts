@@ -1,5 +1,7 @@
 import sys
+import tempfile
 import unittest
+from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
@@ -9,7 +11,7 @@ sys.path.insert(0, str(REPO_ROOT / "scripts"))
 sys.path.insert(0, str(REPO_ROOT / "external" / "MotecLogGenerator" / "ldparser"))
 
 import extract_motec_lap  # noqa: E402
-from ldparser import decode_string  # noqa: E402
+from ldparser import decode_string, read_ldx_beacons, write_ldx_beacons  # noqa: E402
 
 
 class FakeChannel:
@@ -38,6 +40,17 @@ class ExtractMotecLapTest(unittest.TestCase):
     def test_ldparser_decode_string_accepts_cp1252_names(self):
         self.assertEqual(decode_string(b"Brake \x96 Front\x00\x00"), "Brake \u2013 Front")
 
+    def test_ldparser_writes_ldx_beacons_readable_by_parser(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            ldx_file = Path(tmp_dir) / "generated.ldx"
+
+            write_ldx_beacons(str(ldx_file), [2500000, 1000000])
+
+            self.assertEqual(
+                read_ldx_beacons(str(ldx_file)),
+                [Decimal("1000000"), Decimal("2500000")],
+            )
+
     def test_brake_ratio_derives_from_front_and_rear_pressure(self):
         data = FakeData(
             [
@@ -56,7 +69,38 @@ class ExtractMotecLapTest(unittest.TestCase):
         )
 
         self.assertEqual(signal["source"], "derived")
-        np.testing.assert_allclose(signal["values"], [0.0, 0.5, 1.0])
+        self.assertEqual(signal["normalization"], "peak_combined_pressure")
+        self.assertEqual(signal["combine"], "sum")
+        self.assertEqual(signal["peak_combined_pressure_bar"], 200.0)
+        np.testing.assert_allclose(signal["values"], [0.0, 0.35, 1.0])
+
+    def test_brake_ratio_peak_scales_combined_pressure_trace(self):
+        spec = {
+            "required": True,
+            "clamp": [0.0, 1.0],
+            "derive": {
+                "method": "brake_pressure",
+                "combine": "sum",
+                "front": {
+                    "names": ["Brake Pressure Front"],
+                    "source_unit_scale": {"bar": 1.0},
+                },
+                "rear": {
+                    "names": ["Brake Pressure Rear"],
+                    "source_unit_scale": {"bar": 1.0},
+                },
+            },
+        }
+        data = FakeData(
+            [
+                FakeChannel("Brake Pressure Front", "bar", 10, [0, 30, 60]),
+                FakeChannel("Brake Pressure Rear", "bar", 10, [0, 10, 40]),
+            ]
+        )
+
+        signal = extract_motec_lap.extract_raw_signal(data, "brake_ratio", spec)
+
+        np.testing.assert_allclose(signal["values"], [0.0, 0.4, 1.0])
 
     def test_source_specific_steering_scale_applies_only_to_matching_source(self):
         spec = {

@@ -1,7 +1,7 @@
 classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
     % EMRAX228POWERTRAIN EMRAX 228 electric powertrain from a MAT map
-    % Uses the provided EMRAX228CC Single_4.5.mat data for motor torque and
-    % tractive force with a fixed 4.5:1 final drive.
+    % Uses the provided EMRAX228LC Single_3.36.mat data for motor torque and
+    % tractive force with the final drive ratio stored in the map.
     
     properties
         matFilePath = ""
@@ -41,7 +41,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
 
     methods
         function obj = EMRAX228Powertrain(matFilePath, drivetrainEfficiency, motorRotorInertia)
-            % EMRAX228POWERTRAIN Construct from EMRAX228CC Single_4.5.mat
+            % EMRAX228POWERTRAIN Construct from EMRAX228LC Single_3.36.mat
             %   EMRAX228Powertrain()
             %   EMRAX228Powertrain(matFilePath)
             %   EMRAX228Powertrain(matFilePath, drivetrainEfficiency)
@@ -49,7 +49,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
 
             if nargin < 1 || isempty(matFilePath)
                 classDir = fileparts(mfilename('fullpath'));
-                matFilePath = fullfile(classDir, 'EMRAX228CC Single_4.5.mat');
+                matFilePath = fullfile(classDir, 'EMRAX228LC Single_3.36.mat');
             end
             if nargin >= 2
                 obj.drivetrainEfficiency = max(0, min(1, drivetrainEfficiency));
@@ -62,18 +62,25 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             data = load(matFilePath);
             obj.matFilePath = string(matFilePath);
             
-            requiredFields = {'FDR', 'Speed', 'Torque', 'Tractive_force', 'Gearing_Map'};
+            requiredFields = {'FDR', 'Speed', 'Tractive_force', 'Gearing_Map'};
             for i = 1:numel(requiredFields)
                 if ~isfield(data, requiredFields{i})
                     error('EMRAX228Powertrain:MissingField', ...
                         'MAT file is missing required field "%s".', requiredFields{i});
                 end
             end
+            if isfield(data, 'Torque')
+                rawTorque = data.Torque(:);
+            elseif isfield(data, 'torque')
+                rawTorque = data.torque(:);
+            else
+                error('EMRAX228Powertrain:MissingField', ...
+                    'MAT file is missing required field "Torque" or "torque".');
+            end
             
             obj.totalGearRatio = data.FDR;
             
             rawSpeed = data.Speed(:);
-            rawTorque = data.Torque(:);
             rawForce = data.Tractive_force(:);
             obj.validateVectorSet(rawSpeed, rawTorque, rawForce, 'raw EMRAX vectors');
             

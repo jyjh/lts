@@ -161,7 +161,7 @@ if ~isfield(manifest, 'channels')
     return;
 end
 
-names = {'steer_rad', 'gps_course_rad', 'brake_ratio', ...
+names = {'throttle_ratio', 'brake_ratio', 'steer_rad', 'gps_course_rad', ...
     'yaw_rate_radps', 'lat_accel_g', 'long_accel_g'};
 for i = 1:numel(names)
     name = names{i};
@@ -191,6 +191,7 @@ end
 function printReplayRanges(profile)
 fprintf('Initial speed: %.2f m/s\n', profile.speed(1));
 fprintf('Initial steer: %.2f deg\n', profile.steer(1) * 180 / pi);
+fprintf('Throttle range: %.3f to %.3f\n', min(profile.throttle), max(profile.throttle));
 fprintf('Steer range: %.2f to %.2f deg\n', ...
     min(profile.steer) * 180 / pi, max(profile.steer) * 180 / pi);
 fprintf('Brake range: %.3f to %.3f\n', min(profile.brake), max(profile.brake));
@@ -251,8 +252,8 @@ if isempty(maxBrake)
 end
 if maxBrake < 0.2
     warning('run_correlation:LowBrakeScale', ...
-        ['Maximum brake_ratio is %.3f. If logged pressure is valid, tune ' ...
-         'full_scale_bar in the channel map before judging braking correlation.'], ...
+        ['Maximum brake_ratio is %.3f. If logged brake pressure is valid, ' ...
+         'check the brake channel map or direct brake source before judging braking correlation.'], ...
         maxBrake);
 end
 end

@@ -1,4 +1,53 @@
 {
+  "_documentation": {
+    "purpose": "Maps MoTeC log channels into the normalized replay CSV columns consumed by the correlation replay workflow.",
+    "format_note": "JSON does not support comments, so documentation lives in this object. The extractor only requires the top-level 'channels' object and ignores this documentation block.",
+    "top_level_fields": {
+      "sample_frequency_hz": "Default output resampling frequency in Hz. scripts/extract_motec_lap.py uses this unless --frequency is provided.",
+      "channels": "Object keyed by normalized replay CSV output column names. Each value describes how to find, scale, derive, clamp, and default that output signal."
+    },
+    "channel_spec_fields": {
+      "names": "Ordered list of possible source channel names or aliases from the MoTeC log. The first matching channel is used.",
+      "required": "If true, extraction fails when the channel cannot be found or derived. If false, extraction continues and fills the output with 'default'.",
+      "default": "Value used when an optional channel is missing. null becomes NaN in the output CSV.",
+      "source_unit_scale": "Map from source unit label to multiplier applied to raw source values. The scaled result should be in the output channel's target unit.",
+      "clamp": "Two-number [min, max] range applied after scaling, offset, or derivation.",
+      "sources": "Ordered list of alternative source specifications. Use this when different loggers expose the same output signal with different names, signs, or scales.",
+      "label": "Human-readable source identifier written to the extraction manifest so matched calibration paths are auditable.",
+      "scale": "Additional multiplier applied together with source_unit_scale. Useful for steering-ratio calibration or sign inversion.",
+      "offset": "Optional additive offset applied after scaling. Supported by the extractor even when omitted from this default map.",
+      "derive": "Fallback derivation rule used when no direct channel source matches."
+    },
+    "derive_fields": {
+      "method": "Derivation algorithm name. The supported method in this workflow is 'brake_pressure'.",
+      "combine": "How front and rear brake pressure traces are combined before normalization. Supported values are 'sum', 'front', 'rear', 'mean', 'weighted_mean', and 'max'. The default is 'sum'.",
+      "normalization": "Pressure-derived brake_ratio is normalized by the peak combined pressure in the imported log/window, so the highest observed combined pressure maps to 1.0.",
+      "zero_bar": "Optional pressure offset in bar subtracted from both axles before ratio conversion.",
+      "front_zero_bar": "Optional front-only pressure offset in bar.",
+      "rear_zero_bar": "Optional rear-only pressure offset in bar.",
+      "auto_zero_percentile": "Optional percentile of each pressure trace to subtract as a measured zero offset before clipping negative pressure to zero.",
+      "front": "Source specification for the front brake pressure channel. Its scaled unit should be bar.",
+      "rear": "Source specification for the rear brake pressure channel. Its scaled unit should be bar.",
+      "front_weight": "Front weighting used when combine is 'weighted_mean'. Defaults to 0.5.",
+      "rear_weight": "Rear weighting used when combine is 'weighted_mean'. Defaults to 1.0 - front_weight."
+    },
+    "configured_outputs": {
+      "distance_m": "Lap distance in meters. Optional; if missing or all NaN, the extractor integrates speed_mps over time.",
+      "throttle_ratio": "Driver throttle command as a 0.0 to 1.0 ratio.",
+      "brake_ratio": "Driver brake command as a normalized ratio. Can be read directly or derived from front and rear pressure channels.",
+      "steer_rad": "Road-wheel steering angle in radians. Use source-specific scale for steering sensor ratio and sign conventions.",
+      "speed_mps": "Vehicle speed in meters per second.",
+      "yaw_rad": "Vehicle yaw or heading angle in radians.",
+      "yaw_rate_radps": "Yaw rate in radians per second.",
+      "x_m": "Optional local X position in meters.",
+      "y_m": "Optional local Y position in meters.",
+      "gps_lat_deg": "GPS latitude in degrees.",
+      "gps_lon_deg": "GPS longitude in degrees.",
+      "gps_course_rad": "GPS true course or heading in radians.",
+      "lat_accel_g": "Lateral acceleration in g.",
+      "long_accel_g": "Longitudinal acceleration in g."
+    }
+  },
   "sample_frequency_hz": 1000,
   "channels": {
     "distance_m": {
@@ -33,9 +82,7 @@
       },
       "derive": {
         "method": "brake_pressure",
-        "combine": "max",
-        "full_scale_bar": 100.0,
-        "auto_scale_if_missing": true,
+        "combine": "sum",
         "front": {
           "names": ["Brake Pressure Front", "Front Brake Pressure", "Brake Front Pressure"],
           "source_unit_scale": {

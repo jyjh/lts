@@ -217,9 +217,12 @@ def derive_brake_ratio_from_pressure(data, output_name: str, spec: dict, derive_
     front_pressure = zero_pressure(front_pressure, derive_spec, "front")
     rear_pressure = zero_pressure(rear_pressure, derive_spec, "rear")
 
-    front_ratio = pressure_to_ratio(front_pressure, derive_spec, "front")
-    rear_ratio = pressure_to_ratio(rear_pressure, derive_spec, "rear")
-    ratio = combine_brake_ratios(front_ratio, rear_ratio, derive_spec)
+    combined_pressure = combine_brake_pressures(front_pressure, rear_pressure, derive_spec)
+    peak_combined_pressure = peak_pressure(combined_pressure)
+    if peak_combined_pressure > np.finfo(float).eps:
+        ratio = combined_pressure / peak_combined_pressure
+    else:
+        ratio = np.zeros_like(combined_pressure)
 
     if "clamp" in spec:
         lo, hi = spec["clamp"]
@@ -234,7 +237,12 @@ def derive_brake_ratio_from_pressure(data, output_name: str, spec: dict, derive_
         "offset_applied": 0.0,
         "source": "derived",
         "derive_method": "brake_pressure",
-        "combine": derive_spec.get("combine", "max"),
+        "combine": derive_spec.get("combine", "sum"),
+        "normalization": "peak_combined_pressure",
+        "peak_combined_pressure_bar": float(peak_combined_pressure),
+        "pressure_scale_applied": float(1.0 / peak_combined_pressure)
+        if peak_combined_pressure > np.finfo(float).eps
+        else 0.0,
         "components": {
             "front": signal_manifest(front),
             "rear": signal_manifest(rear),
@@ -262,39 +270,31 @@ def zero_pressure(values: np.ndarray, derive_spec: dict, axle: str) -> np.ndarra
     return np.maximum(values, 0.0)
 
 
-def pressure_to_ratio(values: np.ndarray, derive_spec: dict, axle: str) -> np.ndarray:
-    full_scale = derive_spec.get(
-        f"{axle}_full_scale_bar",
-        derive_spec.get("full_scale_bar"),
-    )
-    if full_scale is None:
-        if not bool(derive_spec.get("auto_scale_if_missing", True)):
-            raise ValueError(
-                f"Brake pressure derivation requires {axle}_full_scale_bar "
-                "or full_scale_bar when auto_scale_if_missing is false"
-            )
-        finite = values[np.isfinite(values)]
-        full_scale = float(np.max(finite)) if len(finite) else 1.0
-
-    full_scale = max(float(full_scale), np.finfo(float).eps)
-    return values / full_scale
+def peak_pressure(values: np.ndarray) -> float:
+    finite = np.asarray(values, dtype=float)
+    finite = finite[np.isfinite(finite)]
+    if len(finite) == 0:
+        return 0.0
+    return max(float(np.max(finite)), 0.0)
 
 
-def combine_brake_ratios(front_ratio: np.ndarray, rear_ratio: np.ndarray, derive_spec: dict):
-    combine = str(derive_spec.get("combine", "max")).lower()
+def combine_brake_pressures(front_pressure: np.ndarray, rear_pressure: np.ndarray, derive_spec: dict):
+    combine = str(derive_spec.get("combine", "sum")).lower()
+    if combine in {"sum", "combined"}:
+        return front_pressure + rear_pressure
     if combine == "front":
-        return front_ratio
+        return front_pressure
     if combine == "rear":
-        return rear_ratio
+        return rear_pressure
     if combine == "mean":
-        return 0.5 * (front_ratio + rear_ratio)
+        return 0.5 * (front_pressure + rear_pressure)
     if combine == "weighted_mean":
         front_weight = float(derive_spec.get("front_weight", 0.5))
         rear_weight = float(derive_spec.get("rear_weight", 1.0 - front_weight))
         denom = max(front_weight + rear_weight, np.finfo(float).eps)
-        return (front_weight * front_ratio + rear_weight * rear_ratio) / denom
+        return (front_weight * front_pressure + rear_weight * rear_pressure) / denom
     if combine == "max":
-        return np.maximum(front_ratio, rear_ratio)
+        return np.maximum(front_pressure, rear_pressure)
 
     raise ValueError(f"Unsupported brake pressure combine method: {combine}")
 
@@ -381,6 +381,38 @@ def integrate_distance(time_s: np.ndarray, speed_mps: np.ndarray) -> np.ndarray:
     return distance
 
 
+def public_laps_to_ldparser(laps: str | None) -> str | None:
+    """Convert public 1-based lap/range text to ldparser's 0-based contract."""
+    if laps is None:
+        return None
+
+    laps = str(laps).strip()
+    if not laps:
+        return None
+
+    separator = None
+    if "-" in laps:
+        separator = "-"
+    elif ":" in laps:
+        separator = ":"
+
+    if separator is None:
+        start_lap = end_lap = int(laps)
+    else:
+        start_text, end_text = laps.split(separator, 1)
+        start_lap = int(start_text)
+        end_lap = int(end_text)
+
+    if start_lap < 1 or end_lap < start_lap:
+        raise ValueError("Lap range must be 1-based and inclusive, e.g. 1 or 4-5")
+
+    start_idx = start_lap - 1
+    end_idx = end_lap - 1
+    if start_idx == end_idx:
+        return str(start_idx)
+    return f"{start_idx}-{end_idx}"
+
+
 def write_csv(path: Path, table: dict[str, np.ndarray]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     with path.open("w", encoding="utf-8", newline="") as handle:
@@ -427,10 +459,11 @@ def main() -> int:
     output_file = Path(args.output)
     channel_map_file = Path(args.channel_map)
     manifest_file = Path(args.manifest) if args.manifest else output_file.with_suffix(".manifest.json")
+    parser_laps = public_laps_to_ldparser(args.laps)
 
     ld_data = load_ldparser().fromfile(
         str(input_file),
-        laps=args.laps,
+        laps=parser_laps,
         ldx_file=args.ldx,
     )
     channel_map = load_channel_map(channel_map_file)
@@ -468,6 +501,7 @@ def main() -> int:
         "output_file": str(output_file),
         "channel_map": str(channel_map_file),
         "laps": args.laps,
+        "ldparser_laps": parser_laps,
         "ldx_file": args.ldx,
         "sample_frequency_hz": output_frequency,
         "sample_count": int(len(time_out)),

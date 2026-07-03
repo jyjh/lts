@@ -5,6 +5,21 @@ function tests = PowertrainDifferentialTest
 tests = functiontests(localfunctions);
 end
 
+function testDefaultLCMapLoadsLowercaseTorqueField(testCase)
+pt = createPowertrain();
+verifyEqual(testCase, pt.totalGearRatio, 3.36, 'RelTol', 1e-12);
+verifyGreaterThan(testCase, pt.maxEngineTorque, 0);
+verifyGreaterThan(testCase, numel(pt.torqueCurveNm), 0);
+end
+
+function testLegacyCCMapLoadsUppercaseTorqueField(testCase)
+pt = components.Powertrain.EMRAX228Powertrain( ...
+    powertrainMapPath('EMRAX228CC Single_4.5.mat'));
+verifyEqual(testCase, pt.totalGearRatio, 4.5, 'RelTol', 1e-12);
+verifyGreaterThan(testCase, pt.maxEngineTorque, 0);
+verifyGreaterThan(testCase, numel(pt.torqueCurveNm), 0);
+end
+
 function testConstantPowerFalloffDoesNotCollapseAtRevLimit(testCase)
 % Fix 1: the old linear falloff drove wheel force to ~0 at the rev limit.
 % Constant power must keep substantial force right up to the cap.
@@ -201,4 +216,10 @@ end
 
 function pt = createPowertrain()
 pt = components.Powertrain.EMRAX228Powertrain();
+end
+
+function path = powertrainMapPath(fileName)
+testDir = fileparts(mfilename('fullpath'));
+repoRoot = fileparts(testDir);
+path = fullfile(repoRoot, 'src', '+components', '+Powertrain', fileName);
 end

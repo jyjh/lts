@@ -70,7 +70,8 @@ python -m pip install cantools numpy
 1. `scripts/extract_motec_lap.py` reads a real `.ld` file through
    `external/MotecLogGenerator/ldparser`.
 2. If a `Lap` is supplied, `ldparser` uses BCN markers from the matching `.ldx`
-   sidecar to slice the requested 1-based lap.
+   sidecar to slice the requested 1-based public lap. If `Lap` is omitted, the
+   full log is imported, which is useful for autocross and other one-run logs.
 3. `config/motec/default_channel_map.json` maps channel names and units to
    the normalized replay contract:
    `time_s`, `distance_m`, `throttle_ratio`, `brake_ratio`, `steer_rad`, and
@@ -80,8 +81,9 @@ python -m pip install cantools numpy
    preserving direct simulator-exported steering channels.
    If no direct brake pedal channel exists, `brake_ratio` is derived from
    `Brake Pressure Front` and `Brake Pressure Rear`. The default derivation
-   converts both channels to bar, uses the larger normalized front/rear pressure,
-   and maps `full_scale_bar = 100` to a simulator brake command of `1.0`.
+   converts both channels to bar, sums front plus rear pressure, maps the peak
+   combined pressure in the imported log/window to `1.0`, and scales every other
+   sample by that same peak.
 4. `CorrelationReplayProfile` validates the normalized CSV and synthesizes
    distance from speed when the log has no lap-distance channel.
 5. `CorrelationTrackAlignment` estimates the start station from GPS true course

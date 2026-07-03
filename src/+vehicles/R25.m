@@ -125,7 +125,7 @@ function cfg = R25()
     % matFile '' = default EMRAX 228 map (CSV r85 confirms 'Emrax 228')
     cfg.powertrain = struct( ...
         'matFile', '', ...
-        'efficiency', 0.92, ...          % [not in spec sheet] [0-1]
+        'efficiency', 0.85, ...          % [not in spec sheet] [0-1]
         'differential', struct('type', 'lsd'));  %   [CSV r122: Drexler M-Diff LSD, non-adjustable preload]
     % TODO lsd params: VehicleManager.def supplies preload/ramp/
     % speedGain/biasRatio defaults if omitted; set explicitly if known.

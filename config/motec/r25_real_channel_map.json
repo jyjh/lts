@@ -33,9 +33,7 @@
       },
       "derive": {
         "method": "brake_pressure",
-        "combine": "max",
-        "full_scale_bar": 100.0,
-        "auto_scale_if_missing": true,
+        "combine": "sum",
         "front": {
           "names": ["Brake Pressure Front", "Front Brake Pressure", "Brake Front Pressure"],
           "source_unit_scale": {
@@ -73,7 +71,7 @@
         {
           "label": "r25_steering_sensor_ratio_4p856_inverted",
           "names": ["Steering.Angle", "Steering Angle", "Steering"],
-          "scale": -0.20593080724876442,
+          "scale": 0.257,
           "source_unit_scale": {
             "rad": 1.0,
             "deg": 0.017453292519943295

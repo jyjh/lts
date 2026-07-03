@@ -919,6 +919,28 @@ classdef Simulator < handle
             end
 
             [stateLog, lapTime] = obj.simulate(initialState, track);
+            stateLog = obj.addReplayReferenceChannels(stateLog, profile);
+        end
+
+        function stateLog = addReplayReferenceChannels(~, stateLog, profile)
+            if isempty(stateLog.time)
+                return;
+            end
+
+            if isfield(stateLog, 'controlTime')
+                queryTime = stateLog.controlTime(:);
+            else
+                queryTime = stateLog.time(:);
+            end
+
+            stateLog.replayThrottle = localInterpProfileChannel( ...
+                profile.time, profile.throttle, queryTime);
+            stateLog.replayBrake = localInterpProfileChannel( ...
+                profile.time, profile.brake, queryTime);
+            stateLog.replaySteer = localInterpProfileChannel( ...
+                profile.time, profile.steer, queryTime);
+            stateLog.replaySpeed = localInterpProfileChannel( ...
+                profile.time, profile.speed, queryTime);
         end
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
@@ -1925,5 +1947,26 @@ if isstruct(s) && isfield(s, fieldName)
     end
 else
     value = defaultValue;
+end
+end
+
+function values = localInterpProfileChannel(axis, channel, query)
+axis = double(axis(:));
+channel = double(channel(:));
+query = double(query(:));
+
+keep = isfinite(axis) & isfinite(channel);
+axis = axis(keep);
+channel = channel(keep);
+
+if isempty(axis)
+    values = NaN(size(query));
+elseif numel(axis) == 1
+    values = repmat(channel(1), size(query));
+else
+    [axis, uniqueIdx] = unique(axis, 'stable');
+    channel = channel(uniqueIdx);
+    query = max(axis(1), min(axis(end), query));
+    values = interp1(axis, channel, query, 'linear');
 end
 end
