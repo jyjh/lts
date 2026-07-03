@@ -83,3 +83,33 @@ centers, steer ratio, Ackermann, torsional stiffness, differential type). The
 rest of the ~80-field config has no direct CSV source and is left at the
 baseline defaults — review the `TODO` and `[not in spec sheet]` markers in the
 generated file before simulating.
+
+## compare_sim_runs.py
+
+Compares two exported simulator telemetry CSVs over the same track and prints a
+compact Markdown report showing which car is stronger in low-, medium-, and
+high-speed corners, acceleration, braking, top speed, and elapsed time.
+
+The comparison is distance-aligned: both runs are interpolated onto the same
+track-station grid before metrics are calculated. This avoids bias from one car
+spending more time in a segment. The script uses the exported telemetry
+curvature channels by default; `--track` can point to a track CSV containing
+station/curvature columns, or to a `.mat` track if SciPy is installed.
+
+### Usage
+
+```bash
+python scripts/compare_sim_runs.py exports/car_a.csv exports/car_b.csv \
+    --track tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat \
+    --label-a R25 --label-b R26_base \
+    --output exports/r25_vs_r26_report.md
+```
+
+Useful options:
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--distance-step` | `0.25` | Distance grid spacing in metres. |
+| `--corner-curvature-threshold` | `0.01` | Absolute curvature threshold `[1/m]` used to identify corner samples. |
+| `--throttle-threshold` | `50` | Minimum throttle `%` for acceleration-zone samples when throttle exists. |
+| `--brake-threshold` | `5` | Minimum brake `%` for braking-zone samples when brake exists. |

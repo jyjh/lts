@@ -30,7 +30,7 @@ clear; clc; close all;
 %            ('straight10','straight','straight75','oval','skidpad',
 %             'autocross','busstop','slalom','90turn')
 %  ====================================================================
-cars   = {'R25', 'R26_base', 'baseline'};
+cars   = {'R25', 'R26_base'};
 tracks = {'2026enduro', 'autocross', 'straight75', 'skidpad'};
 
 dt           = 0.001;   % simulation timestep [s]
