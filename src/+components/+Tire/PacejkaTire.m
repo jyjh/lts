@@ -276,10 +276,10 @@ classdef PacejkaTire < components.Tire.TireModel
             end
             
             suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, steerInput);
-            [xFL, yFL] = obj.getWheelPosition(vehicleManager, 'FL');
-            [xFR, yFR] = obj.getWheelPosition(vehicleManager, 'FR');
-            [xRL, yRL] = obj.getWheelPosition(vehicleManager, 'RL');
-            [xRR, yRR] = obj.getWheelPosition(vehicleManager, 'RR');
+            [xFL, yFL] = obj.getKinematicPosition(vehicleManager, 'FL', suspensionKinematics.FL);
+            [xFR, yFR] = obj.getKinematicPosition(vehicleManager, 'FR', suspensionKinematics.FR);
+            [xRL, yRL] = obj.getKinematicPosition(vehicleManager, 'RL', suspensionKinematics.RL);
+            [xRR, yRR] = obj.getKinematicPosition(vehicleManager, 'RR', suspensionKinematics.RR);
 
             slipAngles.FL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
                 xFL, yFL, suspensionKinematics.FL);
@@ -687,6 +687,16 @@ classdef PacejkaTire < components.Tire.TireModel
             suspensionKinematics.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
             suspensionKinematics.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
             suspensionKinematics.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+        end
+
+        function [x, y] = getKinematicPosition(obj, vehicleManager, corner, kin)
+            if isfield(kin, 'xPosition') && isfield(kin, 'yPosition')
+                x = kin.xPosition;
+                y = kin.yPosition;
+                return;
+            end
+
+            [x, y] = obj.getWheelPosition(vehicleManager, corner);
         end
 
         function [x, y] = getWheelPosition(~, vehicleManager, corner)

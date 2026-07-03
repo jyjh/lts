@@ -269,6 +269,40 @@ def extract(rows, driver_mass):
             s.add_direct("suspension.geometry.rear.rollCenterHeight",
                          s.rchRear, f"CSV r33: {rr:g} mm")
 
+    # --- Front caster, trail, and scrub radius (r35) ---
+    r = find_row(rows, "front caster, trail, and scrub radius")
+    if r:
+        caster = parse_num(val_after(r, "caster"))
+        trail = parse_num(val_after(r, "kin trail"))
+        scrub = parse_num(val_after(r, "scrub rad"))
+        if caster is not None:
+            s.frontCasterAngle = caster * math.pi / 180.0
+            s.add_direct("suspension.geometry.front.casterAngle",
+                         s.frontCasterAngle, f"CSV r35: {caster:g} deg")
+        if trail is not None:
+            s.frontMechanicalTrail = trail / 1000.0
+            s.add_direct("suspension.geometry.front.mechanicalTrail",
+                         s.frontMechanicalTrail, f"CSV r35: {trail:g} mm")
+        if scrub is not None:
+            s.frontScrubRadius = scrub / 1000.0
+            s.add_direct("suspension.geometry.front.scrubRadius",
+                         s.frontScrubRadius, f"CSV r35: {scrub:g} mm")
+
+    # --- Front kingpin axis inclination and offset (r36) ---
+    r = find_row(rows, "front kingpin axis")
+    if r:
+        inclination = parse_num(val_after(r, "inclination"))
+        offset = parse_num(val_after(r, "offset"))
+        if inclination is not None:
+            s.frontKingpinInclination = inclination * math.pi / 180.0
+            s.add_direct("suspension.geometry.front.kingpinInclination",
+                         s.frontKingpinInclination,
+                         f"CSV r36: {inclination:g} deg")
+        if offset is not None:
+            s.frontKingpinOffset = offset / 1000.0
+            s.add_direct("suspension.geometry.front.kingpinOffset",
+                         s.frontKingpinOffset, f"CSV r36: {offset:g} mm")
+
     # --- Steer ratio (r39) ---
     r = find_row(rows, "steer ratio")
     if r:
@@ -500,7 +534,6 @@ def extract(rows, driver_mass):
         ("Camber adjustment method", "r31"),
         ("Anti-dive / anti-squat", "r32"),
         ("Roll center @ 1g lateral (dynamic)", "r34"),
-        ("Caster / kingpin / trail / scrub radius", "r35-36"),
         ("Brake rotors / master cyl / calipers / pads", "r42-45"),
         ("Upright / hub / bearing / axle hardware", "r47-53"),
         ("Ergonomics, steering wheel, instrumentation", "r55-61"),
@@ -525,6 +558,7 @@ def extract(rows, driver_mass):
         ("suspension.bumpStopRate", 200000),
         ("suspension.tireSpringRate", 200000),
         ("suspension.geometry.*.travelGrid / motionRatioCurve", "baseline"),
+        ("suspension.geometry.rear steering-axis geometry", "0"),
         ("suspension.{front,rear}Arb.motionRatio / leverArm / enabled",
          "0.95 / 0.26 / true"),
         ("suspension.rollStiffnessOverride", "NaN"),
@@ -564,6 +598,14 @@ def fmt(x):
             return str(int(x))
         return f"{x:.6g}"
     return str(x)
+
+
+def fmt_rad_as_deg_expr(rad):
+    """Format a radian value as a MATLAB deg*pi/180 expression."""
+    if rad == 0:
+        return "0"
+    deg = rad * 180.0 / math.pi
+    return f"{fmt(deg)} * pi / 180"
 
 
 def src_comment(spec, path, default_fmt):
@@ -731,15 +773,30 @@ def build_matlab(name, s):
     A("        'toeCurve',         [-0.05 0 0.05] * pi / 180, ... % "
       + src_comment(s, "suspension.geometry.front/rear.toeCurve", "baseline"))
     A("        'motionRatioCurve', [0.93 0.95 0.97], ...")
-    A(f"        'rollCenterHeight', {fmt(g('rchFront', 0.030))});                        % "
+    A(f"        'rollCenterHeight', {fmt(g('rchFront', 0.030))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.front.rollCenterHeight', '0.030')}")
+    A(f"        'casterAngle',      {fmt_rad_as_deg_expr(g('frontCasterAngle', 7.0 * math.pi / 180.0))}, ...            % "
+      f"{src_comment(s, 'suspension.geometry.front.casterAngle', '7.0*pi/180')}")
+    A(f"        'mechanicalTrail',  {fmt(g('frontMechanicalTrail', 0.030))}, ...                     % "
+      f"{src_comment(s, 'suspension.geometry.front.mechanicalTrail', '0.030')} [m]")
+    A(f"        'scrubRadius',      {fmt(g('frontScrubRadius', 0.018))}, ...                     % "
+      f"{src_comment(s, 'suspension.geometry.front.scrubRadius', '0.018')} [m]")
+    A(f"        'kingpinInclination', {fmt_rad_as_deg_expr(g('frontKingpinInclination', 8.0 * math.pi / 180.0))}, ...       % "
+      f"{src_comment(s, 'suspension.geometry.front.kingpinInclination', '8.0*pi/180')}")
+    A(f"        'kingpinOffset',    {fmt(g('frontKingpinOffset', g('frontScrubRadius', 0.018)))});                        % "
+      f"{src_comment(s, 'suspension.geometry.front.kingpinOffset', '0.018')} [m]")
     A("    cfg.suspension.geometry.rear = struct( ...")
     A("        'travelGrid',       [-0.05 0 0.05], ...")
     A("        'camberCurve',      [0.25 0 -0.8] * pi / 180, ...")
     A("        'toeCurve',         [0.05 0 -0.05] * pi / 180, ...")
     A("        'motionRatioCurve', [0.94 0.95 0.96], ...")
-    A(f"        'rollCenterHeight', {fmt(g('rchRear', 0.045))});                        % "
+    A(f"        'rollCenterHeight', {fmt(g('rchRear', 0.045))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.rear.rollCenterHeight', '0.045')}")
+    A("        'casterAngle',      0, ...")
+    A("        'mechanicalTrail',  0, ...")
+    A("        'scrubRadius',      0, ...")
+    A("        'kingpinInclination', 0, ...")
+    A("        'kingpinOffset',    0);")
     A("    cfg.suspension.geometry.steering = struct( ...")
     A(f"        'steeringRatio',      {fmt(g('steeringRatio', 4.856))}, ...")
     A("        'ackermann',          %s, ..."

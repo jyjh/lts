@@ -26,6 +26,23 @@ classdef SuspensionGeometry
         rearToeCurve = [0 0 0]          % [rad], positive toe-left
         rearMotionRatioCurve = [1 1 1]
 
+        % Steering-axis geometry per axle. Caster is positive when the top
+        % of the steering axis leans rearward. Kingpin inclination is
+        % positive when the top of the axis leans inward. Mechanical trail
+        % is positive when the contact patch sits behind the kingpin ground
+        % intercept; scrub radius is positive outboard of that intercept.
+        frontCasterAngle = 0             % [rad]
+        frontMechanicalTrail = 0         % [m]
+        frontScrubRadius = 0             % [m]
+        frontKingpinInclination = 0      % [rad]
+        frontKingpinOffset = 0           % [m], alias/fallback for scrub radius
+
+        rearCasterAngle = 0              % [rad]
+        rearMechanicalTrail = 0          % [m]
+        rearScrubRadius = 0              % [m]
+        rearKingpinInclination = 0       % [rad]
+        rearKingpinOffset = 0            % [m], alias/fallback for scrub radius
+
         % Steering model. steerInput is treated as road-wheel angle by
         % default to preserve current DriverModel behavior.
         steeringRatio = 1.0
@@ -73,12 +90,29 @@ classdef SuspensionGeometry
             end
 
             wheelSteer = obj.computeWheelSteer(corner, steerInput);
+            baseCamber = obj.interpolateCurve(travelGrid, camberCurve, wheelTravel);
+            toeAngle = side * obj.interpolateCurve(travelGrid, toeCurve, wheelTravel);
+            wheelHeading = wheelSteer + toeAngle;
+            axis = obj.computeSteeringAxis(corner);
+
             kin.wheelTravel = wheelTravel;
-            kin.camberAngle = obj.interpolateCurve(travelGrid, camberCurve, wheelTravel);
-            kin.toeAngle = side * obj.interpolateCurve(travelGrid, toeCurve, wheelTravel);
+            kin.baseCamberAngle = baseCamber;
+            kin.camberAngle = obj.applySteeringAxisCamber( ...
+                baseCamber, wheelHeading, axis, side);
+            kin.toeAngle = toeAngle;
             kin.steerAngle = wheelSteer;
             kin.motionRatio = obj.interpolateCurve(travelGrid, motionRatioCurve, wheelTravel);
-            [kin.xPosition, kin.yPosition] = obj.computeWheelPosition(corner);
+            [kin.wheelCenterXPosition, kin.wheelCenterYPosition] = ...
+                obj.computeWheelPosition(corner);
+            [kin.xPosition, kin.yPosition, kin.kingpinXPosition, ...
+                kin.kingpinYPosition] = obj.computeContactPatchPosition( ...
+                corner, wheelHeading, kin.wheelCenterXPosition, ...
+                kin.wheelCenterYPosition);
+            kin.casterAngle = obj.getAxleValue(axle, 'CasterAngle');
+            kin.mechanicalTrail = obj.getAxleValue(axle, 'MechanicalTrail');
+            kin.scrubRadius = obj.getEffectiveScrubRadius(axle);
+            kin.kingpinInclination = obj.getAxleValue(axle, 'KingpinInclination');
+            kin.kingpinOffset = obj.getAxleValue(axle, 'KingpinOffset');
             if strcmp(axle, 'front')
                 kin.rollCenterHeight = obj.frontRollCenterHeight;
             else
@@ -151,6 +185,64 @@ classdef SuspensionGeometry
                     y = -halfTrack;
             end
         end
+
+        function axis = computeSteeringAxis(obj, corner)
+            axle = components.Suspension.SuspensionGeometry.getAxle(corner);
+            side = components.Suspension.SuspensionGeometry.getSide(corner);
+            caster = obj.getAxleValue(axle, 'CasterAngle');
+            kpi = obj.getAxleValue(axle, 'KingpinInclination');
+
+            axis = [-sin(caster), -side * sin(kpi), ...
+                cos(caster) * cos(kpi)];
+            normAxis = norm(axis);
+            if normAxis <= eps
+                axis = [0, 0, 1];
+            else
+                axis = axis ./ normAxis;
+            end
+        end
+
+        function camber = applySteeringAxisCamber(~, baseCamber, wheelHeading, axis, side)
+            topVector = [0, side * sin(baseCamber), cos(baseCamber)];
+            topVector = components.Suspension.SuspensionGeometry.rotateVector( ...
+                topVector, axis, wheelHeading);
+
+            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
+            camber = atan2(dot(topVector, outward), dot(topVector, [0, 0, 1]));
+        end
+
+        function [x, y, kingpinX, kingpinY] = computeContactPatchPosition( ...
+                obj, corner, wheelHeading, baseX, baseY)
+            axle = components.Suspension.SuspensionGeometry.getAxle(corner);
+            side = components.Suspension.SuspensionGeometry.getSide(corner);
+            trail = obj.getAxleValue(axle, 'MechanicalTrail');
+            scrub = obj.getEffectiveScrubRadius(axle);
+
+            offset0 = [-trail, side * scrub];
+            forward = [cos(wheelHeading), sin(wheelHeading)];
+            left = [-sin(wheelHeading), cos(wheelHeading)];
+            offset = -trail * forward + side * scrub * left;
+
+            kingpinX = baseX - offset0(1);
+            kingpinY = baseY - offset0(2);
+            x = kingpinX + offset(1);
+            y = kingpinY + offset(2);
+        end
+
+        function value = getEffectiveScrubRadius(obj, axle)
+            scrub = obj.getAxleValue(axle, 'ScrubRadius');
+            offset = obj.getAxleValue(axle, 'KingpinOffset');
+            if abs(scrub) > eps || abs(offset) <= eps
+                value = scrub;
+            else
+                value = offset;
+            end
+        end
+
+        function value = getAxleValue(obj, axle, suffix)
+            fieldName = [axle suffix];
+            value = obj.(fieldName);
+        end
     end
 
     methods (Static)
@@ -170,6 +262,16 @@ classdef SuspensionGeometry
             obj.frontToeCurve         = f.toeCurve;
             obj.frontMotionRatioCurve = f.motionRatioCurve;
             obj.frontRollCenterHeight = f.rollCenterHeight;
+            obj.frontCasterAngle = components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'casterAngle', 'caster'}, 0);
+            obj.frontMechanicalTrail = components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'mechanicalTrail', 'trail'}, 0);
+            obj.frontScrubRadius = components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'scrubRadius', 'scrub'}, 0);
+            obj.frontKingpinInclination = components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'kingpinInclination', 'kingpinInclinationAngle', 'kpi'}, 0);
+            obj.frontKingpinOffset = components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'kingpinOffset'}, obj.frontScrubRadius);
 
             r = geometryCfg.rear;
             obj.rearTravelGrid       = r.travelGrid;
@@ -177,12 +279,39 @@ classdef SuspensionGeometry
             obj.rearToeCurve         = r.toeCurve;
             obj.rearMotionRatioCurve = r.motionRatioCurve;
             obj.rearRollCenterHeight = r.rollCenterHeight;
+            obj.rearCasterAngle = components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'casterAngle', 'caster'}, 0);
+            obj.rearMechanicalTrail = components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'mechanicalTrail', 'trail'}, 0);
+            obj.rearScrubRadius = components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'scrubRadius', 'scrub'}, 0);
+            obj.rearKingpinInclination = components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'kingpinInclination', 'kingpinInclinationAngle', 'kpi'}, 0);
+            obj.rearKingpinOffset = components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'kingpinOffset'}, obj.rearScrubRadius);
 
             s = geometryCfg.steering;
             obj.steeringRatio      = s.steeringRatio;
             obj.ackermann          = s.ackermann;
             obj.maxWheelSteerAngle = s.maxWheelSteerAngle;
             obj.rearSteerRatio     = s.rearSteerRatio;
+        end
+
+        function rotated = rotateVector(vector, axis, angle)
+            axis = axis ./ max(norm(axis), eps);
+            rotated = vector * cos(angle) + cross(axis, vector) * sin(angle) + ...
+                axis * dot(axis, vector) * (1 - cos(angle));
+        end
+
+        function value = readConfigField(s, names, defaultValue)
+            value = defaultValue;
+            for i = 1:numel(names)
+                fieldName = names{i};
+                if isfield(s, fieldName) && ~isempty(s.(fieldName))
+                    value = s.(fieldName);
+                    return;
+                end
+            end
         end
 
         function value = interpolateCurve(grid, curve, query)

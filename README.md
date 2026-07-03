@@ -128,7 +128,7 @@ unchanged — so a re-export silently overwrites the previous output.
 - Whole-car aero system: `components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
 - Transient chassis platform: `components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
 - Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
-- Table-based suspension and steering geometry: `components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, and Ackermann steering presets. Switch `geometryPreset` in `src/run_simulation.m` between `neutral`, `baseline`, `high-camber-gain`, and `pro-ackermann`.
+- Table-based suspension and steering geometry: `components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
 - EMRAX 228 powertrain: `components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
 - Supported Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
 - Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.

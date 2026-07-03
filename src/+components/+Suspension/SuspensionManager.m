@@ -458,8 +458,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % roll stiffness (wheel springs + anti-roll bars) rather than a
             % fixed magic scalar.
             %
-            %   KwF = frontSpringRate * frontMotionRatio^2 + frontAntiRollBar.Kw_bar
-            %   KwR = rearSpringRate  * rearMotionRatio^2  + rearAntiRollBar.Kw_bar
+            %   KwF = front effective wheel rate + frontAntiRollBar.Kw_bar
+            %   KwR = rear effective wheel rate  + rearAntiRollBar.Kw_bar
             %   frac = KwF / (KwF + KwR)
             %
             % If rollStiffnessOverride is set (non-NaN) it is returned
@@ -503,8 +503,8 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % Wheel springs + anti-roll bar, referenced to the wheel. Shared
             % with the chassis roll model so the load-transfer split and the
             % chassis roll stiffness use the same numbers.
-            KwSpringF = obj.frontLeft.springRate * obj.frontLeft.motionRatio^2;
-            KwSpringR = obj.rearLeft.springRate  * obj.rearLeft.motionRatio^2;
+            KwSpringF = obj.frontLeft.getEffectiveWheelRate(obj.frontLeft.state);
+            KwSpringR = obj.rearLeft.getEffectiveWheelRate(obj.rearLeft.state);
             KwF = KwSpringF + obj.getAxleBarWheelRate(obj.frontAntiRollBar);
             KwR = KwSpringR + obj.getAxleBarWheelRate(obj.rearAntiRollBar);
         end
@@ -527,6 +527,17 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             cornerState.toeAngle = kin.toeAngle;
             cornerState.steerAngle = kin.steerAngle;
             cornerState.motionRatioEffective = max(kin.motionRatio, eps);
+            cornerState.xPosition = kin.xPosition;
+            cornerState.yPosition = kin.yPosition;
+            cornerState.wheelCenterXPosition = kin.wheelCenterXPosition;
+            cornerState.wheelCenterYPosition = kin.wheelCenterYPosition;
+            cornerState.kingpinXPosition = kin.kingpinXPosition;
+            cornerState.kingpinYPosition = kin.kingpinYPosition;
+            cornerState.casterAngle = kin.casterAngle;
+            cornerState.kingpinInclination = kin.kingpinInclination;
+            cornerState.mechanicalTrail = kin.mechanicalTrail;
+            cornerState.scrubRadius = kin.scrubRadius;
+            cornerState.kingpinOffset = kin.kingpinOffset;
         end
 
         function cornerKinematics = getCornerKinematics(obj)
@@ -584,6 +595,17 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             kin.toeAngle = state.toeAngle;
             kin.steerAngle = state.steerAngle;
             kin.motionRatio = state.motionRatioEffective;
+            kin.xPosition = state.xPosition;
+            kin.yPosition = state.yPosition;
+            kin.wheelCenterXPosition = state.wheelCenterXPosition;
+            kin.wheelCenterYPosition = state.wheelCenterYPosition;
+            kin.kingpinXPosition = state.kingpinXPosition;
+            kin.kingpinYPosition = state.kingpinYPosition;
+            kin.casterAngle = state.casterAngle;
+            kin.kingpinInclination = state.kingpinInclination;
+            kin.mechanicalTrail = state.mechanicalTrail;
+            kin.scrubRadius = state.scrubRadius;
+            kin.kingpinOffset = state.kingpinOffset;
         end
     end
 

@@ -1889,10 +1889,25 @@ classdef Simulator < handle
                 kin.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
             end
 
-            [kin.FL.xPosition, kin.FL.yPosition] = obj.getWheelPosition('FL');
-            [kin.FR.xPosition, kin.FR.yPosition] = obj.getWheelPosition('FR');
-            [kin.RL.xPosition, kin.RL.yPosition] = obj.getWheelPosition('RL');
-            [kin.RR.xPosition, kin.RR.yPosition] = obj.getWheelPosition('RR');
+            corners = {'FL', 'FR', 'RL', 'RR'};
+            for i = 1:numel(corners)
+                corner = corners{i};
+                cornerKin = kin.(corner);
+                [wheelX, wheelY] = obj.getWheelPosition(corner);
+                if ~isfield(cornerKin, 'xPosition')
+                    cornerKin.xPosition = wheelX;
+                end
+                if ~isfield(cornerKin, 'yPosition')
+                    cornerKin.yPosition = wheelY;
+                end
+                if ~isfield(cornerKin, 'wheelCenterXPosition')
+                    cornerKin.wheelCenterXPosition = wheelX;
+                end
+                if ~isfield(cornerKin, 'wheelCenterYPosition')
+                    cornerKin.wheelCenterYPosition = wheelY;
+                end
+                kin.(corner) = cornerKin;
+            end
         end
 
         function trackData = precomputeTrackSegments(~, trackData)

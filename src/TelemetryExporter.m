@@ -217,6 +217,13 @@ classdef TelemetryExporter
                 tableData = TelemetryExporter.addRawChannel(tableData, stateLog, 'speed', 'Speed mps', 'm/s', nSamples);
             end
 
+            if isfield(stateLog, 'motorRPM')
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'motorRPM', ...
+                    'Engine RPM', stateLog.motorRPM(:), 'rpm', nSamples);
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'motorRPMAlias', ...
+                    'Motor RPM', stateLog.motorRPM(:), 'rpm', nSamples);
+            end
+
             if isfield(stateLog, 'ax')
                 tableData = TelemetryExporter.addComputedChannel(tableData, 'axG', 'G Sensor Front Acceleration Longitudinal', ...
                     stateLog.ax(:) / 9.81, 'G', nSamples);

@@ -245,6 +245,27 @@ classdef SimpleSuspension
             cornerState.suspensionForce = F_suspension;
             cornerState.demandedLoad = F_suspension;
         end
+
+        function wheelRate = getEffectiveWheelRate(obj, cornerState)
+            % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
+            % Includes bump-stop tangent stiffness when the corner is already
+            % sitting on the stop at static equilibrium.
+            if nargin < 2 || isempty(cornerState)
+                cornerState = obj.state;
+            end
+
+            MR_eff = obj.getEffectiveMotionRatio(cornerState);
+            wheelRate = obj.springRate * MR_eff^2;
+
+            staticCompression = cornerState.staticSuspensionCompression;
+            if ~isfinite(staticCompression)
+                staticCompression = 0;
+            end
+            if obj.bumpStopRate > 0 && ...
+                    staticCompression >= max(obj.bumpStopLength, 0) - 1e-12
+                wheelRate = wheelRate + obj.bumpStopRate;
+            end
+        end
     end
 
     methods (Access = private)

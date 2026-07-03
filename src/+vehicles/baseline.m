@@ -80,6 +80,8 @@ function cfg = baseline()
     %                                  toe positive = toe-left)
     %   motionRatioCurve [-] referenced to the wheel
     %   rollCenterHeight [m] above ground (drives the geometric load transfer)
+    %   casterAngle/mechanicalTrail/scrubRadius/kingpinInclination define
+    %   the steering axis and contact patch sweep under steer.
     % Vehicle-level wheelbase/track/weight are pulled from the VehicleManager
     % at construction, so they are not duplicated here.
     cfg.suspension.geometry.front = struct( ...
@@ -87,13 +89,23 @@ function cfg = baseline()
         'camberCurve',      [0.5 0 -1.5] * pi / 180, ...   % gains neg. camber in bump
         'toeCurve',         [-0.05 0 0.05] * pi / 180, ... % toes out in bump
         'motionRatioCurve', [0.93 0.95 0.97], ...
-        'rollCenterHeight', 0.030);                        % slightly above ground
+        'rollCenterHeight', 0.030, ...                     % slightly above ground
+        'casterAngle',      7.0 * pi / 180, ...            % positive caster
+        'mechanicalTrail',  0.030, ...                     % [m]
+        'scrubRadius',      0.018, ...                     % [m], positive outboard
+        'kingpinInclination', 8.0 * pi / 180, ...          % positive top-inward
+        'kingpinOffset',    0.018);                        % [m], scrub fallback/alias
     cfg.suspension.geometry.rear = struct( ...
         'travelGrid',       [-0.05 0 0.05], ...
         'camberCurve',      [0.25 0 -0.8] * pi / 180, ...  % less camber gain than front
         'toeCurve',         [0.05 0 -0.05] * pi / 180, ... % toes in in bump
         'motionRatioCurve', [0.94 0.95 0.96], ...
-        'rollCenterHeight', 0.045);                        % a bit higher = stable platform
+        'rollCenterHeight', 0.045, ...                     % a bit higher = stable platform
+        'casterAngle',      0, ...
+        'mechanicalTrail',  0, ...
+        'scrubRadius',      0, ...
+        'kingpinInclination', 0, ...
+        'kingpinOffset',    0);
     % Steering model. steerInput is treated as a road-wheel angle by default.
     %   ackermann: 0 = parallel steer, 1 = ideal Ackermann. 0.8872 is a
     %   typical FSAE value (mostly-Ackermann for tight corners).

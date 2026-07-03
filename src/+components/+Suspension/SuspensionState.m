@@ -62,6 +62,29 @@ classdef SuspensionState < handle
 
         % Effective installation motion ratio from geometry [-]
         motionRatioEffective = 1
+
+        % Contact patch position relative to CG [m]. x positive forward,
+        % y positive left. These are used by the planar tire solver for
+        % local contact velocity and yaw moment.
+        xPosition        = 0
+        yPosition        = 0
+
+        % Nominal wheel-center position relative to CG [m]. Kept separate
+        % from the contact patch because trail/scrub move the contact point
+        % as steer angle changes.
+        wheelCenterXPosition = 0
+        wheelCenterYPosition = 0
+
+        % Steering-axis ground intercept relative to CG [m].
+        kingpinXPosition = 0
+        kingpinYPosition = 0
+
+        % Steering-axis geometry resolved for this corner.
+        casterAngle      = 0
+        kingpinInclination = 0
+        mechanicalTrail  = 0
+        scrubRadius      = 0
+        kingpinOffset    = 0
         
         % Net suspension force acting on sprung mass [N]
         % Includes spring, damper, bump stop, and anti-roll bar terms.
@@ -94,6 +117,17 @@ classdef SuspensionState < handle
             obj.toeAngle        = 0;
             obj.steerAngle      = 0;
             obj.motionRatioEffective = 1;
+            obj.xPosition       = 0;
+            obj.yPosition       = 0;
+            obj.wheelCenterXPosition = 0;
+            obj.wheelCenterYPosition = 0;
+            obj.kingpinXPosition = 0;
+            obj.kingpinYPosition = 0;
+            obj.casterAngle     = 0;
+            obj.kingpinInclination = 0;
+            obj.mechanicalTrail = 0;
+            obj.scrubRadius     = 0;
+            obj.kingpinOffset   = 0;
             obj.suspensionForce = 0;
             obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;
@@ -117,6 +151,17 @@ classdef SuspensionState < handle
             obj.toeAngle        = 0;
             obj.steerAngle      = 0;
             obj.motionRatioEffective = 1;
+            obj.xPosition       = 0;
+            obj.yPosition       = 0;
+            obj.wheelCenterXPosition = 0;
+            obj.wheelCenterYPosition = 0;
+            obj.kingpinXPosition = 0;
+            obj.kingpinYPosition = 0;
+            obj.casterAngle     = 0;
+            obj.kingpinInclination = 0;
+            obj.mechanicalTrail = 0;
+            obj.scrubRadius     = 0;
+            obj.kingpinOffset   = 0;
             obj.suspensionForce = 0;
             obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;

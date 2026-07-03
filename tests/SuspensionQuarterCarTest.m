@@ -149,6 +149,37 @@ verifyGreaterThan(testCase, kin.FL.motionRatio, 0);
 verifyGreaterThan(testCase, abs(kin.FL.steerAngle), 0);
 end
 
+function testSteeringAxisGeometryAffectsCamberAndContactPatch(testCase)
+[~, suspension] = createSuspension(1);
+
+geometry = suspension.geometry;
+geometry.frontCasterAngle = 8 * pi / 180;
+geometry.frontKingpinInclination = 10 * pi / 180;
+geometry.frontMechanicalTrail = 0.035;
+geometry.frontScrubRadius = 0.020;
+geometry.frontKingpinOffset = 0.020;
+suspension.geometry = geometry;
+
+suspension.updateGeometry(0);
+kinZero = suspension.getCornerKinematics();
+suspension.updateGeometry(0.25);
+kin = suspension.getCornerKinematics();
+
+verifyGreaterThan(testCase, kin.FL.camberAngle, kinZero.FL.camberAngle);
+verifyLessThan(testCase, kin.FR.camberAngle, kinZero.FR.camberAngle);
+verifyGreaterThan(testCase, hypot( ...
+    kin.FL.xPosition - kinZero.FL.xPosition, ...
+    kin.FL.yPosition - kinZero.FL.yPosition), 1e-4);
+verifyEqual(testCase, kinZero.FL.xPosition, kinZero.FL.wheelCenterXPosition, ...
+    'AbsTol', 1e-12);
+verifyEqual(testCase, kinZero.FL.yPosition, kinZero.FL.wheelCenterYPosition, ...
+    'AbsTol', 1e-12);
+verifyEqual(testCase, kin.FL.mechanicalTrail, 0.035, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.FL.scrubRadius, 0.020, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.FL.kingpinInclination, 10 * pi / 180, ...
+    'AbsTol', 1e-12);
+end
+
 function testQuarterCarTelemetryExportsToCsv(testCase)
 stateLog = createTelemetryStateLog();
 testDir = fileparts(mfilename('fullpath'));
@@ -168,6 +199,49 @@ verifyTrue(testCase, contains(header, "Unsprung Position FL (mm)"));
 verifyTrue(testCase, contains(header, "Sprung Vel FR (mm/s)"));
 verifyTrue(testCase, contains(header, "Unsprung Vel RL (mm/s)"));
 verifyTrue(testCase, contains(header, "Body Slip Angle (deg)"));
+verifyTrue(testCase, contains(header, "Engine RPM (rpm)"));
+verifyTrue(testCase, contains(header, "Motor RPM (rpm)"));
+end
+
+function testStaticBumpStopContributesToRollStiffness(testCase)
+config = vehicles.R25();
+vehicle = VehicleManager([], [], [], [], []);
+vehicle.totalMass = config.totalMass;
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.cgHeight = config.cgHeight;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
+frontArb = config.suspension.frontArb;
+rearArb = config.suspension.rearArb;
+geometry.frontAntiRollBar = components.Suspension.AntiRollBar( ...
+    frontArb.stiffness, frontArb.motionRatio, frontArb.leverArm, frontArb.enabled);
+geometry.rearAntiRollBar = components.Suspension.AntiRollBar( ...
+    rearArb.stiffness, rearArb.motionRatio, rearArb.leverArm, rearArb.enabled);
+
+suspension = components.Suspension.SuspensionManager( ...
+    vehicle, ...
+    config.suspension.rollStiffnessOverride, ...
+    config.suspension.front.springRate, config.suspension.front.dampingCoeff, config.suspension.front.reboundCoeff, ...
+    config.suspension.rear.springRate,  config.suspension.rear.dampingCoeff,  config.suspension.rear.reboundCoeff, ...
+    config.suspension.motionRatio, ...
+    config.suspension.bumpStopLength, ...
+    config.suspension.bumpStopRate, ...
+    config.suspension.tireSpringRate, ...
+    config.unsprungMass, ...
+    geometry);
+vehicle.suspension = suspension;
+suspension.warmup(vehicle.totalMass, 0.001);
+
+[KwF, KwR] = suspension.getAxleRollStiffness();
+frontNoStop = config.suspension.front.springRate + ...
+    geometry.frontAntiRollBar.getWheelRateStiffness();
+rearNoStop = config.suspension.rear.springRate + ...
+    geometry.rearAntiRollBar.getWheelRateStiffness();
+
+verifyGreaterThan(testCase, KwF, frontNoStop + 0.5 * config.suspension.bumpStopRate);
+verifyGreaterThan(testCase, KwR, rearNoStop + 0.5 * config.suspension.bumpStopRate);
 end
 
 function [vehicle, suspension] = createSuspension(rateScale, frontAntiRollBarRate, rearAntiRollBarRate)
@@ -224,6 +298,8 @@ stateLog.time = (0:n-1)' * 0.001;
 stateLog.s = (0:n-1)';
 stateLog.speedKmh = [0; 10; 20];
 stateLog.bodySlipAngle = [0; 0.02; -0.03];
+stateLog.motorRPM = [1000; 1100; 1200];
+stateLog.drivenWheelRPM = [300; 320; 340];
 stateLog.Fz_FL = [600; 610; 620];
 stateLog.Fz_FR = [600; 590; 580];
 stateLog.Fz_RL = [700; 710; 720];
