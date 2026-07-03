@@ -88,6 +88,33 @@
         "km/h": 0.2777777777777778
       }
     },
+    "vx_mps": {
+      "names": ["Vx", "Body Vx", "Longitudinal Velocity", "Longitudinal Speed"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "vy_mps": {
+      "names": ["Vy", "Body Vy", "Lateral Velocity", "Lateral Speed"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "body_slip_rad": {
+      "names": ["Body Slip", "Body Slip Angle", "Sideslip", "Sideslip Angle", "Beta"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rad": 1.0,
+        "deg": 0.017453292519943295
+      }
+    },
     "yaw_rad": {
       "names": ["Yaw", "Heading Raw", "Heading"],
       "required": false,

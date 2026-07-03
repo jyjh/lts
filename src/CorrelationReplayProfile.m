@@ -14,6 +14,9 @@ classdef CorrelationReplayProfile
         brake = []
         steer = []
         speed = []
+        vx = []
+        vy = []
+        bodySlip = []
         yaw = []
         yawRate = []
         x = []
@@ -23,6 +26,11 @@ classdef CorrelationReplayProfile
         gpsCourse = []
         latAccelG = []
         longAccelG = []
+    end
+
+    properties (Access = private)
+        timeSampleCache = struct()
+        distanceSampleCache = struct()
     end
 
     methods
@@ -39,6 +47,9 @@ classdef CorrelationReplayProfile
             parser.addParameter('Brake', [], @isnumeric);
             parser.addParameter('Steer', [], @isnumeric);
             parser.addParameter('Speed', [], @isnumeric);
+            parser.addParameter('Vx', [], @isnumeric);
+            parser.addParameter('Vy', [], @isnumeric);
+            parser.addParameter('BodySlip', [], @isnumeric);
             parser.addParameter('Yaw', [], @isnumeric);
             parser.addParameter('YawRate', [], @isnumeric);
             parser.addParameter('X', [], @isnumeric);
@@ -57,6 +68,9 @@ classdef CorrelationReplayProfile
             obj.brake = parser.Results.Brake(:);
             obj.steer = parser.Results.Steer(:);
             obj.speed = parser.Results.Speed(:);
+            obj.vx = parser.Results.Vx(:);
+            obj.vy = parser.Results.Vy(:);
+            obj.bodySlip = parser.Results.BodySlip(:);
             obj.yaw = parser.Results.Yaw(:);
             obj.yawRate = parser.Results.YawRate(:);
             obj.x = parser.Results.X(:);
@@ -70,7 +84,7 @@ classdef CorrelationReplayProfile
         end
 
         function input = sampleByTime(obj, time)
-            input = obj.sampleAt(obj.time, time);
+            input = obj.sampleAt(obj.time, obj.timeSampleCache, time);
         end
 
         function input = sampleByDistance(obj, distance)
@@ -78,7 +92,7 @@ classdef CorrelationReplayProfile
                 error('CorrelationReplayProfile:MissingDistance', ...
                     'Distance-domain replay requires a distance_m channel or speed-derived distance.');
             end
-            input = obj.sampleAt(obj.distance, distance);
+            input = obj.sampleAt(obj.distance, obj.distanceSampleCache, distance);
         end
 
         function value = initialSpeed(obj)
@@ -87,6 +101,15 @@ classdef CorrelationReplayProfile
 
         function tf = hasYaw(obj)
             tf = ~isempty(obj.yaw) && isfinite(obj.yaw(1));
+        end
+
+        function tf = hasVelocity(obj)
+            tf = ~isempty(obj.vx) && ~isempty(obj.vy) && ...
+                isfinite(obj.vx(1)) && isfinite(obj.vy(1));
+        end
+
+        function tf = hasBodySlip(obj)
+            tf = ~isempty(obj.bodySlip) && isfinite(obj.bodySlip(1));
         end
 
         function tf = hasPosition(obj)
@@ -147,6 +170,9 @@ classdef CorrelationReplayProfile
                 obj.distance = obj.distance - obj.distance(1);
             end
 
+            obj.vx = obj.optionalColumn(obj.vx, n, NaN, 'vx');
+            obj.vy = obj.optionalColumn(obj.vy, n, NaN, 'vy');
+            obj.bodySlip = obj.optionalColumn(obj.bodySlip, n, NaN, 'bodySlip');
             obj.yaw = obj.optionalColumn(obj.yaw, n, NaN, 'yaw');
             obj.yawRate = obj.optionalColumn(obj.yawRate, n, NaN, 'yawRate');
             obj.x = obj.optionalColumn(obj.x, n, NaN, 'x');
@@ -156,6 +182,7 @@ classdef CorrelationReplayProfile
             obj.gpsCourse = obj.optionalColumn(obj.gpsCourse, n, NaN, 'gpsCourse');
             obj.latAccelG = obj.optionalColumn(obj.latAccelG, n, NaN, 'latAccelG');
             obj.longAccelG = obj.optionalColumn(obj.longAccelG, n, NaN, 'longAccelG');
+            obj = obj.buildSampleCaches();
         end
 
         function values = requireColumnLength(~, values, n, fieldName)
@@ -191,7 +218,7 @@ classdef CorrelationReplayProfile
             values = max(0, min(1, values));
         end
 
-        function input = sampleAt(obj, axis, query)
+        function input = sampleAt(obj, axis, cache, query)
             query = double(query);
             if ~isfinite(query)
                 query = axis(1);
@@ -199,19 +226,35 @@ classdef CorrelationReplayProfile
             query = max(axis(1), min(axis(end), query));
 
             input = struct( ...
-                'throttle', obj.interp(axis, obj.throttle, query), ...
-                'brake', obj.interp(axis, obj.brake, query), ...
-                'steer', obj.interp(axis, obj.steer, query), ...
-                'targetSpeed', obj.interp(axis, obj.speed, query), ...
+                'throttle', obj.lookup(cache.throttle, query), ...
+                'brake', obj.lookup(cache.brake, query), ...
+                'steer', obj.lookup(cache.steer, query), ...
+                'targetSpeed', obj.lookup(cache.speed, query), ...
                 'axRef', NaN, ...
-                'sourceTime', obj.interp(axis, obj.time, query), ...
-                'sourceDistance', obj.interp(axis, obj.distance, query));
+                'sourceTime', obj.lookup(cache.time, query), ...
+                'sourceDistance', obj.lookup(cache.distance, query));
         end
 
-        function value = interp(~, axis, values, query)
+        function obj = buildSampleCaches(obj)
+            obj.timeSampleCache = obj.buildAxisCache(obj.time);
+            obj.distanceSampleCache = obj.buildAxisCache(obj.distance);
+        end
+
+        function cache = buildAxisCache(obj, axis)
+            cache = struct( ...
+                'throttle', obj.buildInterpCache(axis, obj.throttle), ...
+                'brake', obj.buildInterpCache(axis, obj.brake), ...
+                'steer', obj.buildInterpCache(axis, obj.steer), ...
+                'speed', obj.buildInterpCache(axis, obj.speed), ...
+                'time', obj.buildInterpCache(axis, obj.time), ...
+                'distance', obj.buildInterpCache(axis, obj.distance));
+        end
+
+        function cache = buildInterpCache(~, axis, values)
             values = double(values(:));
             if all(~isfinite(values))
-                value = NaN;
+                cache = struct('axis', [], 'values', [], ...
+                    'interpolant', [], 'isMissing', true, 'isScalar', false);
                 return;
             end
 
@@ -222,12 +265,28 @@ classdef CorrelationReplayProfile
             values = values(ia);
 
             if isempty(axis)
-                value = NaN;
+                cache = struct('axis', [], 'values', [], ...
+                    'interpolant', [], 'isMissing', true, 'isScalar', false);
             elseif numel(axis) == 1
-                value = values(1);
+                cache = struct('axis', axis, 'values', values, ...
+                    'interpolant', [], 'isMissing', false, 'isScalar', true);
             else
-                query = max(axis(1), min(axis(end), query));
-                value = interp1(axis, values, query, 'linear');
+                [axis, order] = sort(axis);
+                values = values(order);
+                interpolant = griddedInterpolant(axis, values, 'linear', 'nearest');
+                cache = struct('axis', axis, 'values', values, ...
+                    'interpolant', interpolant, 'isMissing', false, 'isScalar', false);
+            end
+        end
+
+        function value = lookup(~, cache, query)
+            if cache.isMissing
+                value = NaN;
+            elseif cache.isScalar
+                value = cache.values(1);
+            else
+                query = max(cache.axis(1), min(cache.axis(end), query));
+                value = cache.interpolant(query);
             end
         end
     end
@@ -251,6 +310,9 @@ classdef CorrelationReplayProfile
                 'Brake', CorrelationReplayProfile.readColumn(T, {'brake_ratio', 'brake'}, true, NaN), ...
                 'Steer', CorrelationReplayProfile.readColumn(T, {'steer_rad', 'steer'}, true, NaN), ...
                 'Speed', CorrelationReplayProfile.readColumn(T, {'speed_mps', 'speed'}, true, NaN), ...
+                'Vx', CorrelationReplayProfile.readColumn(T, {'vx_mps', 'vx', 'longitudinal_velocity_mps', 'body_vx_mps'}, false, NaN), ...
+                'Vy', CorrelationReplayProfile.readColumn(T, {'vy_mps', 'vy', 'lateral_velocity_mps', 'body_vy_mps'}, false, NaN), ...
+                'BodySlip', CorrelationReplayProfile.readColumn(T, {'body_slip_rad', 'sideslip_rad', 'body_slip', 'sideslip', 'beta'}, false, NaN), ...
                 'Yaw', CorrelationReplayProfile.readColumn(T, {'yaw_rad', 'yaw', 'heading_rad'}, false, NaN), ...
                 'YawRate', CorrelationReplayProfile.readColumn(T, {'yaw_rate_radps', 'yaw_rate'}, false, NaN), ...
                 'X', CorrelationReplayProfile.readColumn(T, {'x_m', 'x'}, false, NaN), ...

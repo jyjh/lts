@@ -17,34 +17,31 @@ classdef CorrelationStateInitializer
             brake = profile.brake(1);
             steer = profile.steer(1);
 
-            yaw = NaN;
-            heading = NaN;
+            [vx, vy, speed] = CorrelationStateInitializer.initialVelocity(profile, speed);
+
+            yaw = 0;
             if profile.hasYaw()
                 yaw = profile.yaw(1);
-                heading = yaw;
-            elseif nargin >= 2 && ~isempty(track)
-                trackHeading = track.getHeading();
-                if ~isempty(trackHeading)
-                    yaw = trackHeading(1);
-                    heading = yaw;
-                end
+            end
+
+            x = 0;
+            y = 0;
+            if profile.hasPosition() && logical(parser.Results.UseLoggedPosition)
+                x = profile.x(1);
+                y = profile.y(1);
             end
 
             state = VehicleState( ...
                 's', 0, ...
                 'speed', speed, ...
-                'vx', speed, ...
-                'vy', 0, ...
+                'vx', vx, ...
+                'vy', vy, ...
+                'x', x, ...
+                'y', y, ...
                 'yaw', yaw, ...
-                'heading', heading, ...
                 'throttle', throttle, ...
                 'brake', brake, ...
                 'steer', steer);
-
-            if profile.hasPosition() && logical(parser.Results.UseLoggedPosition)
-                state.x = profile.x(1);
-                state.y = profile.y(1);
-            end
 
             if logical(parser.Results.UseLoggedYawRate) && ...
                     ~isempty(profile.yawRate) && isfinite(profile.yawRate(1))
@@ -54,6 +51,28 @@ classdef CorrelationStateInitializer
             if nargin >= 3 && ~isempty(vehicleManager)
                 state.vehicleManager = vehicleManager;
             end
+        end
+    end
+
+    methods (Static, Access = private)
+        function [vx, vy, speed] = initialVelocity(profile, speed)
+            speed = max(0, speed);
+            if profile.hasVelocity()
+                vx = profile.vx(1);
+                vy = profile.vy(1);
+                speed = hypot(vx, vy);
+                return;
+            end
+
+            if profile.hasBodySlip()
+                beta = profile.bodySlip(1);
+                vx = speed * cos(beta);
+                vy = speed * sin(beta);
+                return;
+            end
+
+            vx = speed;
+            vy = 0;
         end
     end
 end

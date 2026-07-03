@@ -61,21 +61,16 @@ specific logger or car if the channels use different names, signs, units, or
 calibration. The normalized replay CSV and extraction manifest are written
 beside the simulated output under `exports/correlation_*`.
 
-When GPS true course is available, `StartStation` defaults to `auto`.
-Correlation replay estimates the lap start station from logged course plus
-yaw-rate/lateral-G curvature shape, rebases the closed track so that station is
-simulation `s = 0`, and runs a strict preflight heading check before simulation.
-Use `StartStation`, `AlignmentDistanceM`, `AlignmentStepM`, or
-`StrictPreflight` to override that behavior. Logged yaw rate is imported for
-diagnostics and alignment but is not used as initial yaw rate unless
-`UseLoggedYawRate` is set. Off-track status is logged for correlation, but it
-does not stop replay by default; pass `StopOnOffTrack`, `true` to restore the
-normal lap-time stop behavior. Correlation also defaults to time-domain replay
-and stops at the imported replay duration, not the reference track end; use
-`ReplayDomain`, `StopAtReplayEnd`, and `StopAtTrackEnd` to override that.
-Console progress and control-input plots use the replay stream's source
-time/distance, so the chart continues to advance even when the simulated car has
-left the reference track.
+Correlation replay is a free-space replay: it uses the imported driver inputs
+and initial vehicle state, then lets the physics model produce the path without
+GPS/course alignment, track rebasing, path projection, or track-limit stops.
+The configured track is still loaded as an environment descriptor for surface
+friction and export metadata, but its geometry does not steer or constrain the
+car. Logged yaw rate is used as the initial yaw rate by default when present.
+Correlation defaults to time-domain replay and stops at the imported replay
+duration, not the reference track end; use `ReplayDomain`, `StopAtReplayEnd`,
+and `StopAtTrackEnd` to override timing behavior. Console progress and
+control-input plots use the replay stream's source time/distance.
 
 If the log has no direct brake pedal channel, the default map derives
 `brake_ratio` from `Brake Pressure Front` and `Brake Pressure Rear`. It converts

@@ -137,6 +137,9 @@ class ExtractMotecLapTest(unittest.TestCase):
                 FakeChannel("GPS.Sensor.True Course", "deg", 10, [0.0, 90.0]),
                 FakeChannel("GPS.Sensor.Latitude", "deg", 10, [1.0, 1.1]),
                 FakeChannel("GPS.Sensor.Longitude", "deg", 10, [2.0, 2.1]),
+                FakeChannel("Body Vx", "km/h", 10, [36.0, 72.0]),
+                FakeChannel("Body Vy", "m/s", 10, [0.5, 0.6]),
+                FakeChannel("Body Slip", "deg", 10, [1.0, 2.0]),
                 FakeChannel("G Sensor.Front.Yaw Rate", "deg/s", 10, [10.0, 20.0]),
                 FakeChannel("G Sensor.Front.Acceleration.Late", "G", 10, [0.1, 0.2]),
                 FakeChannel("G Sensor.Front.Acceleration.Long G", "G", 10, [-0.1, 0.3]),
@@ -156,6 +159,21 @@ class ExtractMotecLapTest(unittest.TestCase):
             "yaw_rate_radps",
             channel_map["channels"]["yaw_rate_radps"],
         )
+        vx = extract_motec_lap.extract_raw_signal(
+            data,
+            "vx_mps",
+            channel_map["channels"]["vx_mps"],
+        )
+        vy = extract_motec_lap.extract_raw_signal(
+            data,
+            "vy_mps",
+            channel_map["channels"]["vy_mps"],
+        )
+        body_slip = extract_motec_lap.extract_raw_signal(
+            data,
+            "body_slip_rad",
+            channel_map["channels"]["body_slip_rad"],
+        )
         lat_accel = extract_motec_lap.extract_raw_signal(
             data,
             "lat_accel_g",
@@ -169,6 +187,9 @@ class ExtractMotecLapTest(unittest.TestCase):
 
         np.testing.assert_allclose(course["values"], [0.0, np.pi / 2.0])
         np.testing.assert_allclose(yaw_rate["values"], np.deg2rad([10.0, 20.0]))
+        np.testing.assert_allclose(vx["values"], [10.0, 20.0])
+        np.testing.assert_allclose(vy["values"], [0.5, 0.6])
+        np.testing.assert_allclose(body_slip["values"], np.deg2rad([1.0, 2.0]))
         np.testing.assert_allclose(lat_accel["values"], [0.1, 0.2])
         np.testing.assert_allclose(long_accel["values"], [-0.1, 0.3])
 

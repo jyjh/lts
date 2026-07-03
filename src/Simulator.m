@@ -46,6 +46,8 @@ classdef Simulator < handle
         stopOnOffTrack = true
         stopAtTrackEnd = true
         stopTime = inf
+        referenceMode = "track"
+        freeSurfaceMu = 1.2
 
         % Internal: track whether maxSpeed warning was issued (warn once)
         warnedMaxSpeed = false
@@ -306,7 +308,13 @@ classdef Simulator < handle
             xNew = state.x + 0.5 * (vxWorld0 + vxWorld) * obj.dt;
             yNew = state.y + 0.5 * (vyWorld0 + vyWorld) * obj.dt;
 
-            nextRef = obj.projectToReference(xNew, yNew, ref.trackData, ref.idx);
+            if obj.isFreeReference(ref)
+                dsFree = hypot(xNew - state.x, yNew - state.y);
+                nextRef = obj.freeReferenceForState( ...
+                    newState, state.s + dsFree, xNew, yNew, yawNew);
+            else
+                nextRef = obj.projectToReference(xNew, yNew, ref.trackData, ref.idx);
+            end
             
             newState.throttle = throttle;
             newState.brake = effectiveBrakeCommand;
@@ -451,7 +459,8 @@ classdef Simulator < handle
                 'lapBreakS', (0:totalLaps)' * baseTrackLen, ...
                 'nPts', nPts);
             trackData = obj.precomputeTrackSegments(trackData);
-            initialState = obj.initializePlanarState(initialState, trackData);
+            initialState = obj.initializePlanarState(initialState, trackData, ...
+                obj.referenceMode, obj.freeSurfaceMu);
             if ~isempty(obj.driverModel) && ...
                     ismethod(obj.driverModel, 'prepareForSimulation')
                 obj.driverModel = obj.driverModel.prepareForSimulation( ...
@@ -623,8 +632,13 @@ classdef Simulator < handle
             % Working state (will be updated each step)
             currentState = initialState;
             obj.initializeWheelSpeeds(currentState.speed);
-            currentRef = obj.projectToReference(currentState.x, ...
-                currentState.y, trackData, 1);
+            if obj.isFreeReferenceMode()
+                currentRef = obj.freeReferenceForState(currentState, ...
+                    currentState.s, currentState.x, currentState.y, currentState.yaw);
+            else
+                currentRef = obj.projectToReference(currentState.x, ...
+                    currentState.y, trackData, 1);
+            end
             
             step = 0;
             fprintf('Starting simulation...\n');
@@ -636,8 +650,13 @@ classdef Simulator < handle
             
             finishTolerance = 1e-6;
             while obj.shouldContinueSimulation(currentState, trackLen, finishTolerance)
-                currentRef = obj.projectToReference( ...
-                    currentState.x, currentState.y, trackData, currentRef.idx);
+                if obj.isFreeReferenceMode()
+                    currentRef = obj.freeReferenceForState(currentState, ...
+                        currentState.s, currentState.x, currentState.y, currentState.yaw);
+                else
+                    currentRef = obj.projectToReference( ...
+                        currentState.x, currentState.y, trackData, currentRef.idx);
+                end
                 currentState.s = currentRef.s;
                 currentState.refS = currentRef.s;
                 currentState.refHeading = currentRef.heading;
@@ -684,9 +703,14 @@ classdef Simulator < handle
                     stateLog.refCurvature(step) = newState.refCurvature;
                     stateLog.lateralError(step) = newState.lateralError;
                     stateLog.onTrack(step)     = newState.onTrack;
-                    stateLog.trackWidth(step)  = trackData.trackWidth;
-                    stateLog.trackLimitMargin(step) = ...
-                        trackData.trackHalfWidth - abs(newState.lateralError);
+                    if obj.isFreeReferenceMode()
+                        stateLog.trackWidth(step) = 0;
+                        stateLog.trackLimitMargin(step) = 0;
+                    else
+                        stateLog.trackWidth(step)  = trackData.trackWidth;
+                        stateLog.trackLimitMargin(step) = ...
+                            trackData.trackHalfWidth - abs(newState.lateralError);
+                    end
                     stateLog.throttle(step)    = input.throttle;
                     stateLog.brake(step)       = forces.brake;
                     stateLog.brakeRequested(step) = forces.brakeCommand;
@@ -854,8 +878,17 @@ classdef Simulator < handle
                 stateLog.(fields{i}) = stateLog.(fields{i})(1:step);
             end
 
-            [stateLog, lapTime, recordedSteps] = obj.applyTelemetryLapWindow( ...
-                stateLog, recordStartS, recordEndS);
+            if obj.isFreeReferenceMode()
+                recordedSteps = step;
+                if recordedSteps > 0
+                    lapTime = stateLog.time(end);
+                else
+                    lapTime = 0;
+                end
+            else
+                [stateLog, lapTime, recordedSteps] = obj.applyTelemetryLapWindow( ...
+                    stateLog, recordStartS, recordEndS);
+            end
             if recordedSteps > 0
                 maxSpeedKmh = max(stateLog.speedKmh);
                 recordedLength = max(stateLog.s);
@@ -885,6 +918,8 @@ classdef Simulator < handle
             parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('ReferenceMode', 'track', @(x) ischar(x) || isstring(x));
+            parser.addParameter('SurfaceMu', NaN, @(x) isnumeric(x) && isscalar(x));
             parser.parse(varargin{:});
 
             if isa(replayProfile, 'CorrelationReplayProfile')
@@ -900,10 +935,13 @@ classdef Simulator < handle
             previousOffTrackPolicy = obj.stopOnOffTrack;
             previousTrackEndPolicy = obj.stopAtTrackEnd;
             previousStopTime = obj.stopTime;
+            previousReferenceMode = obj.referenceMode;
+            previousFreeSurfaceMu = obj.freeSurfaceMu;
             cleanup = onCleanup(@() obj.restoreReplayPolicies( ...
                 previousDriver, previousMethod, previousPedalPolicy, ...
                 previousSteerPolicy, previousOffTrackPolicy, ...
-                previousTrackEndPolicy, previousStopTime));
+                previousTrackEndPolicy, previousStopTime, ...
+                previousReferenceMode, previousFreeSurfaceMu));
 
             obj.driverModel = TelemetryReplayDriver(profile, ...
                 'ReplayDomain', parser.Results.ReplayDomain);
@@ -912,6 +950,14 @@ classdef Simulator < handle
             obj.applySteeringSlew = logical(parser.Results.ApplySteeringSlew);
             obj.stopOnOffTrack = logical(parser.Results.StopOnOffTrack);
             obj.stopAtTrackEnd = logical(parser.Results.StopAtTrackEnd);
+            obj.referenceMode = lower(string(parser.Results.ReferenceMode));
+            if obj.referenceMode ~= "track" && obj.referenceMode ~= "free"
+                error('Simulator:InvalidReferenceMode', ...
+                    'ReferenceMode must be "track" or "free".');
+            end
+            if isfinite(parser.Results.SurfaceMu) && parser.Results.SurfaceMu > 0
+                obj.freeSurfaceMu = double(parser.Results.SurfaceMu);
+            end
             if logical(parser.Results.StopAtReplayEnd)
                 obj.stopTime = profile.duration();
             else
@@ -944,7 +990,8 @@ classdef Simulator < handle
         end
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
-                steerPolicy, offTrackPolicy, trackEndPolicy, stopTime)
+                steerPolicy, offTrackPolicy, trackEndPolicy, stopTime, ...
+                referenceMode, freeSurfaceMu)
             obj.driverModel = driverModel;
             obj.cachedDriverInputMethod = inputMethod;
             obj.enforcePedalExclusivity = pedalPolicy;
@@ -952,6 +999,12 @@ classdef Simulator < handle
             obj.stopOnOffTrack = offTrackPolicy;
             obj.stopAtTrackEnd = trackEndPolicy;
             obj.stopTime = stopTime;
+            if nargin >= 9
+                obj.referenceMode = referenceMode;
+            end
+            if nargin >= 10
+                obj.freeSurfaceMu = freeSurfaceMu;
+            end
         end
 
         function tf = shouldContinueSimulation(obj, state, trackLen, finishTolerance)
@@ -991,7 +1044,38 @@ classdef Simulator < handle
             end
         end
 
-        function state = initializePlanarState(~, state, trackData)
+        function state = initializePlanarState(obj, state, trackData, referenceMode, surfaceMu)
+            if nargin < 4 || isempty(referenceMode)
+                referenceMode = "track";
+            end
+            if nargin < 5 || isempty(surfaceMu) || ~isfinite(surfaceMu) || surfaceMu <= 0
+                surfaceMu = obj.freeSurfaceMu;
+            end
+            if lower(string(referenceMode)) == "free"
+                if isnan(state.x)
+                    state.x = 0;
+                end
+                if isnan(state.y)
+                    state.y = 0;
+                end
+                if isnan(state.yaw)
+                    state.yaw = 0;
+                    state.heading = 0;
+                end
+                if isnan(state.vx)
+                    state.vx = max(state.speed, 0);
+                end
+                state.speed = hypot(state.vx, state.vy);
+                state.refS = state.s;
+                state.refHeading = state.yaw;
+                state.refCurvature = 0;
+                state.curvature = 0;
+                state.lateralError = 0;
+                state.mu = surfaceMu;
+                state.onTrack = true;
+                return;
+            end
+
             firstPoint = trackData.points(1, :);
             if isnan(state.x)
                 state.x = firstPoint(1);
@@ -1012,6 +1096,47 @@ classdef Simulator < handle
             state.refCurvature = trackData.curvature(1);
             state.curvature = state.refCurvature;
             state.mu = trackData.mu(1);
+        end
+
+        function tf = isFreeReferenceMode(obj)
+            tf = lower(string(obj.referenceMode)) == "free";
+        end
+
+        function tf = isFreeReference(~, ref)
+            tf = isstruct(ref) && isfield(ref, 'referenceMode') && ...
+                strcmpi(char(ref.referenceMode), 'free');
+        end
+
+        function ref = freeReferenceForState(obj, state, s, x, y, yaw)
+            if nargin < 6 || ~isfinite(yaw)
+                yaw = state.yaw;
+            end
+            if ~isfinite(yaw)
+                yaw = 0;
+            end
+            if nargin < 4 || ~isfinite(x)
+                x = state.x;
+            end
+            if nargin < 5 || ~isfinite(y)
+                y = state.y;
+            end
+            if ~isfinite(s)
+                s = state.s;
+            end
+            ref = struct( ...
+                'idx', 1, ...
+                's', max(0, s), ...
+                'x', x, ...
+                'y', y, ...
+                'heading', yaw, ...
+                'curvature', 0, ...
+                'mu', obj.freeSurfaceMu, ...
+                'lateralError', 0, ...
+                'trackWidth', 0, ...
+                'trackHalfWidth', 0, ...
+                'trackLimitMargin', 0, ...
+                'onTrack', true, ...
+                'referenceMode', 'free');
         end
 
         function tf = isLeanTelemetry(obj)

@@ -25,11 +25,6 @@ parser.addParameter('Track', '2026enduro');
 parser.addParameter('ReplayDomain', 'time', @(x) ischar(x) || isstring(x));
 parser.addParameter('Dt', 0.001, @(x) isnumeric(x) && isscalar(x) && x > 0);
 parser.addParameter('ImportFrequency', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x) && x > 0));
-parser.addParameter('StartStation', 'auto', ...
-    @(x) (isnumeric(x) && isscalar(x)) || ischar(x) || isstring(x));
-parser.addParameter('AlignmentDistanceM', 120, @(x) isnumeric(x) && isscalar(x) && x > 0);
-parser.addParameter('AlignmentStepM', 1, @(x) isnumeric(x) && isscalar(x) && x > 0);
-parser.addParameter('StrictPreflight', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
@@ -37,7 +32,7 @@ parser.addParameter('OutputBase', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('PythonCommand', 'python', @(x) ischar(x) || isstring(x));
 parser.addParameter('ExportMoTeC', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('UseLoggedPosition', true, @(x) islogical(x) || isnumeric(x));
-parser.addParameter('UseLoggedYawRate', false, @(x) islogical(x) || isnumeric(x));
+parser.addParameter('UseLoggedYawRate', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('ShowPlots', false, @(x) islogical(x) || isnumeric(x));
 parser.parse(varargin{:});
 opts = parser.Results;
@@ -63,17 +58,14 @@ if isempty(outputs.replayCsv)
 end
 
 profile = CorrelationReplayProfile.fromCsv(outputs.replayCsv);
-[track, alignmentInfo] = CorrelationTrackAlignment.align( ...
-    track, profile, ...
-    'StartStation', opts.StartStation, ...
-    'AlignmentDistanceM', opts.AlignmentDistanceM, ...
-    'AlignmentStepM', opts.AlignmentStepM);
-outputs.alignment = alignmentInfo;
+surfaceMu = representativeSurfaceMu(track);
+outputs.referenceMode = 'free';
+outputs.surfaceMu = surfaceMu;
 
 vehicle = VehicleManager.fromConfig(config, track, dt);
-preflightCorrelation(profile, track, vehicle, alignmentInfo, opts, outputs.extractManifest);
+preflightCorrelation(profile, track, vehicle, surfaceMu, outputs.extractManifest);
 initialState = CorrelationStateInitializer.fromReplayProfile( ...
-    profile, track, vehicle, ...
+    profile, [], vehicle, ...
     'UseLoggedPosition', opts.UseLoggedPosition, ...
     'UseLoggedYawRate', opts.UseLoggedYawRate);
 
@@ -85,7 +77,9 @@ simulator = Simulator(vehicle, [], dt);
     'ApplySteeringSlew', false, ...
     'StopOnOffTrack', opts.StopOnOffTrack, ...
     'StopAtTrackEnd', opts.StopAtTrackEnd, ...
-    'StopAtReplayEnd', opts.StopAtReplayEnd);
+    'StopAtReplayEnd', opts.StopAtReplayEnd, ...
+    'ReferenceMode', 'free', ...
+    'SurfaceMu', surfaceMu);
 
 outputs.csvFile = [outputs.outputBase '.csv'];
 outputs.ldFile = [outputs.outputBase '.ld'];
@@ -118,29 +112,18 @@ end
 fprintf('Lap Time:   %.3f s\n', lapTime);
 end
 
-function preflightCorrelation(profile, track, vehicle, alignmentInfo, opts, manifestFile)
+function preflightCorrelation(profile, track, vehicle, surfaceMu, manifestFile)
 fprintf('\n=== Correlation Preflight ===\n');
 printExtractionSummary(manifestFile);
-fprintf('Start station: %.2f m (%s)\n', ...
-    alignmentInfo.startStationM, alignmentInfo.mode);
-if isfinite(alignmentInfo.headingErrorDeg)
-    fprintf('Initial heading residual: %.2f deg\n', alignmentInfo.headingErrorDeg);
-end
-
-if logical(opts.StrictPreflight) && profile.hasGpsCourse() && ...
-        isfinite(alignmentInfo.headingErrorDeg) && alignmentInfo.headingErrorDeg > 30
-    error('run_correlation:HeadingMismatch', ...
-        ['GPS course and rebased track heading differ by %.1f deg. ' ...
-         'Check StartStation, track direction, or GPS course mapping.'], ...
-        alignmentInfo.headingErrorDeg);
-end
-
+fprintf('Reference mode: free-space replay\n');
+fprintf('Surface mu: %.3f\n', surfaceMu);
 printReplayRanges(profile);
-warnOnSteeringScale(profile, vehicle, opts.AlignmentDistanceM);
+warnOnSteeringScale(profile, vehicle, 120);
 warnOnBrakeScale(profile);
 
 if nargin >= 2 && ~isempty(track)
-    fprintf('Aligned track length: %.2f m\n', track.getTotalLength());
+    fprintf('Environment track length: %.2f m (not used for path projection)\n', ...
+        track.getTotalLength());
 end
 end
 
@@ -161,8 +144,8 @@ if ~isfield(manifest, 'channels')
     return;
 end
 
-names = {'throttle_ratio', 'brake_ratio', 'steer_rad', 'gps_course_rad', ...
-    'yaw_rate_radps', 'lat_accel_g', 'long_accel_g'};
+names = {'throttle_ratio', 'brake_ratio', 'steer_rad', 'yaw_rad', ...
+    'yaw_rate_radps', 'vx_mps', 'vy_mps', 'body_slip_rad'};
 for i = 1:numel(names)
     name = names{i};
     if ~isfield(manifest.channels, name)
@@ -372,6 +355,25 @@ elseif ischar(configSpec) || isstring(configSpec)
     config = fn();
 else
     config = configSpec;
+end
+end
+
+function mu = representativeSurfaceMu(track)
+mu = 1.2;
+if isempty(track)
+    return;
+end
+
+try
+    values = track.getSurfaceFriction();
+catch
+    return;
+end
+
+values = values(:);
+values = values(isfinite(values) & values > 0);
+if ~isempty(values)
+    mu = values(1);
 end
 end
 
