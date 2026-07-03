@@ -1,0 +1,194 @@
+{
+  "sample_frequency_hz": 1000,
+  "channels": {
+    "distance_m": {
+      "names": ["Distance", "Lap Distance", "Distance on GPS", "GPS Distance"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m": 1.0,
+        "km": 1000.0
+      }
+    },
+    "throttle_ratio": {
+      "names": ["Throttle Pedal", "Throttle Position", "Throttle", "Throttle Raw"],
+      "required": true,
+      "default": 0.0,
+      "clamp": [0.0, 1.0],
+      "source_unit_scale": {
+        "%": 0.01,
+        "ratio": 1.0
+      }
+    },
+    "brake_ratio": {
+      "names": ["Brake", "Brake Pedal", "Brake Pressure", "Brake Requested", "Brake Raw"],
+      "required": true,
+      "default": 0.0,
+      "clamp": [0.0, 1.0],
+      "source_unit_scale": {
+        "%": 0.01,
+        "ratio": 1.0,
+        "bar": 0.01,
+        "psi": 0.006894757
+      },
+      "derive": {
+        "method": "brake_pressure",
+        "combine": "max",
+        "full_scale_bar": 100.0,
+        "auto_scale_if_missing": true,
+        "front": {
+          "names": ["Brake Pressure Front", "Front Brake Pressure", "Brake Front Pressure"],
+          "source_unit_scale": {
+            "bar": 1.0,
+            "kPa": 0.01,
+            "Pa": 0.00001,
+            "MPa": 10.0,
+            "psi": 0.0689475729
+          }
+        },
+        "rear": {
+          "names": ["Brake Pressure Rear", "Rear Brake Pressure", "Brake Rear Pressure"],
+          "source_unit_scale": {
+            "bar": 1.0,
+            "kPa": 0.01,
+            "Pa": 0.00001,
+            "MPa": 10.0,
+            "psi": 0.0689475729
+          }
+        }
+      }
+    },
+    "steer_rad": {
+      "required": true,
+      "default": 0.0,
+      "sources": [
+        {
+          "label": "sim_road_wheel",
+          "names": ["Steer Raw", "Steer"],
+          "source_unit_scale": {
+            "rad": 1.0,
+            "deg": 0.017453292519943295
+          }
+        },
+        {
+          "label": "generic_steering_angle",
+          "names": ["Steering.Angle", "Steering Angle", "Steering"],
+          "source_unit_scale": {
+            "rad": 1.0,
+            "deg": 0.017453292519943295
+          }
+        }
+      ]
+    },
+    "speed_mps": {
+      "names": ["Speed mps", "Vehicle Speed Value", "Vehicle Speed", "GPS Speed"],
+      "required": true,
+      "default": 0.0,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "yaw_rad": {
+      "names": ["Yaw", "Heading Raw", "Heading"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rad": 1.0,
+        "deg": 0.017453292519943295
+      }
+    },
+    "yaw_rate_radps": {
+      "names": [
+        "Yaw Rate",
+        "YawRate",
+        "Gyro Z",
+        "G Sensor.Front.Yaw Rate",
+        "G Sensor Front Yaw Rate"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rad/s": 1.0,
+        "deg/s": 0.017453292519943295
+      }
+    },
+    "x_m": {
+      "names": ["X", "Local X", "Position X"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m": 1.0
+      }
+    },
+    "y_m": {
+      "names": ["Y", "Local Y", "Position Y"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m": 1.0
+      }
+    },
+    "gps_lat_deg": {
+      "names": ["GPS.Sensor.Latitude", "GPS Sensor Latitude", "GPS Latitude", "Latitude"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "deg": 1.0,
+        "rad": 57.29577951308232
+      }
+    },
+    "gps_lon_deg": {
+      "names": ["GPS.Sensor.Longitude", "GPS Sensor Longitude", "GPS Longitude", "Longitude"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "deg": 1.0,
+        "rad": 57.29577951308232
+      }
+    },
+    "gps_course_rad": {
+      "names": ["GPS.Sensor.True Course", "GPS Sensor True Course", "GPS True Course", "True Course"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rad": 1.0,
+        "deg": 0.017453292519943295
+      }
+    },
+    "lat_accel_g": {
+      "names": [
+        "G Sensor.Front.Acceleration.Late",
+        "G Sensor Front Acceleration Late",
+        "Lat Accel Raw",
+        "Lateral Acceleration",
+        "Lateral G"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    },
+    "long_accel_g": {
+      "names": [
+        "G Sensor.Front.Acceleration.Long G",
+        "G Sensor Front Acceleration Long G",
+        "Long Accel Raw",
+        "Longitudinal Acceleration",
+        "Longitudinal G"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    }
+  }
+}

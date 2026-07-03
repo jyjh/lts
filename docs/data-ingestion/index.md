@@ -21,6 +21,7 @@ The current project consumes external data files directly through component cons
 | EMRAX 228 map | `src/+components/+Powertrain/EMRAX228CC Single_4.5.mat` | `components.Powertrain.EMRAX228Powertrain` | Final-drive ratio, motor RPM curve, motor torque, and tractive force |
 | Hoosier tire file | `src/+components/+Tire/43105_18x7.5_10_R25B_7.tir` | `components.Tire.TireConstants` / `PacejkaTire` | Pacejka Magic Formula coefficients and nominal tire properties |
 | Test track layouts | `components.TestTrack` methods | `Simulator` / `DriverModel` | Track points, curvature, heading, and surface friction |
+| Real MoTeC lap | `.ld` plus optional `.ldx` | `scripts/extract_motec_lap.py` / `run_correlation` | Driver input replay and starting-state extraction for correlation |
 
 ### Powertrain Data Behavior
 
@@ -62,10 +63,66 @@ git submodule update --init --recursive
 python -m pip install cantools numpy
 ```
 
+### Correlation Replay
+
+`run_correlation` adds the inverse path for correlation work:
+
+1. `scripts/extract_motec_lap.py` reads a real `.ld` file through
+   `external/MotecLogGenerator/ldparser`.
+2. If a `Lap` is supplied, `ldparser` uses BCN markers from the matching `.ldx`
+   sidecar to slice the requested 1-based lap.
+3. `config/motec/default_channel_map.json` maps channel names and units to
+   the normalized replay contract:
+   `time_s`, `distance_m`, `throttle_ratio`, `brake_ratio`, `steer_rad`, and
+   `speed_mps`, with optional yaw, GPS, course, and acceleration channels.
+   `run_correlation` defaults to `config/motec/r25_real_channel_map.json`,
+   which applies the R25 real logger steering ratio/sign convention while
+   preserving direct simulator-exported steering channels.
+   If no direct brake pedal channel exists, `brake_ratio` is derived from
+   `Brake Pressure Front` and `Brake Pressure Rear`. The default derivation
+   converts both channels to bar, uses the larger normalized front/rear pressure,
+   and maps `full_scale_bar = 100` to a simulator brake command of `1.0`.
+4. `CorrelationReplayProfile` validates the normalized CSV and synthesizes
+   distance from speed when the log has no lap-distance channel.
+5. `CorrelationTrackAlignment` estimates the start station from GPS true course
+   plus yaw-rate/lateral-G curvature shape, rebases closed tracks so the matched
+   station is simulation `s = 0`, and strict preflight rejects large heading
+   mismatches before the simulator runs.
+6. `TelemetryReplayDriver` feeds those measured controls into `Simulator.step`
+   by distance or by time.
+7. `TelemetryExporter.exportToMoTeCLog` writes the simulated replay as a new
+   `.csv` and `.ld` for direct comparison in MoTeC i2.
+
+Example:
+
+```matlab
+addpath('src')
+run_correlation( ...
+    'MoTeCFile', 'data/real_run.ld', ...
+    'Lap', 4, ...
+    'VehicleConfig', @vehicles.R25, ...
+    'Track', '2026enduro')
+```
+
+Use `StartStation`, `AlignmentDistanceM`, `AlignmentStepM`, and
+`StrictPreflight` to tune or override automatic alignment. Logged yaw rate is
+imported for alignment and diagnostics but is not used as initial yaw rate by
+default; pass `UseLoggedYawRate`, `true` only after its sign convention is
+verified. Correlation replay logs off-track status and track-limit margin but
+continues by default; pass `StopOnOffTrack`, `true` to stop like a normal
+lap-time run. It also defaults to time-domain input replay and stops at the
+imported replay duration rather than the reference track end; use
+`ReplayDomain`, `StopAtReplayEnd`, and `StopAtTrackEnd` to override that.
+Replay progress and control-input plots use the input stream's source
+time/distance, not the simulated vehicle's projected reference-track station.
+
 ### Interfaces
 
 | Class | Purpose | Status |
 |-------|---------|--------|
 | `TrackDataLoader` | Load GPS/cone CSV data, smooth curvature, generate racing line | Planned |
 | `TelemetryExporter` | Export `stateLog` to MotecLogGenerator CSV and convert to MoTeC `.ld` | Implemented |
+| `CorrelationReplayProfile` | Normalized real-lap replay profile with time/distance sampling | Implemented |
+| `CorrelationTrackAlignment` | Start-station estimation and closed-track rebasing for real-lap replay | Implemented |
+| `TelemetryReplayDriver` | Driver adapter that supplies measured inputs to `Simulator` | Implemented |
 | Generic aero map loader | Populate aero lookup tables from CFD data | Planned |

@@ -33,6 +33,53 @@ The `.ld` conversion uses Python and MotecLogGenerator's dependencies:
 python -m pip install cantools numpy
 ```
 
+## Correlation Replay
+
+`run_correlation` replays a real MoTeC lap through the simulator. It extracts
+the measured throttle, brake, steer, and starting speed from a selected lap,
+uses those controls instead of `DriverModel`, then exports a new simulated CSV
+and `.ld` for overlay in MoTeC i2.
+
+```matlab
+addpath('src')
+run_correlation( ...
+    'MoTeCFile', 'data/real_run.ld', ...
+    'Lap', 4, ...
+    'VehicleConfig', @vehicles.R25, ...
+    'Track', '2026enduro')
+```
+
+Lap slicing uses the matching `.ldx` sidecar when `Lap` is supplied.
+`run_correlation` defaults to `config/motec/r25_real_channel_map.json`, which
+scales and sign-flips the R25 real logger's `Steering.Angle` channel while
+leaving simulator-exported `Steer Raw` as direct road-wheel angle. The generic
+map remains at `config/motec/default_channel_map.json`; copy either map for a
+specific logger or car if the channels use different names, signs, units, or
+calibration. The normalized replay CSV and extraction manifest are written
+beside the simulated output under `exports/correlation_*`.
+
+When GPS true course is available, `StartStation` defaults to `auto`.
+Correlation replay estimates the lap start station from logged course plus
+yaw-rate/lateral-G curvature shape, rebases the closed track so that station is
+simulation `s = 0`, and runs a strict preflight heading check before simulation.
+Use `StartStation`, `AlignmentDistanceM`, `AlignmentStepM`, or
+`StrictPreflight` to override that behavior. Logged yaw rate is imported for
+diagnostics and alignment but is not used as initial yaw rate unless
+`UseLoggedYawRate` is set. Off-track status is logged for correlation, but it
+does not stop replay by default; pass `StopOnOffTrack`, `true` to restore the
+normal lap-time stop behavior. Correlation also defaults to time-domain replay
+and stops at the imported replay duration, not the reference track end; use
+`ReplayDomain`, `StopAtReplayEnd`, and `StopAtTrackEnd` to override that.
+Console progress and control-input plots use the replay stream's source
+time/distance, so the chart continues to advance even when the simulated car has
+left the reference track.
+
+If the log has no direct brake pedal channel, the default map derives
+`brake_ratio` from `Brake Pressure Front` and `Brake Pressure Rear`. It converts
+both pressures to bar, uses the larger front/rear normalized pressure, and
+assumes `full_scale_bar = 100` maps to a brake command of `1.0`; tune that value
+in a copied channel map for your logger/calibration.
+
 Edit `trackType` in `src/run_simulation.m` to switch between:
 
 - `straight10`

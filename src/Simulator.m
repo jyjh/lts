@@ -37,6 +37,16 @@ classdef Simulator < handle
         % for profiling and benchmark runs.
         telemetryMode = "full"
 
+        % Input normalization policy. Normal driver models use mutually
+        % exclusive pedals and a simulator-side steering slew limiter.
+        % Correlation/replay runs can disable these so measured controls are
+        % applied as recorded after channel-map scaling.
+        enforcePedalExclusivity = true
+        applySteeringSlew = true
+        stopOnOffTrack = true
+        stopAtTrackEnd = true
+        stopTime = inf
+
         % Internal: track whether maxSpeed warning was issued (warn once)
         warnedMaxSpeed = false
     end
@@ -450,6 +460,9 @@ classdef Simulator < handle
             
             % Pre-allocate telemetry log
             maxSteps = round(trackLen / (max(initialState.speed, 5) * obj.dt) * 5);
+            if isfinite(obj.stopTime)
+                maxSteps = max(maxSteps, ceil(max(0, obj.stopTime - initialState.time) / obj.dt) + 2);
+            end
             maxSteps = max(maxSteps, 100000);
             leanTelemetry = obj.isLeanTelemetry();
             if leanTelemetry
@@ -622,7 +635,7 @@ classdef Simulator < handle
             end
             
             finishTolerance = 1e-6;
-            while currentState.s < trackLen - finishTolerance && currentState.onTrack
+            while obj.shouldContinueSimulation(currentState, trackLen, finishTolerance)
                 currentRef = obj.projectToReference( ...
                     currentState.x, currentState.y, trackData, currentRef.idx);
                 currentState.s = currentRef.s;
@@ -633,7 +646,7 @@ classdef Simulator < handle
                 currentState.lateralError = currentRef.lateralError;
                 currentState.mu = currentRef.mu;
                 currentState.onTrack = currentRef.onTrack;
-                if ~currentState.onTrack
+                if ~obj.shouldContinueSimulation(currentState, trackLen, finishTolerance)
                     break;
                 end
                 step = step + 1;
@@ -650,7 +663,8 @@ classdef Simulator < handle
                 if step <= maxSteps
                     stateLog.time(step)        = newState.time;
                     stateLog.s(step)           = newState.s;
-                    stateLog.controlS(step)    = currentState.s;
+                    stateLog.controlS(step)    = localGetField(input, ...
+                        'sourceDistance', currentState.s);
                     stateLog.x(step)           = newState.x;
                     stateLog.y(step)           = newState.y;
                     stateLog.yaw(step)         = newState.yaw;
@@ -659,7 +673,8 @@ classdef Simulator < handle
                     stateLog.bodySlipAngle(step) = newState.bodySlipAngle;
                     stateLog.speed(step)       = newState.speed;
                     stateLog.speedKmh(step)    = newState.speed * 3.6;
-                    stateLog.controlTime(step) = currentState.time;
+                    stateLog.controlTime(step) = localGetField(input, ...
+                        'sourceTime', currentState.time);
                     stateLog.ax(step)          = newState.ax;
                     stateLog.ay(step)          = newState.ay;
                     stateLog.yawRate(step)     = newState.yawRate;
@@ -818,9 +833,10 @@ classdef Simulator < handle
                 
                 % Progress display
                 if mod(step, 5000) == 0
-                    progress = currentState.s / trackLen * 100;
-                    fprintf('  Progress: %5.1f%% | Speed: %5.1f km/h | s: %6.1f m\n', ...
-                        progress, currentState.speed * 3.6, currentState.s);
+                    progress = obj.simulationProgress(currentState, input, trackLen);
+                    fprintf('  Progress: %5.1f%% | Speed: %5.1f km/h | s: %6.1f m | replay: %s\n', ...
+                        progress * 100, currentState.speed * 3.6, ...
+                        currentState.s, obj.replayProgressText(input));
                 end
                 
                 % Safety: prevent infinite loops
@@ -854,6 +870,103 @@ classdef Simulator < handle
             fprintf('Max Speed:  %.1f km/h\n', maxSpeedKmh);
             fprintf('Steps:      %d simulated, %d recorded\n', ...
                 simulationSteps, recordedSteps);
+        end
+
+        function [stateLog, lapTime] = simulateReplay(obj, initialState, track, replayProfile, varargin)
+            % SIMULATEREPLAY Run a lap with externally supplied controls.
+            %   [stateLog, lapTime] = simulateReplay(initialState, track, replayProfile)
+            %
+            %   replayProfile may be a CorrelationReplayProfile object or a
+            %   normalized replay CSV path accepted by CorrelationReplayProfile.
+            parser = inputParser;
+            parser.addParameter('ReplayDomain', 'distance', @(x) ischar(x) || isstring(x));
+            parser.addParameter('AllowPedalOverlap', true, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('ApplySteeringSlew', false, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
+            parser.parse(varargin{:});
+
+            if isa(replayProfile, 'CorrelationReplayProfile')
+                profile = replayProfile;
+            else
+                profile = CorrelationReplayProfile.fromCsv(replayProfile);
+            end
+
+            previousDriver = obj.driverModel;
+            previousMethod = obj.cachedDriverInputMethod;
+            previousPedalPolicy = obj.enforcePedalExclusivity;
+            previousSteerPolicy = obj.applySteeringSlew;
+            previousOffTrackPolicy = obj.stopOnOffTrack;
+            previousTrackEndPolicy = obj.stopAtTrackEnd;
+            previousStopTime = obj.stopTime;
+            cleanup = onCleanup(@() obj.restoreReplayPolicies( ...
+                previousDriver, previousMethod, previousPedalPolicy, ...
+                previousSteerPolicy, previousOffTrackPolicy, ...
+                previousTrackEndPolicy, previousStopTime));
+
+            obj.driverModel = TelemetryReplayDriver(profile, ...
+                'ReplayDomain', parser.Results.ReplayDomain);
+            obj.cachedDriverInputMethod = [];
+            obj.enforcePedalExclusivity = ~logical(parser.Results.AllowPedalOverlap);
+            obj.applySteeringSlew = logical(parser.Results.ApplySteeringSlew);
+            obj.stopOnOffTrack = logical(parser.Results.StopOnOffTrack);
+            obj.stopAtTrackEnd = logical(parser.Results.StopAtTrackEnd);
+            if logical(parser.Results.StopAtReplayEnd)
+                obj.stopTime = profile.duration();
+            else
+                obj.stopTime = inf;
+            end
+
+            [stateLog, lapTime] = obj.simulate(initialState, track);
+        end
+
+        function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
+                steerPolicy, offTrackPolicy, trackEndPolicy, stopTime)
+            obj.driverModel = driverModel;
+            obj.cachedDriverInputMethod = inputMethod;
+            obj.enforcePedalExclusivity = pedalPolicy;
+            obj.applySteeringSlew = steerPolicy;
+            obj.stopOnOffTrack = offTrackPolicy;
+            obj.stopAtTrackEnd = trackEndPolicy;
+            obj.stopTime = stopTime;
+        end
+
+        function tf = shouldContinueSimulation(obj, state, trackLen, finishTolerance)
+            reachedTrackEnd = obj.stopAtTrackEnd && state.s >= trackLen - finishTolerance;
+            reachedStopTime = isfinite(obj.stopTime) && ...
+                state.time >= obj.stopTime - 0.5 * obj.dt;
+            stoppedOffTrack = obj.stopOnOffTrack && ~state.onTrack;
+            tf = ~(reachedTrackEnd || reachedStopTime || stoppedOffTrack);
+        end
+
+        function progress = simulationProgress(~, state, input, trackLen)
+            progress = NaN;
+            if isstruct(input) && isfield(input, 'replayProgress') && ...
+                    isfinite(input.replayProgress)
+                progress = input.replayProgress;
+            elseif trackLen > 0
+                progress = state.s / trackLen;
+            end
+            progress = max(0, min(1, progress));
+        end
+
+        function text = replayProgressText(~, input)
+            if ~isstruct(input) || ~isfield(input, 'replayProgress') || ...
+                    ~isfinite(input.replayProgress)
+                text = 'n/a';
+                return;
+            end
+
+            domain = localGetField(input, 'replayDomain', '');
+            switch string(domain)
+                case "time"
+                    text = sprintf('%.3f s', localGetField(input, 'sourceTime', NaN));
+                case "distance"
+                    text = sprintf('%.1f m', localGetField(input, 'sourceDistance', NaN));
+                otherwise
+                    text = sprintf('%.1f%%', input.replayProgress * 100);
+            end
         end
 
         function state = initializePlanarState(~, state, trackData)
@@ -1169,22 +1282,28 @@ classdef Simulator < handle
             input.throttle = max(0, min(1, input.throttle));
             input.brake = max(0, min(1, input.brake));
 
-            if input.brake > 0
-                input.throttle = 0;
-            elseif input.throttle > 0
-                input.brake = 0;
+            if obj.enforcePedalExclusivity
+                if input.brake > 0
+                    input.throttle = 0;
+                elseif input.throttle > 0
+                    input.brake = 0;
+                end
             end
 
             maxSteer = obj.getMaxSteeringAngle();
-            input.steer = max(-maxSteer, min(maxSteer, input.steer));
+            if isfinite(maxSteer)
+                input.steer = max(-maxSteer, min(maxSteer, input.steer));
+            end
             if nargin >= 3 && ~isempty(state)
                 previousSteer = state.steer;
                 if ~isfinite(previousSteer)
                     previousSteer = 0;
                 end
-                previousSteer = max(-maxSteer, min(maxSteer, previousSteer));
+                if isfinite(maxSteer)
+                    previousSteer = max(-maxSteer, min(maxSteer, previousSteer));
+                end
                 rampTime = obj.getSteeringRampTime();
-                if rampTime > 0 && isfinite(rampTime)
+                if obj.applySteeringSlew && rampTime > 0 && isfinite(rampTime) && isfinite(maxSteer)
                     maxDelta = maxSteer * obj.dt / max(rampTime, eps);
                     delta = input.steer - previousSteer;
                     delta = max(-maxDelta, min(maxDelta, delta));
