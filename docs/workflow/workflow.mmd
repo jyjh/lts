@@ -1,36 +1,36 @@
 graph TD
     subgraph "Aero"
-        AeroInputs[Whole-car ClA/CdA and front CoP] --> WholeCarAero[WholeCarAero]
+        AeroInputs[Whole-car ClA/CdA and front CoP] --> WholeCarAero[lts.components.Aero.WholeCarAero]
     end
 
     subgraph "Suspension"
-        SuspSetup[Spring, damper, bump stop, tire stiffness] --> SuspManager[SuspensionManager]
-        SuspManager --> SuspState[SuspensionState per corner]
+        SuspSetup[Spring, damper, bump stop, tire stiffness] --> SuspManager[lts.components.Suspension.SuspensionManager]
+        SuspManager --> SuspState[lts.components.Suspension.SuspensionState per corner]
     end
 
     subgraph "Powertrain"
-        EMRAXMap[EMRAX228CC Single_4.5.mat] --> EMRAX[EMRAX228Powertrain]
-        EMRAX --> PTState[PowertrainState motor RPM and torque]
+        EMRAXMap[EMRAX228CC Single_4.5.mat] --> EMRAX[lts.components.Powertrain.EMRAX228Powertrain]
+        EMRAX --> PTState[lts.components.Powertrain.PowertrainState motor RPM and torque]
     end
 
     subgraph "Tires"
-        TireFile[43105_18x7.5_10_R25B_7.tir] --> Pacejka[PacejkaTire]
-        Pacejka --> TireState[TireState per corner]
+        TireFile[43105_18x7.5_10_R25B_7.tir] --> Pacejka[lts.components.Tire.PacejkaTire]
+        Pacejka --> TireState[lts.components.Tire.TireState per corner]
     end
 
     subgraph "Track"
-        TestLayouts[TestTrack layouts] --> TrackObj[Track geometry, curvature, mu]
+        TestLayouts[lts.components.TestTrack layouts] --> TrackObj[lts.components.Track geometry, curvature, mu]
     end
 
-    WholeCarAero --> Vehicle[VehicleManager]
+    WholeCarAero --> Vehicle[lts.vehicle.VehicleManager]
     SuspManager --> Vehicle
     EMRAX --> Vehicle
     Pacejka --> Vehicle
     TrackObj --> Vehicle
-    Vehicle --> Simulator[Simulator]
-    Driver[DriverModel] --> Simulator
+    Vehicle --> Simulator[lts.simulation.Simulator]
+    Driver[lts.driver.DriverModel] --> Simulator
     Simulator --> Log[stateLog and lapTime]
-    Log --> Plots[GraphPlotter dashboards]
+    Log --> Plots[lts.telemetry.GraphPlotter dashboards]
     Plots --> Review[Review loads, slip, RPM, forces]
     Review -.-> AeroInputs
     Review -.-> SuspSetup

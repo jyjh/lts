@@ -1,17 +1,18 @@
 # FSAE Transient Lap Time Simulation
 
-An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The project composes swappable aero, suspension, powertrain, tire, and track models, then runs a transient simulation loop through `Simulator`.
+An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The project composes swappable aero, suspension, powertrain, tire, and track models, then runs a transient simulation loop through `lts.simulation.Simulator`.
 
 ## Quick Start
 
 ```matlab
-run_simulation
+addpath('src')
+lts.app.run_simulation
 ```
 
 Each run writes a MotecLogGenerator-compatible CSV to `exports/motec_<track>_<timestamp>.csv`.
 It also uses the `external/MotecLogGenerator` submodule to create
 `exports/motec_<track>_<timestamp>.ld` for MoTeC i2.
-Set `exportMoTeC = false` in `src/run_simulation.m` to disable this.
+Set `exportMoTeC = false` in `src/+lts/+app/run_simulation.m` to disable this.
 
 The CSV header includes units in MotecLogGenerator's `Channel Name (unit)`
 format, for example `Engine RPM (rpm)`. The exporter also creates fake
@@ -35,18 +36,18 @@ python -m pip install cantools numpy
 
 ## Correlation Replay
 
-`run_correlation` replays real MoTeC controls through the simulator. It extracts
+`lts.app.run_correlation` replays real MoTeC controls through the simulator. It extracts
 the measured throttle, brake, steer, and starting speed from a selected lap, or
 from the whole log when `Lap` is omitted, uses those controls instead of
-`DriverModel`, then exports a new simulated CSV and `.ld` for overlay in MoTeC
+`lts.driver.DriverModel`, then exports a new simulated CSV and `.ld` for overlay in MoTeC
 i2.
 
 ```matlab
 addpath('src')
-run_correlation( ...
+lts.app.run_correlation( ...
     'MoTeCFile', 'data/real_run.ld', ...
     'Lap', 4, ...
-    'VehicleConfig', @vehicles.R25, ...
+    'VehicleConfig', @lts.vehicles.R25, ...
     'TuningFile', 'R25_correlation_tuning', ...
     'Track', '2026enduro')
 ```
@@ -54,7 +55,7 @@ run_correlation( ...
 Lap slicing uses 1-based public lap numbers and the matching `.ldx` sidecar
 when `Lap` is supplied. Omit `Lap` for logs that already contain one run, such
 as autocross.
-`run_correlation` defaults to `config/motec/r25_real_channel_map.json`, which
+`lts.app.run_correlation` defaults to `config/motec/r25_real_channel_map.json`, which
 scales and sign-flips the R25 real logger's `Steering.Angle` channel while
 leaving simulator-exported `Steer Raw` as direct road-wheel angle. The generic
 map remains at `config/motec/default_channel_map.json`; copy either map for a
@@ -62,9 +63,9 @@ specific logger or car if the channels use different names, signs, units, or
 calibration. The normalized replay CSV and extraction manifest are written
 beside the simulated output under `exports/correlation_*`.
 
-For correlation-only setup changes, keep `vehicles.R25` as the base vehicle and
+For correlation-only setup changes, keep `lts.vehicles.R25` as the base vehicle and
 pass a tuning overlay with `TuningFile` or `VehicleTuning`. The supplied
-`src/+vehicles/R25_correlation_tuning.m` overlay currently applies the
+`src/+lts/+vehicles/R25_correlation_tuning.m` overlay currently applies the
 lap5/raw drivetrain assumptions without changing the base car definition.
 
 Correlation replay is a free-space replay: it uses the imported driver inputs
@@ -88,8 +89,12 @@ For correlation runs that should use the logged line pressures directly, pass
 `brake_pressure_front_bar` and `brake_pressure_rear_bar` into the replay CSV,
 and the simulator converts them through the vehicle's brake-pressure
 calibration instead of the peak-normalized `brake_ratio` path.
+Optional `wheel_speed_fl_mps`, `wheel_speed_fr_mps`, `wheel_speed_rl_mps`, and
+`wheel_speed_rr_mps` columns seed the initial per-corner tire angular velocity;
+missing wheel-speed sensors fall back to the median of the valid corners at the
+first sample.
 
-Edit `trackType` in `src/run_simulation.m` to switch between:
+Edit `trackType` in `src/+lts/+app/run_simulation.m` to switch between:
 
 - `straight10`
 - `straight`
@@ -107,7 +112,7 @@ MoTeC exports contain only the second lap.
 ## Track files
 
 `2026enduro` and other real circuits are loaded from `.mat` files in `tracks/`
-via `components.WaypointTrack.loadMat`. These files are produced by the separate
+via `lts.components.WaypointTrack.loadMat`. These files are produced by the separate
 [`fsae track image tool`](https://github.com/jyjh/fsae-track-image-tool), which
 traces a track image into `[x, y]` waypoints.
 
@@ -117,13 +122,13 @@ field. `loadMat` honors that order by default, and an explicit override can be
 passed to force a direction:
 
 ```matlab
-track = components.WaypointTrack.loadMat('tracks/<file>.mat', 'Direction', 'anticlockwise');
+track = lts.components.WaypointTrack.loadMat('tracks/<file>.mat', 'Direction', 'anticlockwise');
 ```
 
 If the override conflicts with the direction stored in the file (for example
 because the file is a **stale copy** that was re-exported the other way), the
 waypoints are reversed — keeping the start/finish point fixed — and a warning is
-emitted. `run_simulation.m` passes `'Direction', 'anticlockwise'` for the
+emitted. `lts.app.run_simulation` passes `'Direction', 'anticlockwise'` for the
 endurance track and prints the resolved direction at startup, so a wrong or
 stale track is obvious immediately. A file with no direction field at all also
 warns.
@@ -136,14 +141,14 @@ unchanged — so a re-export silently overwrites the previous output.
 
 ## Current Model
 
-- Whole-car aero system: `components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
-- Transient chassis platform: `components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
-- Four-corner transient suspension: `components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
-- Table-based suspension and steering geometry: `components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
-- EMRAX 228 powertrain: `components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
-- Supported Pacejka tire model: `components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
-- Test tracks: `components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.
-- MoTeC telemetry export: `TelemetryExporter.exportToMoTeCLog` writes simulation logs as MotecLogGenerator-compatible CSVs and converts them to MoTeC `.ld` files through the MotecLogGenerator submodule.
+- Whole-car aero system: `lts.components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
+- Transient chassis platform: `lts.components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
+- Four-corner transient suspension: `lts.components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
+- Table-based suspension and steering geometry: `lts.components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
+- EMRAX 228 powertrain: `lts.components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
+- Supported Pacejka tire model: `lts.components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
+- Test tracks: `lts.components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.
+- MoTeC telemetry export: `lts.telemetry.TelemetryExporter.exportToMoTeCLog` writes simulation logs as MotecLogGenerator-compatible CSVs and converts them to MoTeC `.ld` files through the MotecLogGenerator submodule.
 
 ## Documentation
 
@@ -160,7 +165,7 @@ Full documentation is available at [jyjh.github.io/lts](https://jyjh.github.io/l
 
 - MATLAB R2019b or later
 - [MFeval](https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval) for Pacejka Magic Formula tire evaluation
-- The provided EMRAX and tire data files in `src/+components/+Powertrain` and `src/+components/+Tire`
+- The provided EMRAX and tire data files in `src/+lts/+components/+Powertrain` and `src/+lts/+components/+Tire`
 - Python 3 with `cantools` and `numpy` for MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/stevendaniluk/MotecLogGenerator) submodule
 
 ## License

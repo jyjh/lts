@@ -1,6 +1,6 @@
-classdef SimulatorZeroPowertrain < components.Powertrain.PowertrainComponent
+classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
     properties
-        state = components.Powertrain.PowertrainState()
+        state = lts.components.Powertrain.PowertrainState()
     end
 
     methods

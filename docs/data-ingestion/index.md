@@ -18,10 +18,10 @@ The current project consumes external data files directly through component cons
 
 | Data | File | Consumed By | Purpose |
 |------|------|-------------|---------|
-| EMRAX 228 map | `src/+components/+Powertrain/EMRAX228CC Single_4.5.mat` | `components.Powertrain.EMRAX228Powertrain` | Final-drive ratio, motor RPM curve, motor torque, and tractive force |
-| Hoosier tire file | `src/+components/+Tire/43105_18x7.5_10_R25B_7.tir` | `components.Tire.TireConstants` / `PacejkaTire` | Pacejka Magic Formula coefficients and nominal tire properties |
-| Test track layouts | `components.TestTrack` methods | `Simulator` / `DriverModel` | Track points, curvature, heading, and surface friction |
-| Real MoTeC lap | `.ld` plus optional `.ldx` | `scripts/extract_motec_lap.py` / `run_correlation` | Driver input replay and starting-state extraction for correlation |
+| EMRAX 228 map | `src/+lts/+components/+Powertrain/EMRAX228CC Single_4.5.mat` | `lts.components.Powertrain.EMRAX228Powertrain` | Final-drive ratio, motor RPM curve, motor torque, and tractive force |
+| Hoosier tire file | `src/+lts/+components/+Tire/43105_18x7.5_10_R25B_7.tir` | `lts.components.Tire.TireConstants` / `PacejkaTire` | Pacejka Magic Formula coefficients and nominal tire properties |
+| Test track layouts | `lts.components.TestTrack` methods | `lts.simulation.Simulator` / `lts.driver.DriverModel` | Track points, curvature, heading, and surface friction |
+| Real MoTeC lap | `.ld` plus optional `.ldx` | `scripts/extract_motec_lap.py` / `lts.app.run_correlation` | Driver input replay and starting-state extraction for correlation |
 
 ### Powertrain Data Behavior
 
@@ -44,15 +44,15 @@ The current `stateLog` includes:
 - Tire channels: slip ratio, wheel angular velocity, tire longitudinal/lateral force.
 - Powertrain channels: drive force, motor RPM, motor torque, wheel torque, driven-wheel RPM, RPM limiter state.
 
-`TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)` writes this data to a CSV that follows the [`MotecLogGenerator`](https://github.com/stevendaniluk/MotecLogGenerator) CSV input requirements: the first column is time, remaining rows contain numeric samples, and channel headers include units using `Channel Name (unit)` when a unit is known. For example, motor RPM is written as `Engine RPM (rpm)`. Channels without a known unit are exported without a suffix and remain unitless. The exporter also adds convenience channels such as acceleration in g, fake GPS latitude/longitude in degrees, steering/camber/toe in degrees, damper positions in millimeters, slip ratios in percent, and wheel speeds in rpm.
+`lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, filepath)` writes this data to a CSV that follows the [`MotecLogGenerator`](https://github.com/stevendaniluk/MotecLogGenerator) CSV input requirements: the first column is time, remaining rows contain numeric samples, and channel headers include units using `Channel Name (unit)` when a unit is known. For example, motor RPM is written as `Engine RPM (rpm)`. Channels without a known unit are exported without a suffix and remain unitless. The exporter also adds convenience channels such as acceleration in g, fake GPS latitude/longitude in degrees, steering/camber/toe in degrees, damper positions in millimeters, slip ratios in percent, and wheel speeds in rpm.
 
-`TelemetryExporter.exportToMoTeCLog(stateLog, filepath)` writes the CSV and then invokes `external/MotecLogGenerator/motec_log_generator.py` to create a `.ld` file. The submodule writes MoTeC-compatible 8-byte display-unit fields and an M1/pro-enabled log header so i2 can use exported channels in math expressions with the correct quantities. `src/run_simulation.m` enables this by default and writes both `exports/motec_<track>_<timestamp>.csv` and `exports/motec_<track>_<timestamp>.ld`.
+`lts.telemetry.TelemetryExporter.exportToMoTeCLog(stateLog, filepath)` writes the CSV and then invokes `external/MotecLogGenerator/motec_log_generator.py` to create a `.ld` file. The submodule writes MoTeC-compatible 8-byte display-unit fields and an M1/pro-enabled log header so i2 can use exported channels in math expressions with the correct quantities. `src/+lts/+app/run_simulation.m` enables this by default and writes both `exports/motec_<track>_<timestamp>.csv` and `exports/motec_<track>_<timestamp>.ld`.
 
-Manual conversion is available from MATLAB through `TelemetryExporter`:
+Manual conversion is available from MATLAB through `lts.telemetry.TelemetryExporter`:
 
 ```matlab
 addpath('src')
-TelemetryExporter.convertCsvToMoTeCLog( ...
+lts.telemetry.TelemetryExporter.convertCsvToMoTeCLog( ...
     'exports/motec_autocross_20260616_153000.csv', 'Frequency', 1000)
 ```
 
@@ -65,7 +65,7 @@ python -m pip install cantools numpy
 
 ### Correlation Replay
 
-`run_correlation` adds the inverse path for correlation work:
+`lts.app.run_correlation` adds the inverse path for correlation work:
 
 1. `scripts/extract_motec_lap.py` reads a real `.ld` file through
    `external/MotecLogGenerator/ldparser`.
@@ -76,8 +76,9 @@ python -m pip install cantools numpy
    the normalized replay contract:
    `time_s`, `distance_m`, `throttle_ratio`, `brake_ratio`,
    `brake_pressure_front_bar`, `brake_pressure_rear_bar`, `steer_rad`, and
-   `speed_mps`, with optional yaw, GPS, course, and acceleration channels.
-   `run_correlation` defaults to `config/motec/r25_real_channel_map.json`,
+   `speed_mps`, with optional yaw, GPS, course, acceleration, and per-corner
+   wheel-speed channels.
+   `lts.app.run_correlation` defaults to `config/motec/r25_real_channel_map.json`,
    which applies the R25 real logger steering ratio/sign convention while
    preserving direct simulator-exported steering channels.
    If no direct brake pedal channel exists, `brake_ratio` is derived from
@@ -85,33 +86,36 @@ python -m pip install cantools numpy
    converts both channels to bar, sums front plus rear pressure, maps the peak
    combined pressure in the imported log/window to `1.0`, and scales every other
    sample by that same peak.
-   Passing `'BrakeMode', 'pressure'` to `run_correlation` uses the front and rear
+   Passing `'BrakeMode', 'pressure'` to `lts.app.run_correlation` uses the front and rear
    pressure columns directly with the vehicle brake-pressure calibration instead
    of the peak-normalized `brake_ratio`.
-4. `CorrelationReplayProfile` validates the normalized CSV and synthesizes
-   distance from speed when the log has no lap-distance channel.
-5. `CorrelationTrackAlignment` estimates the start station from GPS true course
+4. `lts.correlation.CorrelationReplayProfile` validates the normalized CSV and synthesizes
+   distance from speed when the log has no lap-distance channel. Initial-state
+   import seeds per-corner tire angular velocity from logged wheel speeds when
+   available; missing corners fall back to the median of the valid logged wheel
+   speeds at the first sample.
+5. `lts.correlation.CorrelationTrackAlignment` estimates the start station from GPS true course
    plus yaw-rate/lateral-G curvature shape, rebases closed tracks so the matched
    station is simulation `s = 0`, and strict preflight rejects large heading
    mismatches before the simulator runs.
-6. `TelemetryReplayDriver` feeds those measured controls into `Simulator.step`
+6. `lts.correlation.TelemetryReplayDriver` feeds those measured controls into `lts.simulation.Simulator.step`
    by distance or by time.
-7. `TelemetryExporter.exportToMoTeCLog` writes the simulated replay as a new
+7. `lts.telemetry.TelemetryExporter.exportToMoTeCLog` writes the simulated replay as a new
    `.csv` and `.ld` for direct comparison in MoTeC i2.
 
 Correlation-specific vehicle assumptions can be layered on top of the base car
-with `TuningFile` or `VehicleTuning`. This keeps `vehicles.R25` as the source
+with `TuningFile` or `VehicleTuning`. This keeps `lts.vehicles.R25` as the source
 vehicle and moves lap-specific drivetrain investigation into an overlay such as
-`src/+vehicles/R25_correlation_tuning.m`.
+`src/+lts/+vehicles/R25_correlation_tuning.m`.
 
 Example:
 
 ```matlab
 addpath('src')
-run_correlation( ...
+lts.app.run_correlation( ...
     'MoTeCFile', 'data/real_run.ld', ...
     'Lap', 4, ...
-    'VehicleConfig', @vehicles.R25, ...
+    'VehicleConfig', @lts.vehicles.R25, ...
     'TuningFile', 'R25_correlation_tuning', ...
     'Track', '2026enduro')
 ```
@@ -133,8 +137,9 @@ time/distance, not the simulated vehicle's projected reference-track station.
 | Class | Purpose | Status |
 |-------|---------|--------|
 | `TrackDataLoader` | Load GPS/cone CSV data, smooth curvature, generate racing line | Planned |
-| `TelemetryExporter` | Export `stateLog` to MotecLogGenerator CSV and convert to MoTeC `.ld` | Implemented |
-| `CorrelationReplayProfile` | Normalized real-lap replay profile with time/distance sampling | Implemented |
-| `CorrelationTrackAlignment` | Start-station estimation and closed-track rebasing for real-lap replay | Implemented |
-| `TelemetryReplayDriver` | Driver adapter that supplies measured inputs to `Simulator` | Implemented |
+| `lts.telemetry.TelemetryExporter` | Export `stateLog` to MotecLogGenerator CSV and convert to MoTeC `.ld` | Implemented |
+| `lts.correlation.CorrelationReplayProfile` | Normalized real-lap replay profile with time/distance sampling | Implemented |
+| `lts.correlation.CorrelationTrackAlignment` | Start-station estimation and closed-track rebasing for real-lap replay | Implemented |
+| `lts.correlation.TelemetryReplayDriver` | Driver adapter that supplies measured inputs to `lts.simulation.Simulator` | Implemented |
+| `lts.correlation.CorrelationAppSupport` | App-level loading, tuning, extraction command, and correlation preflight helpers | Implemented |
 | Generic aero map loader | Populate aero lookup tables from CFD data | Planned |

@@ -6,7 +6,7 @@ permalink: /physics-flow/
 
 ## Purpose
 
-This page documents the full simulation path: how a vehicle configuration becomes swappable component objects, how a driver or replay log produces commands, how each physics subsystem computes forces, and how those forces advance `VehicleState`.
+This page documents the full simulation path: how a vehicle configuration becomes swappable component objects, how a driver or replay log produces commands, how each physics subsystem computes forces, and how those forces advance `lts.simulation.VehicleState`.
 
 The most important design rule is that the car is integrated as a free planar rigid body. The track centerline is used for reference progress, surface mu, driver planning, and lateral-error telemetry. It does not kinematically force the car to follow the centerline.
 
@@ -31,50 +31,52 @@ The most important design rule is that the car is integrated as a free planar ri
 
 | Area | Main files | Role |
 |---|---|---|
-| Run scripts | `src/run_simulation.m`, `src/run_correlation.m`, `src/run_all.m` | Choose car/track/scenario, build the simulator, export outputs |
-| Vehicle setup | `src/VehicleConfig.m`, `src/VehicleManager.m`, `src/+vehicles/*.m` | Store physical parameters, construct components, warm up suspension/chassis |
-| State | `src/VehicleState.m` | Hold planar state, attitude telemetry, controls, and reference projection |
-| Simulation loop | `src/Simulator.m` | Own timestep loop, force assembly, wheel-contact solve, state integration, replay policies, telemetry |
-| Driver | `src/DriverInputPlanner.m`, `src/DriverModel.m` | Build speed/pedal/steer plan and add closed-loop path corrections |
-| Replay/correlation | `src/TelemetryReplayDriver.m`, `src/CorrelationReplayProfile.m`, `src/CorrelationStateInitializer.m`, `src/CorrelationTrackAlignment.m` | Normalize logged controls and initial state, then replay them through the same physics |
-| Track geometry | `src/+components/Track.m`, `src/+components/WaypointTrack.m`, `src/+components/TestTrack.m` | Provide centerline points, curvature, heading, width, mu, procedural tracks |
-| Aero | `src/+components/+Aero/*.m` | Compute quadratic downforce and drag, resolve aero loads to axles |
-| Chassis | `src/+components/+Chassis/*.m` | Integrate sprung-mass heave, pitch, roll, and torsional twist |
-| Suspension | `src/+components/+Suspension/*.m` | Convert chassis motion/load-transfer demand into per-corner tire normal loads and kinematics |
-| Tires | `src/+components/+Tire/*.m` | Compute slip, wheel rotation, Magic Formula forces, relaxation lag, and peak mu |
-| Powertrain | `src/+components/+Powertrain/*.m` | Compute motor/wheel torque, motor RPM, coastdown/regen, and differential torque split |
-| Telemetry and plots | `src/TelemetryExporter.m`, `src/GraphPlotter.m` | Export MoTeC-compatible logs and visualize state channels |
+| App entry points | `src/+lts/+app/run_simulation.m`, `src/+lts/+app/run_correlation.m`, `src/+lts/+app/run_all.m` | Choose car/track/scenario, build the simulator, export outputs |
+| Vehicle setup | `src/+lts/+vehicle/VehicleConfig.m`, `src/+lts/+vehicle/VehicleManager.m`, `src/+lts/+vehicles/*.m` | Store physical parameters, construct components, warm up suspension/chassis |
+| State | `src/+lts/+simulation/VehicleState.m` | Hold planar state, attitude telemetry, controls, and reference projection |
+| Simulation loop | `src/+lts/+simulation/Simulator.m` | Own timestep loop, force assembly, wheel-contact solve, state integration, replay policies, telemetry |
+| Simulation helpers | `src/+lts/+simulation/BrakeForcePolicy.m`, `DrivelineSupport.m`, `TelemetryWindow.m`, `TrackReference.m` | Keep braking, driveline, telemetry-window, and track-reference policies out of the main loop |
+| Driver | `src/+lts/+driver/DriverInputPlanner.m`, `src/+lts/+driver/DriverModel.m` | Build speed/pedal/steer plan and add closed-loop path corrections |
+| Replay/correlation | `src/+lts/+correlation/TelemetryReplayDriver.m`, `CorrelationReplayProfile.m`, `CorrelationStateInitializer.m`, `CorrelationTrackAlignment.m`, `CorrelationAppSupport.m` | Normalize logged controls and initial state, run correlation preflight, then replay measured inputs through the same physics |
+| Track geometry | `src/+lts/+components/Track.m`, `WaypointTrack.m`, `TestTrack.m` | Provide centerline points, curvature, heading, width, mu, procedural tracks |
+| Aero | `src/+lts/+components/+Aero/*.m` | Compute quadratic downforce and drag, resolve aero loads to axles |
+| Chassis | `src/+lts/+components/+Chassis/*.m` | Integrate sprung-mass heave, pitch, roll, and torsional twist |
+| Suspension | `src/+lts/+components/+Suspension/*.m` | Convert chassis motion/load-transfer demand into per-corner tire normal loads and kinematics |
+| Tires | `src/+lts/+components/+Tire/*.m` | Compute slip, wheel rotation, Magic Formula forces, relaxation lag, and peak mu |
+| Powertrain | `src/+lts/+components/+Powertrain/*.m` | Compute motor/wheel torque, motor RPM, coastdown/regen, and differential torque split |
+| Utilities | `src/+lts/+util/*.m` | Shared struct defaults, recursive merge, shell quoting, finite min/max, state fallback, and repo-root helpers |
+| Telemetry and plots | `src/+lts/+telemetry/TelemetryExporter.m`, `GraphPlotter.m` | Export MoTeC-compatible logs and visualize state channels |
 
 ## Top-Level Flow
 
-`run_simulation.m` is the normal synthetic-lap entry point.
+`lts.app.run_simulation` is the normal synthetic-lap entry point.
 
-1. Select a `trackType` and vehicle config such as `vehicles.R25()`.
-2. Build a `components.TestTrack` or load a `components.WaypointTrack`.
-3. Call `VehicleManager.fromConfig(config, track, dt)`.
-4. Build `DriverModel(vehicle)` and `Simulator(vehicle, driver, dt)`.
-5. Create an initial `VehicleState`.
+1. Select a `trackType` and vehicle config such as `lts.vehicles.R25()`.
+2. Build a `lts.components.TestTrack` or load a `lts.components.WaypointTrack`.
+3. Call `lts.vehicle.VehicleManager.fromConfig(config, track, dt)`.
+4. Build `lts.driver.DriverModel(vehicle)` and `lts.simulation.Simulator(vehicle, driver, dt)`.
+5. Create an initial `lts.simulation.VehicleState`.
 6. Run `simulator.simulate(initialState, track)`.
 7. Export MoTeC CSV/LD and optionally plot telemetry.
 
-`run_correlation.m` follows the same physics path after replacing the driver with measured controls:
+`lts.app.run_correlation` follows the same physics path after replacing the driver with measured controls:
 
 1. Extract or read a normalized replay CSV.
-2. Build `CorrelationReplayProfile`.
-3. Build the vehicle and a measured initial `VehicleState`.
-4. Run `Simulator.simulateReplay(...)`.
-5. `TelemetryReplayDriver` samples logged throttle, brake, brake pressure, and steer by time or distance.
+2. Build `lts.correlation.CorrelationReplayProfile`.
+3. Build the vehicle and a measured initial `lts.simulation.VehicleState`.
+4. Run `lts.simulation.Simulator.simulateReplay(...)`.
+5. `lts.correlation.TelemetryReplayDriver` samples logged throttle, brake, brake pressure, and steer by time or distance.
 
 ## Vehicle Construction
 
-`VehicleConfig` is a value object containing all tunable car physics parameters: mass, geometry, aero map, suspension tables, chassis stiffness, powertrain map, differential type, tire data, and brake calibration.
+`lts.vehicle.VehicleConfig` is a value object containing all tunable car physics parameters: mass, geometry, aero map, suspension tables, chassis stiffness, powertrain map, differential type, tire data, and brake calibration.
 
-`VehicleManager.fromConfig` turns that configuration into live component objects:
+`lts.vehicle.VehicleManager.fromConfig` turns that configuration into live component objects:
 
 1. `WholeCarAero` from `cfg.aero`.
 2. `EMRAX228Powertrain` from the EMRAX `.mat` map and drivetrain settings.
 3. `PacejkaTire` from the `.tir` file, with one `TireState` per corner.
-4. `VehicleManager` itself, which stores global constants such as mass, wheelbase, CG height, brake bias, and gravity.
+4. `lts.vehicle.VehicleManager` itself, which stores global constants such as mass, wheelbase, CG height, brake bias, and gravity.
 5. `SuspensionGeometry`, anti-roll bars, and `SuspensionManager`.
 6. Suspension warmup to static tire loads.
 7. `SimpleChassis`, settled at static equilibrium and linked back to suspension.
@@ -86,7 +88,7 @@ This construction order matters because suspension geometry needs vehicle dimens
 
 The driver is not part of the vehicle physics. It decides requested inputs.
 
-`DriverInputPlanner.buildOpenLoopProfile` creates a distance-indexed plan:
+`lts.driver.DriverInputPlanner.buildOpenLoopProfile` creates a distance-indexed plan:
 
 1. It computes a racing-line offset where enabled.
 2. It estimates lateral speed limits from curvature:
@@ -107,7 +109,7 @@ The driver is not part of the vehicle physics. It decides requested inputs.
 
 6. It applies a traction-circle cap, reducing throttle/brake as lateral demand uses more tire grip.
 
-`DriverModel.computeInput` samples that plan and adds closed-loop corrections:
+`lts.driver.DriverModel.computeInput` samples that plan and adds closed-loop corrections:
 
 - Stanley-style cross-track correction.
 - Heading correction.
@@ -115,9 +117,9 @@ The driver is not part of the vehicle physics. It decides requested inputs.
 - Pedal and steering slew limits.
 - Optional drive-slip throttle reduction, which behaves like simple traction control by reducing requested throttle before the physics step.
 
-## One `Simulator.step`
+## One `lts.simulation.Simulator.step`
 
-`Simulator.step(state, input, ref)` is the core physics transition. It returns a new `VehicleState` plus a force/telemetry struct.
+`lts.simulation.Simulator.step(state, input, ref)` is the core physics transition. It returns a new `lts.simulation.VehicleState` plus a force/telemetry struct.
 
 ### 1. Normalize Driver Inputs
 
@@ -145,7 +147,7 @@ Drag is applied later opposite the actual body velocity vector, including sidesl
 
 ### 3. Compute Tire Normal Loads
 
-With a chassis attached, `Simulator` asks:
+With a chassis attached, `lts.simulation.Simulator` asks:
 
 ```text
 SuspensionManager.computeCornerLoadsFromChassis(chassis, steer, dt)
@@ -192,7 +194,7 @@ At or above the RPM limit, positive drive torque is cut. Optional coastdown and 
 
 ### 5. Split Torque Through The Differential
 
-`Simulator.solveDifferential` returns per-wheel rear torque and carrier speed.
+`lts.simulation.Simulator.solveDifferential` returns per-wheel rear torque and carrier speed.
 
 - `OpenDifferential`: 50/50 torque split, carrier speed is mean wheel speed.
 - `LockedDifferential`: 50/50 torque split, then the simulator overwrites both rear wheel speeds to the common carrier speed.
@@ -321,9 +323,9 @@ Rolling resistance is already included as a wheel torque and therefore appears t
 
 ### 10. Integrate Planar State
 
-`Simulator` integrates yaw rate, yaw angle, world velocity, body velocity, and position. It uses a midpoint yaw for body/world transforms so acceleration projection and velocity reprojection use the same orientation over the step.
+`lts.simulation.Simulator` integrates yaw rate, yaw angle, world velocity, body velocity, and position. It uses a midpoint yaw for body/world transforms so acceleration projection and velocity reprojection use the same orientation over the step.
 
-`VehicleState.updateFromPlanarDynamics` commits:
+`lts.simulation.VehicleState.updateFromPlanarDynamics` commits:
 
 - `vx`, `vy`, `speed`,
 - `yawRate`, `yaw`, `yawAccel`,
@@ -409,10 +411,10 @@ Lean telemetry keeps only the hot-path channels used for profiling.
 Correlation replay is intentionally a free-space input replay by default.
 
 1. `scripts/extract_motec_lap.py` or a provided CSV normalizes logged channels.
-2. `CorrelationReplayProfile` validates and interpolates time, distance, throttle, brake, pressure, steer, speed, and optional yaw/position/acceleration channels.
-3. `CorrelationStateInitializer` seeds `VehicleState` from logged speed, velocity/body slip, yaw, yaw rate, and position when present.
-4. `Simulator.simulateReplay` temporarily installs `TelemetryReplayDriver`, replay brake mode, replay stop conditions, and free/track reference mode.
-5. The same `Simulator.step` handles aero, suspension, tires, powertrain, differential, brakes, and state integration.
+2. `lts.correlation.CorrelationReplayProfile` validates and interpolates time, distance, throttle, brake, pressure, steer, speed, and optional yaw/position/acceleration channels.
+3. `lts.correlation.CorrelationStateInitializer` seeds `lts.simulation.VehicleState` from logged speed, velocity/body slip, yaw, yaw rate, and position when present.
+4. `lts.simulation.Simulator.simulateReplay` temporarily installs `lts.correlation.TelemetryReplayDriver`, replay brake mode, replay stop conditions, and free/track reference mode.
+5. The same `lts.simulation.Simulator.step` handles aero, suspension, tires, powertrain, differential, brakes, and state integration.
 
 This means correlation overlays answer: "What path and acceleration does this vehicle model produce when driven with the logged controls?" They do not force the simulated car to match logged GPS.
 
@@ -430,13 +432,13 @@ This means correlation overlays answer: "What path and acceleration does this ve
 
 ## Reading The Code By Physics Topic
 
-Start with `Simulator.step` for the full force path. Then read:
+Start with `lts.simulation.Simulator.step` for the full force path. Then read:
 
-- Aero equations: `src/+components/+Aero/WholeCarAero.m` and `AeroComponent.m`.
+- Aero equations: `src/+lts/+components/+Aero/WholeCarAero.m` and `AeroComponent.m`.
 - Load transfer and suspension kinematics: `SuspensionManager.m`, `SimpleSuspension.m`, `SuspensionGeometry.m`.
 - Chassis attitude: `SimpleChassis.m` and `ChassisState.m`.
 - Wheel slip and tire forces: `PacejkaTire.m` and `TireState.m`.
 - Motor torque and differentials: `EMRAX228Powertrain.m`, `DifferentialComponent.m`, and the concrete differential files.
-- Driver targets: `DriverInputPlanner.m` and `DriverModel.m`.
-- Track reference and projection: `Track.m`, `WaypointTrack.m`, and `Simulator.projectToReference`.
-- Replay: `run_correlation.m`, `CorrelationReplayProfile.m`, and `TelemetryReplayDriver.m`.
+- Driver targets: `lts.driver.DriverInputPlanner.m` and `lts.driver.DriverModel.m`.
+- Track reference and projection: `Track.m`, `WaypointTrack.m`, and `lts.simulation.TrackReference`.
+- Replay: `src/+lts/+app/run_correlation.m`, `lts.correlation.CorrelationReplayProfile.m`, and `lts.correlation.TelemetryReplayDriver.m`.

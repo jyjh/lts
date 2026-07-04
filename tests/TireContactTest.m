@@ -120,5 +120,5 @@ verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
 end
 
 function tire = createPacejkaTire()
-tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 end

@@ -1,13 +1,13 @@
 sequenceDiagram
-    participant App as run_simulation.m
-    participant Sim as Simulator
-    participant VM as VehicleManager
-    participant DM as DriverModel
-    participant State as VehicleState
-    participant Aero as AeroManager
-    participant Susp as SuspensionManager
-    participant PT as PowertrainComponent
-    participant Tire as TireModel
+    participant App as lts.app.run_simulation
+    participant Sim as lts.simulation.Simulator
+    participant VM as lts.vehicle.VehicleManager
+    participant DM as lts.driver.DriverModel
+    participant State as lts.simulation.VehicleState
+    participant Aero as lts.components.Aero.AeroManager
+    participant Susp as lts.components.Suspension.SuspensionManager
+    participant PT as lts.components.Powertrain.PowertrainComponent
+    participant Tire as lts.components.Tire.TireModel
 
     App->>Sim: simulate(initialState, track)
 

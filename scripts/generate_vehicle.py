@@ -3,11 +3,11 @@
 generate_vehicle.py  --  FSAE EV Design Spec Sheet -> MATLAB vehicle config
 
 Parses an FSAE (EV) Design Spec Sheet CSV (the format is stable year-to-year)
-and emits a MATLAB vehicle file under src/+vehicles/<Name>.m, structured
-exactly like the reference configs (vehicles.baseline / VehicleConfig).
+and emits a MATLAB vehicle file under src/+lts/+vehicles/<Name>.m, structured
+exactly like the reference configs (lts.vehicles.baseline / lts.vehicle.VehicleConfig).
 
 The generated file:
-  * instantiates VehicleConfig() (so every field has a sane default), then
+  * instantiates lts.vehicle.VehicleConfig() (so every field has a sane default), then
   * overrides every field the spec sheet can speak to, and
   * annotates each field with its provenance:
         [CSV r8: 1558 mm]                 -> direct mapping (real value)
@@ -641,7 +641,7 @@ def build_matlab(name, s):
     A("    %")
     A("    % Units: SI throughout (m, kg, N, s, rad, Pa).")
     A("")
-    A("    cfg = VehicleConfig();")
+    A("    cfg = lts.vehicle.VehicleConfig();")
     A("")
 
     # ---- vehicle-level constants ---------------------------------------
@@ -871,7 +871,7 @@ def build_matlab(name, s):
         A("        'matFile', '', ...")
         A("        'efficiency', 0.92, ...          % [not in spec sheet] [0-1]")
         A("        'differential', struct('type', 'lsd'));  % " + diff_c)
-        A("    % TODO lsd params: VehicleManager.def supplies preload/ramp/")
+        A("    % TODO lsd params: lts.vehicle.VehicleManager.def supplies preload/ramp/")
         A("    % speedGain/biasRatio defaults if omitted; set explicitly if known.")
     else:
         A("    cfg.powertrain = struct( ...")
@@ -928,7 +928,7 @@ def print_report(s, name, out_path):
     else:
         print("  (none)")
 
-    print("\nUNMAPPED  (present in the spec sheet, no field in VehicleConfig):\n")
+    print("\nUNMAPPED  (present in the spec sheet, no field in lts.vehicle.VehicleConfig):\n")
     for label, ref in s.unmapped:
         print(f"  [{ref:8s}] {label}")
 
@@ -938,7 +938,7 @@ def print_report(s, name, out_path):
 
     print("\n" + bar)
     print("  Next steps: review the TODOs above, then reference the car with")
-    print(f"    config = vehicles.{name}();   in run_simulation.m")
+    print(f"    config = lts.vehicles.{name}();   in src/+lts/+app/run_simulation.m")
     print(bar)
 
 
@@ -947,10 +947,10 @@ def print_report(s, name, out_path):
 # ---------------------------------------------------------------------------
 
 def find_repo_root():
-    """Walk up from this script to find the dir containing src/+vehicles."""
+    """Walk up from this script to find the dir containing src/+lts/+vehicles."""
     here = Path(__file__).resolve().parent
     for cand in [here, *here.parents]:
-        if (cand / "src" / "+vehicles").is_dir():
+        if (cand / "src" / "+lts" / "+vehicles").is_dir():
             return cand
     return None
 
@@ -968,12 +968,12 @@ def main(argv=None):
         description="Parse an FSAE EV spec sheet CSV into a MATLAB vehicle config.")
     p.add_argument("csv", help="Path to the FSAE Design Spec Sheet CSV.")
     p.add_argument("--name", default="generated",
-                   help="Vehicle/function name (-> src/+vehicles/<Name>.m). "
+                   help="Vehicle/function name (-> src/+lts/+vehicles/<Name>.m). "
                         "Must be a valid MATLAB identifier.")
     p.add_argument("--driver-mass", type=float, default=68.0,
                    help="Driver mass [kg] added to car mass for totalMass (default 68).")
     p.add_argument("--output", default=None,
-                   help="Output .m path (default: src/+vehicles/<Name>.m).")
+                   help="Output .m path (default: src/+lts/+vehicles/<Name>.m).")
     p.add_argument("--force", action="store_true",
                    help="Overwrite an existing output file.")
     p.add_argument("--dry-run", action="store_true",
@@ -995,7 +995,7 @@ def main(argv=None):
         out_path = Path(args.output)
     else:
         root = find_repo_root() or Path.cwd()
-        out_path = root / "src" / "+vehicles" / f"{name}.m"
+        out_path = root / "src" / "+lts" / "+vehicles" / f"{name}.m"
 
     print_report(s, name, out_path)
 

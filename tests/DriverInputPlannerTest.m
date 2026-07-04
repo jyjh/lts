@@ -3,7 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testConstantSpeedProfileCoastsAtTarget(testCase)
-planner = DriverInputPlanner([], 0.6);
+planner = lts.driver.DriverInputPlanner([], 0.6);
 profile = createConstantSpeedProfile(1, 0);
 
 input = planner.sampleAtProgress(profile, 0.5, 10.0);
@@ -13,7 +13,7 @@ verifyEqual(testCase, input.brake, 0, 'AbsTol', 1e-12);
 end
 
 function testUnderspeedUsesPartialThrottleWithoutBrake(testCase)
-planner = DriverInputPlanner([], 0.6);
+planner = lts.driver.DriverInputPlanner([], 0.6);
 profile = createConstantSpeedProfile(0, 0);
 
 input = planner.sampleAtProgress(profile, 0.5, 9.5);
@@ -24,7 +24,7 @@ verifyEqual(testCase, input.brake, 0, 'AbsTol', 1e-12);
 end
 
 function testOverspeedUsesBrakeAndClearsThrottle(testCase)
-planner = DriverInputPlanner([], 0.6);
+planner = lts.driver.DriverInputPlanner([], 0.6);
 profile = createConstantSpeedProfile(1, 0);
 
 input = planner.sampleAtProgress(profile, 0.5, 10.7);
@@ -35,7 +35,7 @@ verifyLessThan(testCase, input.brake, 1);
 end
 
 function testModestSpeedErrorsDoNotForceFullPedals(testCase)
-planner = DriverInputPlanner([], 0.6);
+planner = lts.driver.DriverInputPlanner([], 0.6);
 profile = createConstantSpeedProfile(0, 0);
 
 underSpeed = planner.sampleAtProgress(profile, 0.5, 8.8);
@@ -59,7 +59,7 @@ verifyGreaterThan(testCase, mean(highProfile.throttle), mean(lowProfile.throttle
 end
 
 function testRacingLineUsesOutsideApexOutsideOnNinetyTurn(testCase)
-[profile, trackData, vehicle] = createPlannedProfile(components.TestTrack('90turn'));
+[profile, trackData, vehicle] = createPlannedProfile(lts.components.TestTrack('90turn'));
 [iStart, iEnd] = findCornerSegment(trackData.curvature, 1);
 iEntry = min(iStart + 4, iEnd);
 iApex = round((iStart + iEnd) / 2);
@@ -74,7 +74,7 @@ verifyLessThanOrEqual(testCase, max(abs(offset)), ...
 end
 
 function testRacingLineHandlesLeftAndRightCorners(testCase)
-[profile, trackData, ~] = createPlannedProfile(components.TestTrack('busstop'));
+[profile, trackData, ~] = createPlannedProfile(lts.components.TestTrack('busstop'));
 [leftStart, leftEnd] = findCornerSegment(trackData.curvature, 1);
 [rightStart, rightEnd] = findCornerSegment(trackData.curvature, -1);
 leftApex = round((leftStart + leftEnd) / 2);
@@ -88,7 +88,7 @@ verifyLessThan(testCase, offset(rightApex), -0.05);
 end
 
 function testSlalomRacingLineOffsetIsSmooth(testCase)
-[profile, ~, ~] = createPlannedProfile(components.TestTrack('slalom'));
+[profile, ~, ~] = createPlannedProfile(lts.components.TestTrack('slalom'));
 
 offsetStep = abs(diff(profile.targetLateralError));
 verifyLessThan(testCase, max(offsetStep), 0.20);
@@ -97,7 +97,7 @@ end
 
 function testEnduranceProfileHasBoundedLongitudinalReference(testCase)
 repoRoot = fileparts(fileparts(mfilename('fullpath')));
-track = components.WaypointTrack.loadMat( ...
+track = lts.components.WaypointTrack.loadMat( ...
     fullfile(repoRoot, 'tracks', ...
     'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
 track.Width = 5.0;
@@ -111,7 +111,7 @@ end
 
 % ============================================================
 % Physics-based pedal map (computePedals) unit tests.
-% Pure function — no VehicleManager required. Each test pins one
+% Pure function — no lts.vehicle.VehicleManager required. Each test pins one
 % regime: WOT, partial/cruise throttle, true coast, gradual brake,
 % full brake, and pedal exclusivity.
 % ============================================================
@@ -122,7 +122,7 @@ mass = 256;
 F_drive_full = 3000;     % [N]
 F_resistance = 300;      % drag + rolling [N]
 axRef = 15;              % large positive -> F_req = 15*256 + 300 >> 3000
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     axRef, F_drive_full, F_resistance, mass, 10);
 verifyEqual(testCase, throttle, 1, 'AbsTol', 1e-9);
 verifyEqual(testCase, brake, 0, 'AbsTol', 1e-12);
@@ -134,7 +134,7 @@ mass = 256;
 F_drive_full = 3000;
 F_resistance = 300;
 axRef = 0;
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     axRef, F_drive_full, F_resistance, mass, 10);
 verifyGreaterThan(testCase, throttle, 0);
 verifyLessThan(testCase, throttle, 1);
@@ -148,7 +148,7 @@ mass = 256;
 F_resistance = 300;
 coastDecel = F_resistance / mass;   % ~1.17 m/s^2
 axRef = -coastDecel;                % exactly covered by drag
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     axRef, 3000, F_resistance, mass, 10);
 verifyEqual(testCase, throttle, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, brake, 0, 'AbsTol', 1e-9);
@@ -162,7 +162,7 @@ F_resistance = 300;
 F_drive_full = 3000;
 % F_req just above 0 but below 3% of full-scale -> throttle < coastFraction.
 axRef = -F_resistance/mass + 0.001;   % F_req = 0.001*mass, tiny positive
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     axRef, F_drive_full, F_resistance, mass, 12);
 verifyEqual(testCase, throttle, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, brake, 0, 'AbsTol', 1e-12);
@@ -176,7 +176,7 @@ brakeForceAccel = 12;               % decel per unit brake [m/s^2]
 coastDecel = F_resistance / mass;
 requiredDecel = coastDecel + 3;     % 3 m/s^2 beyond coast
 axRef = -requiredDecel;
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     axRef, 3000, F_resistance, mass, brakeForceAccel);
 verifyEqual(testCase, throttle, 0, 'AbsTol', 1e-12);
 verifyGreaterThan(testCase, brake, 0);
@@ -187,7 +187,7 @@ end
 function testComputePedalsFullBrakeClampsToOne(testCase)
 % Huge required decel -> brake saturates at 1 (no >1 overshoot).
 mass = 256;
-[throttle, brake] = DriverInputPlanner.computePedals( ...
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
     -100, 3000, 300, mass, 12);
 verifyEqual(testCase, throttle, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, brake, 1, 'AbsTol', 1e-9);
@@ -198,7 +198,7 @@ function testComputePedalsNeverAppliesBothPedals(testCase)
 mass = 256;
 axRefs = linspace(-20, 20, 51);
 for k = 1:numel(axRefs)
-    [throttle, brake] = DriverInputPlanner.computePedals( ...
+    [throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
         axRefs(k), 3000, 300, mass, 12);
     verifyLessThanOrEqual(testCase, min(throttle, brake), 0);
     verifyLessThanOrEqual(testCase, throttle, 1 + 1e-12);
@@ -221,24 +221,24 @@ end
 
 function [profile, trackData, vehicle] = createPlannedProfile(track)
 dt = 0.001;
-vehicle = VehicleManager.fromConfig(vehicles.baseline(), track, dt);
-driver = DriverModel(vehicle);
-planner = DriverInputPlanner(vehicle, driver);
-initialState = VehicleState('s', 0, 'speed', 0.1);
+vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.baseline(), track, dt);
+driver = lts.driver.DriverModel(vehicle);
+planner = lts.driver.DriverInputPlanner(vehicle, driver);
+initialState = lts.simulation.VehicleState('s', 0, 'speed', 0.1);
 initialState.vehicleManager = vehicle;
 trackData = createTrackData(track);
 profile = planner.buildOpenLoopProfile(initialState, trackData);
 end
 
 function profile = createStraightProfileWithCrr(crr)
-config = vehicles.baseline();
+config = lts.vehicles.baseline();
 config.maxSpeed = 10;
 config.tire.rollingResistanceCoeff = crr;
-track = components.TestTrack('straight10');
-vehicle = VehicleManager.fromConfig(config, track, 0.001);
-driver = DriverModel(vehicle);
-planner = DriverInputPlanner(vehicle, driver);
-initialState = VehicleState('s', 0, 'speed', 10);
+track = lts.components.TestTrack('straight10');
+vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, 0.001);
+driver = lts.driver.DriverModel(vehicle);
+planner = lts.driver.DriverInputPlanner(vehicle, driver);
+initialState = lts.simulation.VehicleState('s', 0, 'speed', 10);
 initialState.vehicleManager = vehicle;
 profile = planner.buildOpenLoopProfile(initialState, createTrackData(track));
 end

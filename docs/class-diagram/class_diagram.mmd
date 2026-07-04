@@ -1,15 +1,39 @@
 classDiagram
     direction TB
 
-    class Simulator {
+    class lts.simulation.Simulator {
         +vehicleManager
         +driverModel
         +dt
-        +step(state, throttle, brake, curKappa, curMu, curHeading)
+        +step(state, input, ref)
         +simulate(initialState, track)
+        +simulateReplay(initialState, profile)
     }
 
-    class VehicleManager {
+    class lts.simulation.BrakeForcePolicy {
+        +compute(vehicle, cornerLoads, brakeInput, mode)$
+        +validateMode(mode)$
+    }
+
+    class lts.simulation.DrivelineSupport {
+        +getWheelInertia(vehicle)$
+        +solveDifferential(vehicle, wheelOmega, totalTorque)$
+        +initializeWheelSpeeds(vehicle, state)$
+    }
+
+    class lts.simulation.TelemetryWindow {
+        +applyLapWindow(log, track)$
+        +computeTrimDiagnostics(log)$
+    }
+
+    class lts.simulation.TrackReference {
+        +precomputeSegments(track)$
+        +repeatClosedTrack(track, warmupLaps, recordedLaps)$
+        +getWarmupLaps(track)$
+        +getRecordedLaps(track)$
+    }
+
+    class lts.vehicle.VehicleManager {
         +aero
         +suspension
         +powertrain
@@ -23,14 +47,14 @@ classDiagram
         +maxSpeed
     }
 
-    class DriverModel {
+    class lts.driver.DriverModel {
         +vehicleManager
         +lookaheadTime
         +brakingLookahead
         +computeInputs(state)
     }
 
-    class VehicleState {
+    class lts.simulation.VehicleState {
         +vehicleManager
         +s
         +speed
@@ -46,7 +70,7 @@ classDiagram
         +toLogStruct()
     }
 
-    class AeroComponent {
+    class lts.components.Aero.AeroComponent {
         <<abstract>>
         +name
         +xPosition
@@ -59,43 +83,43 @@ classDiagram
         +computeEffectiveHeight(vehicleState)
     }
 
-    class AeroManager {
+    class lts.components.Aero.AeroManager {
         +components
         +addComponent(aeroComp)
         +removeComponent(name)
         +computeForces(vehicleState)
     }
 
-    class WholeCarAero {
+    class lts.components.Aero.WholeCarAero {
         +computeDownforce(vehicleState)
         +computeDrag(vehicleState)
     }
 
-    class FrontWing {
+    class lts.components.Aero.FrontWing {
         +heightSensitivity
         +computeDownforce(vehicleState)
         +computeDrag(vehicleState)
     }
 
-    class RearWing {
+    class lts.components.Aero.RearWing {
         +heightSensitivity
         +computeDownforce(vehicleState)
         +computeDrag(vehicleState)
     }
 
-    class UnderbodyFloor {
+    class lts.components.Aero.UnderbodyFloor {
         +stallHeight
         +heightExponent
         +computeDownforce(vehicleState)
         +computeDrag(vehicleState)
     }
 
-    class SuspensionComponent {
+    class lts.components.Suspension.SuspensionComponent {
         <<abstract>>
         +computeCornerLoads(state, FzFront, FzRear, totalMass, dt)*
     }
 
-    class SuspensionManager {
+    class lts.components.Suspension.SuspensionManager {
         +frontLeft
         +frontRight
         +rearLeft
@@ -106,7 +130,7 @@ classDiagram
         +computePitchAngle()
     }
 
-    class SimpleSuspension {
+    class lts.components.Suspension.SimpleSuspension {
         +springRate
         +dampingCoeff
         +reboundCoeff
@@ -118,7 +142,7 @@ classDiagram
         +updateCorner(cornerState, demandedLoad, dt)
     }
 
-    class SuspensionState {
+    class lts.components.Suspension.SuspensionState {
         +damperPosition
         +damperVelocity
         +tireDeflection
@@ -127,7 +151,7 @@ classDiagram
         +reset()
     }
 
-    class PowertrainComponent {
+    class lts.components.Powertrain.PowertrainComponent {
         <<abstract>>
         +computeDriveForce(speed, throttle)*
         +getMaxTorque(engineSpeed)*
@@ -135,7 +159,7 @@ classDiagram
         +getDrivetrainEfficiency()*
     }
 
-    class EMRAX228Powertrain {
+    class lts.components.Powertrain.EMRAX228Powertrain {
         +state
         +motorRPMCurve
         +tractiveForceCurveN
@@ -147,7 +171,7 @@ classDiagram
         +limitDrivenWheelAngularVelocity(omega)
     }
 
-    class PowertrainState {
+    class lts.components.Powertrain.PowertrainState {
         +drivenWheelAngularVelocity
         +drivenWheelRPM
         +motorAngularVelocity
@@ -161,14 +185,14 @@ classDiagram
         +reset()
     }
 
-    class TireModel {
+    class lts.components.Tire.TireModel {
         <<abstract>>
         +computeLateralForce(normalLoad, slipAngle, mu)*
         +computeLongitudinalForce(normalLoad, slipRatio, mu)*
         +getPeakFriction(normalLoad)*
     }
 
-    class PacejkaTire {
+    class lts.components.Tire.PacejkaTire {
         +tireConstants
         +FL
         +FR
@@ -179,7 +203,7 @@ classDiagram
         +updateAllFromState(state, vehicleManager, cornerLoads, mu)
     }
 
-    class TireState {
+    class lts.components.Tire.TireState {
         +normalForce
         +slipAngle
         +slipRatio
@@ -190,14 +214,14 @@ classDiagram
         +reset()
     }
 
-    class TireConstants {
+    class lts.components.Tire.TireConstants {
         +params
         +nomLoad
         +nomPressure
         +refVelocity
     }
 
-    class Track {
+    class lts.components.Track {
         <<abstract>>
         +getTrackPoints()*
         +getCurvature()*
@@ -214,7 +238,7 @@ classDiagram
         +cleanPoints(points, closed)$
     }
 
-    class WaypointTrack {
+    class lts.components.WaypointTrack {
         +Points
         +Width
         +Mu
@@ -233,7 +257,7 @@ classDiagram
         +fromCsv(fileName)$
     }
 
-    class TestTrack {
+    class lts.components.TestTrack {
         +warmupLaps
         +recordedLaps
         +isClosedLoop()
@@ -241,7 +265,7 @@ classDiagram
         +getRecordedLaps()
     }
 
-    class GraphPlotter {
+    class lts.telemetry.GraphPlotter {
         +plotAll(stateLog, lapTime, track, vehicle, aero)$
         +plotAero(stateLog, vehicle, aero)$
         +plotSuspension(stateLog, vehicle)$
@@ -249,29 +273,33 @@ classDiagram
         +plotPowertrain(stateLog, vehicle)$
     }
 
-    AeroComponent <|-- AeroManager
-    AeroComponent <|-- WholeCarAero
-    AeroComponent <|-- FrontWing
-    AeroComponent <|-- RearWing
-    AeroComponent <|-- UnderbodyFloor
-    SuspensionComponent <|-- SuspensionManager
-    PowertrainComponent <|-- EMRAX228Powertrain
-    TireModel <|-- PacejkaTire
-    Track <|-- WaypointTrack
-    WaypointTrack <|-- TestTrack
+    lts.components.Aero.AeroComponent <|-- lts.components.Aero.AeroManager
+    lts.components.Aero.AeroComponent <|-- lts.components.Aero.WholeCarAero
+    lts.components.Aero.AeroComponent <|-- lts.components.Aero.FrontWing
+    lts.components.Aero.AeroComponent <|-- lts.components.Aero.RearWing
+    lts.components.Aero.AeroComponent <|-- lts.components.Aero.UnderbodyFloor
+    lts.components.Suspension.SuspensionComponent <|-- lts.components.Suspension.SuspensionManager
+    lts.components.Powertrain.PowertrainComponent <|-- lts.components.Powertrain.EMRAX228Powertrain
+    lts.components.Tire.TireModel <|-- lts.components.Tire.PacejkaTire
+    lts.components.Track <|-- lts.components.WaypointTrack
+    lts.components.WaypointTrack <|-- lts.components.TestTrack
 
-    Simulator *-- VehicleManager : vehicleManager
-    Simulator *-- DriverModel : driverModel
-    VehicleManager *-- AeroComponent : aero
-    VehicleManager *-- SuspensionManager : suspension
-    VehicleManager *-- PowertrainComponent : powertrain
-    VehicleManager *-- TireModel : tire
-    VehicleManager *-- Track : track
-    VehicleState --> VehicleManager : vehicleManager
+    lts.simulation.Simulator *-- lts.vehicle.VehicleManager : vehicleManager
+    lts.simulation.Simulator *-- lts.driver.DriverModel : driverModel
+    lts.simulation.Simulator ..> lts.simulation.BrakeForcePolicy : brake policy
+    lts.simulation.Simulator ..> lts.simulation.DrivelineSupport : driveline helpers
+    lts.simulation.Simulator ..> lts.simulation.TelemetryWindow : lap windows
+    lts.simulation.Simulator ..> lts.simulation.TrackReference : track helpers
+    lts.vehicle.VehicleManager *-- lts.components.Aero.AeroComponent : aero
+    lts.vehicle.VehicleManager *-- lts.components.Suspension.SuspensionManager : suspension
+    lts.vehicle.VehicleManager *-- lts.components.Powertrain.PowertrainComponent : powertrain
+    lts.vehicle.VehicleManager *-- lts.components.Tire.TireModel : tire
+    lts.vehicle.VehicleManager *-- lts.components.Track : track
+    lts.simulation.VehicleState --> lts.vehicle.VehicleManager : vehicleManager
 
-    AeroManager o-- AeroComponent : components
-    SuspensionManager *-- SimpleSuspension : corners
-    SimpleSuspension *-- SuspensionState : state
-    EMRAX228Powertrain *-- PowertrainState : state
-    PacejkaTire *-- TireState : corners
-    PacejkaTire *-- TireConstants : tireConstants
+    lts.components.Aero.AeroManager o-- lts.components.Aero.AeroComponent : components
+    lts.components.Suspension.SuspensionManager *-- lts.components.Suspension.SimpleSuspension : corners
+    lts.components.Suspension.SimpleSuspension *-- lts.components.Suspension.SuspensionState : state
+    lts.components.Powertrain.EMRAX228Powertrain *-- lts.components.Powertrain.PowertrainState : state
+    lts.components.Tire.PacejkaTire *-- lts.components.Tire.TireState : corners
+    lts.components.Tire.PacejkaTire *-- lts.components.Tire.TireConstants : tireConstants

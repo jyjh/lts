@@ -6,7 +6,7 @@
 
 clear; clc;
 
-configName = 'baseline';   % Matches src/run_simulation.m by default
+configName = 'baseline';   % Matches src/+lts/+app/run_simulation.m by default
 makePlots = true;
 savePlots = true;
 
@@ -14,12 +14,12 @@ scriptDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(scriptDir);
 addpath(fullfile(repoRoot, 'src'));
 
-cfg = feval(['vehicles.' configName]);
+cfg = feval(['lts.vehicles.' configName]);
 
-powertrain = components.Powertrain.EMRAX228Powertrain( ...
+powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
     cfg.powertrain.matFile, ...
     cfg.powertrain.efficiency, ...
-    fieldOr(cfg.powertrain, 'motorRotorInertia', 0.07));
+    lts.util.fieldOr(cfg.powertrain, 'motorRotorInertia', 0.07));
 
 % Single dense RPM grid spanning the full operating range up to the rev limit.
 rpmGrid = linspace(0, powertrain.rpmLimitRPM, 500)';
@@ -39,7 +39,7 @@ vRevLimit = powertrain.rpmLimitRPM / powertrain.totalGearRatio * ...
     2 * pi * powertrain.wheelRadius / 60;
 
 fprintf('\n=== Powertrain Power & Torque Curves ===\n');
-fprintf('Config:            vehicles.%s\n', configName);
+fprintf('Config:            lts.vehicles.%s\n', configName);
 fprintf('Motor map:         %s\n', powertrain.matFilePath);
 fprintf('Efficiency:        %.3f\n', powertrain.drivetrainEfficiency);
 fprintf('Final drive ratio: %.2f\n', powertrain.totalGearRatio);
@@ -170,10 +170,3 @@ function styleLegend(lgd)
     lgd.EdgeColor = [0.35 0.35 0.35];
 end
 
-function value = fieldOr(s, name, fallback)
-    if isfield(s, name)
-        value = s.(name);
-    else
-        value = fallback;
-    end
-end

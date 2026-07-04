@@ -186,7 +186,7 @@ testDir = fileparts(mfilename('fullpath'));
 csvFile = fullfile(testDir, 'telemetry_export_test.csv');
 cleanup = onCleanup(@() deleteIfExists(csvFile));
 
-TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
+lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
 header = string(readlines(csvFile));
 header = header(1);
 
@@ -212,23 +212,23 @@ verifyEqual(testCase, data(2, tireSpeedFLCol), expectedTireSpeed, 'AbsTol', 1e-8
 end
 
 function testStaticBumpStopContributesToRollStiffness(testCase)
-config = vehicles.R25();
-vehicle = VehicleManager([], [], [], [], []);
+config = lts.vehicles.R25();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
 vehicle.cgHeight = config.cgHeight;
 vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
 frontArb = config.suspension.frontArb;
 rearArb = config.suspension.rearArb;
-geometry.frontAntiRollBar = components.Suspension.AntiRollBar( ...
+geometry.frontAntiRollBar = lts.components.Suspension.AntiRollBar( ...
     frontArb.stiffness, frontArb.motionRatio, frontArb.leverArm, frontArb.enabled);
-geometry.rearAntiRollBar = components.Suspension.AntiRollBar( ...
+geometry.rearAntiRollBar = lts.components.Suspension.AntiRollBar( ...
     rearArb.stiffness, rearArb.motionRatio, rearArb.leverArm, rearArb.enabled);
 
-suspension = components.Suspension.SuspensionManager( ...
+suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
     config.suspension.rollStiffnessOverride, ...
     config.suspension.front.springRate, config.suspension.front.dampingCoeff, config.suspension.front.reboundCoeff, ...
@@ -262,16 +262,16 @@ end
 
 % Source geometry + vehicle constants from the baseline config so the
 % fixture stays in sync with the car definition.
-config = vehicles.baseline();
-vehicle = VehicleManager([], [], [], [], []);
+config = lts.vehicles.baseline();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
 vehicle.cgHeight = config.cgHeight;
 vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
-suspension = components.Suspension.SuspensionManager( ...
+suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
     config.suspension.rollStiffnessOverride, ...
     config.suspension.front.springRate * rateScale, config.suspension.front.dampingCoeff * rateScale, config.suspension.front.reboundCoeff * rateScale, ...
@@ -289,7 +289,7 @@ suspension.warmup(vehicle.totalMass, 0.001);
 end
 
 function state = createState(ax, ay, steer)
-state = VehicleState('speed', 20);
+state = lts.simulation.VehicleState('speed', 20);
 state.ax = ax;
 state.ay = ay;
 state.steer = steer;

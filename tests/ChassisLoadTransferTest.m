@@ -83,8 +83,8 @@ verifyGreaterThan(testCase, chassis.getPitchAngle(), 0);
 end
 
 function testVehicleConfigBuildLinksChassisAndUsesSprungMass(testCase)
-config = vehicles.baseline();
-vehicle = VehicleManager.fromConfig(config, components.TestTrack('straight10'), 0.001);
+config = lts.vehicles.baseline();
+vehicle = lts.vehicle.VehicleManager.fromConfig(config, lts.components.TestTrack('straight10'), 0.001);
 
 expectedSprungMass = config.totalMass - 4 * config.unsprungMass;
 verifyEqual(testCase, vehicle.chassis.sprungMass, expectedSprungMass, 'AbsTol', 1e-12);
@@ -93,7 +93,7 @@ verifyFalse(testCase, isempty(vehicle.suspension.chassis));
 end
 
 function testTwistUsesSeparateFrontAndRearRollForCornerKinematics(testCase)
-state = components.Chassis.ChassisState();
+state = lts.components.Chassis.ChassisState();
 wheelbase = 1.6;
 trackWidth = 1.2;
 state.frontRollAngle = 0.10;
@@ -111,19 +111,19 @@ verifyNotEqual(testCase, frontRollDisplacement, rearRollDisplacement);
 end
 
 function testAlgebraicSuspensionFallbackStillComputesLoads(testCase)
-config = vehicles.baseline();
-vehicle = VehicleManager([], [], [], [], []);
+config = lts.vehicles.baseline();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
 vehicle.cgHeight = config.cgHeight;
 vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
 suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
-state = VehicleState('speed', 20);
+state = lts.simulation.VehicleState('speed', 20);
 state.vehicleManager = vehicle;
 state.ax = 3;
 state.ay = 6;
@@ -136,19 +136,19 @@ verifyTrue(testCase, all(loadValues >= 0));
 end
 
 function testAlgebraicFallbackUsesAxleSpecificLateralAcceleration(testCase)
-config = vehicles.baseline();
-vehicle = VehicleManager([], [], [], [], []);
+config = lts.vehicles.baseline();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
 vehicle.cgHeight = config.cgHeight;
 vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
 suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
-state = VehicleState('speed', 20);
+state = lts.simulation.VehicleState('speed', 20);
 state.vehicleManager = vehicle;
 state.ax = 0;
 state.ay = 0;
@@ -165,8 +165,8 @@ function [vehicle, suspension, chassis] = createVehicleWithChassis()
 % Minimal chassis+suspension fixture for unit tests. Sources all tuning
 % values from the baseline car config (single source of truth) rather than
 % re-declaring literals here, so these tests stay in sync with the config.
-config = vehicles.baseline();
-vehicle = VehicleManager([], [], [], [], []);
+config = lts.vehicles.baseline();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
 vehicle.trackWidth = config.trackWidth;
@@ -175,10 +175,10 @@ vehicle.staticFrontWeight = config.staticFrontWeight;
 
 unsprungMass = config.unsprungMass;
 sprungMass = vehicle.totalMass - 4 * unsprungMass;
-chassis = components.Chassis.SimpleChassis(vehicle, sprungMass);
+chassis = lts.components.Chassis.SimpleChassis(vehicle, sprungMass);
 chassis = applyChassisTuning(chassis, config.chassis);
 vehicle.chassis = chassis;
-geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
 suspension = createSuspension(vehicle, config.suspension, unsprungMass, geometry);
 vehicle.suspension = suspension;
@@ -186,7 +186,7 @@ suspension.warmup(vehicle.totalMass, 0.001);
 end
 
 function suspension = createSuspension(vehicle, suspCfg, unsprungMass, geometry)
-suspension = components.Suspension.SuspensionManager( ...
+suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
     suspCfg.rollStiffnessOverride, ...
     suspCfg.front.springRate, suspCfg.front.dampingCoeff, suspCfg.front.reboundCoeff, ...

@@ -1,6 +1,6 @@
-classdef SimulatorChassisSpy < components.Chassis.ChassisComponent
+classdef SimulatorChassisSpy < lts.components.Chassis.ChassisComponent
     properties
-        state = components.Chassis.ChassisState()
+        state = lts.components.Chassis.ChassisState()
         updateCalls = 0
     end
 

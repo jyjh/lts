@@ -3,14 +3,14 @@ tests = functiontests(localfunctions);
 end
 
 function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
-tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.relaxationLength = 0;
 powertrain = SimulatorZeroPowertrain();
 suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
 chassis = SimulatorChassisSpy();
 aero = SimulatorZeroAero();
 
-vehicle = VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
+vehicle = lts.vehicle.VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
 vehicle.totalMass = 256;
 vehicle.wheelbase = 1.558;
 vehicle.trackWidth = 1.21;
@@ -23,11 +23,11 @@ vehicle.maxSpeed = 80;
 
 speed = 10;
 initializeWheelSpeeds(tire, speed);
-state = VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
     'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
 state.vehicleManager = vehicle;
 
-simulator = Simulator(vehicle, [], 0.001);
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.wheelSolveIterations = 1;
 ref = struct( ...
     'heading', 0, ...
@@ -44,14 +44,14 @@ verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
 function testPressureBrakeModeUsesLoggedAxlePressures(testCase)
-tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.relaxationLength = 0;
 powertrain = SimulatorZeroPowertrain();
 suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
 chassis = SimulatorChassisSpy();
 aero = SimulatorZeroAero();
 
-vehicle = VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
+vehicle = lts.vehicle.VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
 vehicle.totalMass = 256;
 vehicle.wheelbase = 1.558;
 vehicle.trackWidth = 1.21;
@@ -66,11 +66,11 @@ vehicle.maxSpeed = 80;
 
 speed = 10;
 initializeWheelSpeeds(tire, speed);
-state = VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
     'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
 state.vehicleManager = vehicle;
 
-simulator = Simulator(vehicle, [], 0.001);
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.brakeMode = "pressure";
 simulator.wheelSolveIterations = 1;
 ref = struct( ...
@@ -103,8 +103,8 @@ verifyEqual(testCase, forces.brakeTorque_RR, expectedRearTorque, 'AbsTol', 1e-12
 end
 
 function testSimulatorCachesPersistAcrossMethodCalls(testCase)
-vehicle = VehicleManager([], [], [], [], []);
-simulator = Simulator(vehicle, [], 0.001);
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 
 tf = simulator.hasChassis();
 
@@ -114,13 +114,13 @@ verifyEqual(testCase, simulator.cachedHasChassis, false);
 end
 
 function testPlanarDynamicsReportsAxleSpecificLateralAcceleration(testCase)
-vehicle = VehicleManager([], [], [], [], []);
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = 256;
 vehicle.wheelbase = 1.6;
 vehicle.staticFrontWeight = 0.45;
 vehicle.yawInertia = 100;
-simulator = Simulator(vehicle, [], 0.001);
-state = VehicleState('speed', 10, 'vx', 10, 'vy', 0);
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+state = lts.simulation.VehicleState('speed', 10, 'vx', 10, 'vy', 0);
 state.vehicleManager = vehicle;
 tireData = struct( ...
     'sumFxBody', 0, ...
@@ -140,7 +140,7 @@ verifyEqual(testCase, dynamics.rearAxleAy, ...
 end
 
 function testLeanTelemetryAndMotecExportIncludeAxleAccelerations(testCase)
-simulator = Simulator(VehicleManager([], [], [], [], []), [], 0.001);
+simulator = lts.simulation.Simulator(lts.vehicle.VehicleManager([], [], [], [], []), [], 0.001);
 stateLog = simulator.createLeanStateLog(2);
 verifyTrue(testCase, isfield(stateLog, 'frontAxleAy'));
 verifyTrue(testCase, isfield(stateLog, 'rearAxleAy'));
@@ -156,7 +156,7 @@ stateLog.rearAxleAy = [0.8; 0.9];
 
 csvFile = [tempname '.csv'];
 cleanup = onCleanup(@() deleteIfExists(csvFile)); %#ok<NASGU>
-TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
+lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
 header = firstCsvLine(csvFile);
 
 verifyTrue(testCase, contains(header, 'Front Axle Lat Accel Raw'));
@@ -176,7 +176,7 @@ stateLog.tireUtilization_FL = [0.8; 0.9];
 
 csvFile = [tempname '.csv'];
 cleanup = onCleanup(@() deleteIfExists(csvFile)); %#ok<NASGU>
-TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
+lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
 header = firstCsvLine(csvFile);
 
 verifyTrue(testCase, contains(header, 'Slip Angle FL (deg)'));

@@ -15,32 +15,32 @@ classDiagram
         nominal pressure
     }
 
-    class EMRAX228Powertrain {
+    class lts.components.Powertrain.EMRAX228Powertrain {
         +load(matFilePath)
         +computeDriveForce(speed, throttle)
         +getMaxTorque(engineSpeed)
     }
 
-    class PowertrainState {
+    class lts.components.Powertrain.PowertrainState {
         +motorRPM
         +motorTorque
         +wheelTorque
         +rpmLimitActive
     }
 
-    class TireConstants {
+    class lts.components.Tire.TireConstants {
         +params
         +nomLoad
         +nomPressure
         +refVelocity
     }
 
-    class PacejkaTire {
+    class lts.components.Tire.PacejkaTire {
         +updateCorner(cornerState, normalLoad, slipAngle, slipRatio, camberAngle, mu)
         +updateAllFromState(state, vehicleManager, cornerLoads, mu)
     }
 
-    class TestTrack {
+    class lts.components.TestTrack {
         +buildStraight()
         +buildOval()
         +buildSkidpad()
@@ -56,7 +56,7 @@ classDiagram
         +generateRacingLine()
     }
 
-    class TelemetryExporter {
+    class lts.telemetry.TelemetryExporter {
         +writeToMoTeCFormat(stateLog, filepath)
         +exportToMoTeCLog(stateLog, filepath)
         +convertCsvToMoTeCLog(filepath)
@@ -67,10 +67,10 @@ classDiagram
         +motec_log_generator.py
     }
 
-    EMRAXMatFile --> EMRAX228Powertrain : loaded by constructor
-    EMRAX228Powertrain *-- PowertrainState : state
-    TireTIRFile --> TireConstants : parsed by constructor
-    TireConstants --> PacejkaTire : used by
-    TrackDataLoader --> TestTrack : future external track input
-    TelemetryExporter <-- Simulator : stateLog export
-    TelemetryExporter --> MotecLogGenerator : CSV to LD conversion
+    EMRAXMatFile --> lts.components.Powertrain.EMRAX228Powertrain : loaded by constructor
+    lts.components.Powertrain.EMRAX228Powertrain *-- lts.components.Powertrain.PowertrainState : state
+    TireTIRFile --> lts.components.Tire.TireConstants : parsed by constructor
+    lts.components.Tire.TireConstants --> lts.components.Tire.PacejkaTire : used by
+    TrackDataLoader --> lts.components.TestTrack : future external track input
+    lts.telemetry.TelemetryExporter <-- lts.simulation.Simulator : stateLog export
+    lts.telemetry.TelemetryExporter --> MotecLogGenerator : CSV to LD conversion

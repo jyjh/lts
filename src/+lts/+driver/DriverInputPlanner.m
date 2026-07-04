@@ -1,0 +1,757 @@
+classdef DriverInputPlanner
+    % DRIVERINPUTPLANNER Builds open-loop controls from track reference data.
+    %
+    % The planner treats the track centerline as a reference for estimating
+    % throttle, brake, and steering commands. It does not perform path
+    % tracking and does not constrain vehicle motion to the centerline.
+    %
+    % Physics role: this is a GGV-style speed planner, not a vehicle model.
+    % It asks aero/tire/powertrain/brake models for approximate capability,
+    % propagates speed limits forward/backward along distance, then converts
+    % required longitudinal acceleration into pedal commands.
+
+    properties
+        vehicleManager
+        driverModel
+        maxSteeringAngle = 0.6
+        maxDriveAccel = 5.0
+        speedFeedbackDeadband = 0.20
+        speedFeedbackThrottleBand = 1.0
+        speedFeedbackBrakeBand = 1.0
+        speedFeedbackCorrectionGain = 0.35
+        racingLineEnabled = true
+        racingLineOffsetFraction = 0.65
+        racingLineCurvatureSmoothDistance = 6.0
+        racingLineOffsetSmoothDistance = 8.0
+        racingLineMinCornerLength = 2.0
+        % When the feedforward plan calls for coast (both pedals zero) and the
+        % speed error stays within this tolerance [m/s], the closed-loop layer
+        % holds coast instead of pedaling to correct the small drift. This lets
+        % visible lift-off coasting plateaus survive at corner entries/exits.
+        % Only applies when the plan is actually slowing (axRef below
+        % coastAxRefThreshold), not when it is holding speed against drag.
+        coastSpeedTolerance = 0.75
+        coastAxRefThreshold = 0.05  % |axRef| above which a coast plan counts as slowing
+    end
+
+    methods
+        function obj = DriverInputPlanner(vehicleManager, driverModelOrMaxSteer)
+            obj.vehicleManager = vehicleManager;
+            if nargin >= 2
+                if isnumeric(driverModelOrMaxSteer)
+                    obj.maxSteeringAngle = driverModelOrMaxSteer;
+                    obj.driverModel = [];
+                else
+                    obj.driverModel = driverModelOrMaxSteer;
+                    if isprop(driverModelOrMaxSteer, 'maxSteeringAngle')
+                        obj.maxSteeringAngle = driverModelOrMaxSteer.maxSteeringAngle;
+                    end
+                    if isprop(driverModelOrMaxSteer, 'throttleBand')
+                        obj.speedFeedbackDeadband = max( ...
+                            obj.speedFeedbackDeadband, ...
+                            driverModelOrMaxSteer.throttleBand);
+                    end
+                    if isprop(driverModelOrMaxSteer, 'brakeBlendSpeed')
+                        blendSpeed = driverModelOrMaxSteer.brakeBlendSpeed;
+                        if isfinite(blendSpeed) && blendSpeed > 0
+                            obj.speedFeedbackBrakeBand = blendSpeed;
+                        end
+                    end
+                end
+            else
+                obj.driverModel = [];
+            end
+        end
+
+        function profile = buildOpenLoopProfile(obj, initialState, trackData)
+            % BUILDOPENLOOPPROFILE Construct a distance-indexed control plan.
+            %
+            % The pass order mirrors classic lap-time envelope logic:
+            %   lateral limit from curvature -> backward braking sweep ->
+            %   forward acceleration sweep -> pedal and steer references.
+            % The actual lts.simulation.Simulator later closes the loop with tire forces.
+            vm = obj.vehicleManager;
+            n = trackData.nPts;
+            line = obj.buildRacingLine(trackData);
+            curvature = line.planningCurvature(:);
+            lineDs = obj.computeLineDs(line.lineS);
+            vTarget = vm.maxSpeed * ones(n, 1);
+
+            % Iterating lets speed-dependent aero influence the GGV envelope
+            % without turning this into a full trajectory optimization.
+            for iter = 1:3 %#ok<NASGU>
+                for i = 1:n
+                    if abs(curvature(i)) > 1e-6
+                        limits = obj.estimateGGVLimits( ...
+                            vTarget(i), initialState, curvature(i));
+                        vTarget(i) = min(vm.maxSpeed, ...
+                            sqrt(max(limits.maxLatAccel, 0.1) / abs(curvature(i))));
+                    else
+                        vTarget(i) = vm.maxSpeed;
+                    end
+                end
+            end
+
+            % Backward (braking) sweep: query brake capability at the current
+            % planned speed as the envelope is propagated upstream. This keeps
+            % decel requests bounded by the car's local capability rather than
+            % by a stale pre-sweep speed guess.
+            maxBrakeAccel = zeros(n, 1);
+            maxDriveAccel = zeros(n, 1);   % filled in during the forward sweep
+            F_drive_full = zeros(n, 1);
+            F_resistance = zeros(n, 1);
+            brakeForceAccel = zeros(n, 1);
+            driveScale = zeros(n, 1);      % traction-circle throttle cap per point
+            brakeScale = zeros(n, 1);      % traction-circle brake cap per point
+            for i = n-1:-1:1
+                limits = obj.estimateGGVLimits( ...
+                    vTarget(i + 1), initialState, curvature(i + 1));
+                maxBrakeAccel(i + 1) = limits.maxBrakeAccel;
+                ds = max(lineDs(i), 0.001);
+                reachableSpeed = sqrt(vTarget(i+1)^2 + 2 * maxBrakeAccel(i+1) * ds);
+                vTarget(i) = min(vTarget(i), reachableSpeed);
+            end
+            maxBrakeAccel(1) = obj.estimateGGVLimits( ...
+                vTarget(1), initialState, curvature(1)).maxBrakeAccel;
+
+            % Forward (acceleration) sweep. Drive capability is strongly
+            % speed-dependent (traction-limited at low speed, power-limited at
+            % high speed), so it is queried at the actual sweep speed
+            % speedPlan(i) — not the corner-limited vTarget(i) — so corner-exit
+            % acceleration is modeled correctly. The capability returned at
+            % each point is reused by the pedal map below for consistency.
+            speedPlan = vTarget;
+            speedPlan(1) = min(max(initialState.speed, 0), vTarget(1));
+            for i = 1:n
+                % Pass curvature so drive/brake force is traction-circle-capped:
+                % at a corner apex little longitudinal capacity remains, so the
+                % plan commands coast/partial instead of saturating throttle.
+                limits = obj.estimateGGVLimits(speedPlan(i), initialState, curvature(i));
+                maxDriveAccel(i) = limits.maxDriveAccel;
+                F_drive_full(i) = limits.F_drive_full;
+                F_resistance(i) = limits.F_resistance;
+                brakeForceAccel(i) = limits.brakeForceAccel;
+                driveScale(i) = limits.driveScale;
+                brakeScale(i) = limits.brakeScale;
+                if i < n
+                    ds = max(lineDs(i), 0.001);
+                    axCap = max(maxDriveAccel(i), 0);
+                    reachableSpeed = sqrt(speedPlan(i)^2 + 2 * axCap * ds);
+                    speedPlan(i+1) = min(vTarget(i+1), reachableSpeed);
+                end
+            end
+
+            axRef = zeros(n, 1);
+            for i = 1:n-1
+                ds = max(lineDs(i), 0.001);
+                axRaw = (speedPlan(i+1)^2 - speedPlan(i)^2) / (2 * ds);
+                axRef(i) = max(-maxBrakeAccel(i), ...
+                    min(maxDriveAccel(i), axRaw));
+            end
+            axRef(n) = axRef(max(n-1, 1));
+
+            maxSteer = obj.maxSteeringAngle;
+            steerRef = atan(vm.wheelbase * line.lineCurvature(:));
+            steerRef = max(-maxSteer, min(maxSteer, steerRef));
+
+            % Physics-based pedal map: each planned accel maps to partial
+            % throttle, coast, or gradual brake based on the actual force
+            % balance, instead of saturating to {0, WOT, full-brake}.
+            brakeRef = zeros(n, 1);
+            throttleRef = zeros(n, 1);
+            for i = 1:n
+                [throttleRef(i), brakeRef(i)] = lts.driver.DriverInputPlanner.computePedals( ...
+                    axRef(i), F_drive_full(i), F_resistance(i), ...
+                    vm.totalMass, brakeForceAccel(i));
+                % Traction-circle cap: at a corner apex the lateral grip demand
+                % leaves little longitudinal capacity, so cap the throttle
+                % toward driveScale (0 -> pure coast) and the brake toward
+                % brakeScale (trail-brake taper). This makes the planned pedals
+                % apex-aware: lift into the apex, coast through it, drive out.
+                throttleRef(i) = min(throttleRef(i), driveScale(i));
+                brakeRef(i) = min(brakeRef(i), brakeScale(i));
+            end
+
+            profile = struct( ...
+                's', trackData.arcLen, ...
+                'vTarget', speedPlan, ...
+                'vLimit', vTarget, ...
+                'axRef', axRef, ...
+                'throttle', throttleRef, ...
+                'brake', brakeRef, ...
+                'steer', steerRef, ...
+                'targetLateralError', line.targetLateralError, ...
+                'lineHeading', line.lineHeading, ...
+                'lineCurvature', line.lineCurvature, ...
+                'lineS', line.lineS);
+        end
+
+        function input = sample(obj, profile, idx, actualSpeed)
+            idx = max(1, min(idx, numel(profile.throttle)));
+            input = struct( ...
+                'throttle', profile.throttle(idx), ...
+                'brake', profile.brake(idx), ...
+                'steer', profile.steer(idx), ...
+                'targetSpeed', profile.vTarget(idx), ...
+                'axRef', profile.axRef(idx), ...
+                'targetLateralError', obj.sampleProfileField(profile, 'targetLateralError', idx, 0), ...
+                'lineHeading', obj.sampleProfileField(profile, 'lineHeading', idx, NaN), ...
+                'lineCurvature', obj.sampleProfileField(profile, 'lineCurvature', idx, NaN), ...
+                'lineS', obj.sampleProfileField(profile, 'lineS', idx, NaN), ...
+                'speedError', NaN);
+
+            if nargin >= 4 && isfinite(actualSpeed)
+                input.speedError = actualSpeed - input.targetSpeed;
+                input = obj.applySpeedFeedback(input, actualSpeed);
+            end
+        end
+
+        function input = sampleAtProgress(obj, profile, s, actualSpeed)
+            sProfile = profile.s(:);
+            s = max(sProfile(1), min(sProfile(end), s));
+            [idx0, idx1, frac] = obj.profileInterpolationBracket(sProfile, s);
+
+            input = struct( ...
+                'throttle', obj.interpProfileVector(profile.throttle, idx0, idx1, frac, 0), ...
+                'brake', obj.interpProfileVector(profile.brake, idx0, idx1, frac, 0), ...
+                'steer', obj.interpProfileVector(profile.steer, idx0, idx1, frac, 0), ...
+                'targetSpeed', obj.interpProfileVector(profile.vTarget, idx0, idx1, frac, NaN), ...
+                'axRef', obj.interpProfileVector(profile.axRef, idx0, idx1, frac, NaN), ...
+                'targetLateralError', obj.interpProfileField(profile, 'targetLateralError', idx0, idx1, frac, 0), ...
+                'lineHeading', obj.interpProfileField(profile, 'lineHeading', idx0, idx1, frac, NaN), ...
+                'lineCurvature', obj.interpProfileField(profile, 'lineCurvature', idx0, idx1, frac, NaN), ...
+                'lineS', obj.interpProfileField(profile, 'lineS', idx0, idx1, frac, NaN), ...
+                'speedError', NaN);
+
+            input.throttle = max(0, min(1, input.throttle));
+            input.brake = max(0, min(1, input.brake));
+
+            if nargin >= 4 && isfinite(actualSpeed)
+                input.speedError = actualSpeed - input.targetSpeed;
+                input = obj.applySpeedFeedback(input, actualSpeed);
+            end
+        end
+    end
+
+    methods (Access = private)
+        function input = applySpeedFeedback(obj, input, actualSpeed)
+            if ~isfield(input, 'targetSpeed') || ~isfinite(input.targetSpeed)
+                return;
+            end
+            if ~isfield(input, 'axRef') || ~isfinite(input.axRef)
+                input.axRef = 0;
+            end
+
+            speedError = actualSpeed - input.targetSpeed;
+            deadband = max(0, obj.speedFeedbackDeadband);
+            plannedCoast = input.throttle <= 0 && input.brake <= 0;
+            % Coast-aware hold: when the feedforward plan calls for coast AND
+            % the planned axRef indicates the car is meant to be slowing (drag
+            % doing the work), tolerate small speed drift without pedaling so
+            % lift-off coast plateaus survive. When axRef is near zero (a
+            % maintain-speed coast, e.g. holding speed against drag on a
+            % straight), the feedback still trims throttle to hold target speed.
+            % Apex coasts come from the planner's traction-circle cap, which
+            % drives the planned pedals to zero independently of this hold.
+            planningToSlow = input.axRef < -obj.coastAxRefThreshold;
+            if plannedCoast && planningToSlow && actualSpeed >= 0.5 && ...
+                    abs(speedError) <= obj.coastSpeedTolerance
+                input.throttle = 0;
+                input.brake = 0;
+            elseif actualSpeed < 0.5 && speedError <= 0
+                input.brake = 0;
+                input.throttle = 1;
+            elseif speedError < -deadband
+                input.brake = 0;
+                throttleCorrection = (-speedError - deadband) / ...
+                    max(obj.speedFeedbackThrottleBand, eps);
+                throttleCorrection = min(1, ...
+                    obj.speedFeedbackCorrectionGain * throttleCorrection);
+                input.throttle = max(input.throttle, throttleCorrection);
+            elseif speedError > deadband
+                input.throttle = 0;
+                brakeCorrection = (speedError - deadband) / ...
+                    max(obj.speedFeedbackBrakeBand, eps);
+                brakeCorrection = min(1, ...
+                    obj.speedFeedbackCorrectionGain * brakeCorrection);
+                input.brake = max(input.brake, brakeCorrection);
+            else
+                if input.axRef >= 0
+                    input.brake = 0;
+                end
+                if input.axRef <= 0
+                    input.throttle = 0;
+                end
+            end
+
+            input.throttle = max(0, min(1, input.throttle));
+            input.brake = max(0, min(1, input.brake));
+        end
+
+        function line = buildRacingLine(obj, trackData)
+            n = trackData.nPts;
+            centerS = trackData.arcLen(:);
+            centerPoints = trackData.points;
+            centerHeading = trackData.heading(:);
+            centerCurvature = trackData.curvature(:);
+
+            line.targetLateralError = zeros(n, 1);
+            line.lineS = centerS;
+            line.lineHeading = centerHeading;
+            line.lineCurvature = centerCurvature;
+            line.planningCurvature = obj.smoothByDistance( ...
+                centerCurvature, centerS, obj.racingLineCurvatureSmoothDistance);
+
+            if ~obj.racingLineEnabled || n < 3 || obj.isSteadyCircle(trackData)
+                return;
+            end
+            if ~isfield(trackData, 'trackHalfWidth') || ...
+                    ~isfinite(trackData.trackHalfWidth) || trackData.trackHalfWidth <= 0
+                return;
+            end
+
+            offsetLimit = obj.computeRacingLineOffsetLimit(trackData.trackHalfWidth);
+            if offsetLimit <= 0
+                return;
+            end
+
+            smoothCurvature = line.planningCurvature;
+            cornerSegments = obj.findRacingLineCornerSegments( ...
+                centerS, smoothCurvature);
+            if isempty(cornerSegments)
+                return;
+            end
+
+            targetOffset = zeros(n, 1);
+            for segIdx = 1:size(cornerSegments, 1)
+                iStart = cornerSegments(segIdx, 1);
+                iEnd = cornerSegments(segIdx, 2);
+                turnSign = cornerSegments(segIdx, 3);
+                if iEnd <= iStart || turnSign == 0
+                    continue;
+                end
+                segmentS = centerS(iStart:iEnd);
+                segmentLength = max(segmentS(end) - segmentS(1), eps);
+                phase = (segmentS - segmentS(1)) / segmentLength;
+                targetOffset(iStart:iEnd) = obj.racingLineOffsetAtPhase( ...
+                    phase, turnSign, offsetLimit);
+            end
+
+            targetOffset = obj.smoothByDistance( ...
+                targetOffset, centerS, obj.racingLineOffsetSmoothDistance);
+            targetOffset = max(-offsetLimit, min(offsetLimit, targetOffset));
+
+            heading = unwrap(centerHeading);
+            normalX = -sin(heading);
+            normalY = cos(heading);
+            linePoints = centerPoints + [targetOffset .* normalX, targetOffset .* normalY];
+            lineDs = hypot(diff(linePoints(:,1)), diff(linePoints(:,2)));
+            lineS = [0; cumsum(lineDs)];
+            if numel(lineS) ~= n || lineS(end) <= eps
+                return;
+            end
+
+            lineHeading = lts.components.Track.computeHeading(linePoints, false);
+            lineCurvature = lts.components.Track.computeCurvature(linePoints, false);
+            lineCurvature = obj.smoothByDistance( ...
+                lineCurvature, centerS, obj.racingLineCurvatureSmoothDistance);
+            line.targetLateralError = targetOffset;
+            line.lineS = lineS;
+            line.lineHeading = lineHeading(:);
+            line.lineCurvature = lineCurvature(:);
+            line.planningCurvature = line.lineCurvature;
+        end
+
+        function offsetLimit = computeRacingLineOffsetLimit(obj, trackHalfWidth)
+            vm = obj.vehicleManager;
+            vehicleTrackWidth = 0;
+            if ~isempty(vm)
+                if isstruct(vm) && isfield(vm, 'trackWidth')
+                    vehicleTrackWidth = vm.trackWidth;
+                elseif isobject(vm) && isprop(vm, 'trackWidth')
+                    vehicleTrackWidth = vm.trackWidth;
+                end
+            end
+
+            edgeMargin = 0.75;
+            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'edgeSlowdownMargin')
+                edgeMargin = obj.driverModel.edgeSlowdownMargin;
+            end
+            cgMargin = max(0.5 * vehicleTrackWidth + 0.25, edgeMargin);
+            offsetLimit = trackHalfWidth - cgMargin;
+            offsetLimit = max(0, obj.racingLineOffsetFraction * offsetLimit);
+        end
+
+        function segments = findRacingLineCornerSegments(obj, s, curvature)
+            absKappa = abs(curvature(:));
+            if all(absKappa <= eps)
+                segments = zeros(0, 3);
+                return;
+            end
+
+            kappa95 = prctile(absKappa, 95);
+            threshold = max([1e-5, 0.15 * kappa95]);
+            active = absKappa > threshold;
+            signKappa = sign(curvature(:));
+            signKappa(~active) = 0;
+
+            segments = zeros(0, 3);
+            i = 1;
+            n = numel(curvature);
+            while i <= n
+                if signKappa(i) == 0
+                    i = i + 1;
+                    continue;
+                end
+                turnSign = signKappa(i);
+                iStart = i;
+                while i < n && signKappa(i + 1) == turnSign
+                    i = i + 1;
+                end
+                iEnd = i;
+                if s(iEnd) - s(iStart) >= obj.racingLineMinCornerLength
+                    segments(end + 1, :) = [iStart, iEnd, turnSign]; %#ok<AGROW>
+                end
+                i = i + 1;
+            end
+        end
+
+        function offset = racingLineOffsetAtPhase(obj, phase, turnSign, offsetLimit)
+            apexPhase = 0.5;
+            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'apexPhase')
+                apexPhase = obj.driverModel.apexPhase;
+            end
+            apexPhase = max(0.1, min(0.9, apexPhase));
+            phase = max(0, min(1, phase(:)));
+            offset = zeros(size(phase));
+
+            entry = phase <= apexPhase;
+            entryBlend = phase(entry) / max(apexPhase, eps);
+            offset(entry) = -turnSign * offsetLimit .* cos(pi * entryBlend);
+
+            exitBlend = (phase(~entry) - apexPhase) / max(1 - apexPhase, eps);
+            offset(~entry) = turnSign * offsetLimit .* cos(pi * exitBlend);
+        end
+
+        function values = smoothByDistance(~, values, s, smoothDistance)
+            values = values(:);
+            if numel(values) < 3 || smoothDistance <= 0 || ~isfinite(smoothDistance)
+                return;
+            end
+
+            ds = diff(s(:));
+            ds = ds(isfinite(ds) & ds > eps);
+            if isempty(ds)
+                return;
+            end
+            window = max(1, round(smoothDistance / median(ds)));
+            if window <= 1
+                return;
+            end
+            values = movmean(values, window, 'Endpoints', 'shrink');
+        end
+
+        function tf = isSteadyCircle(~, trackData)
+            tf = false;
+            if ~isfield(trackData, 'closedLoop') || ~trackData.closedLoop || ...
+                    ~isfield(trackData, 'curvature')
+                return;
+            end
+            curvature = trackData.curvature(:);
+            active = abs(curvature) > 1e-6;
+            if ~all(active)
+                return;
+            end
+            firstSign = sign(curvature(find(active, 1, 'first')));
+            tf = firstSign ~= 0 && all(sign(curvature(active)) == firstSign);
+        end
+
+        function lineDs = computeLineDs(~, lineS)
+            lineS = lineS(:);
+            if numel(lineS) < 2
+                lineDs = 0;
+                return;
+            end
+            lineDs = diff(lineS);
+            lineDs(~isfinite(lineDs) | lineDs <= 0) = 0.001;
+        end
+
+        function value = sampleProfileField(~, profile, fieldName, idx, defaultValue)
+            value = defaultValue;
+            if isfield(profile, fieldName)
+                values = profile.(fieldName);
+                if numel(values) >= idx
+                    value = values(idx);
+                end
+            end
+        end
+
+        function value = interpProfileField(obj, profile, fieldName, idx0, idx1, frac, defaultValue)
+            value = defaultValue;
+            if isfield(profile, fieldName)
+                values = profile.(fieldName);
+                value = obj.interpProfileVector(values, idx0, idx1, frac, defaultValue);
+            end
+        end
+
+        function [idx0, idx1, frac] = profileInterpolationBracket(~, sProfile, s)
+            n = numel(sProfile);
+            if n <= 1
+                idx0 = 1;
+                idx1 = 1;
+                frac = 0;
+                return;
+            end
+
+            idx1 = find(sProfile >= s, 1, 'first');
+            if isempty(idx1)
+                idx1 = n;
+            end
+            if idx1 <= 1
+                idx0 = 1;
+                idx1 = 1;
+                frac = 0;
+                return;
+            end
+
+            idx0 = idx1 - 1;
+            ds = sProfile(idx1) - sProfile(idx0);
+            if ds <= eps || ~isfinite(ds)
+                frac = 0;
+            else
+                frac = (s - sProfile(idx0)) / ds;
+                frac = max(0, min(1, frac));
+            end
+        end
+
+        function value = interpProfileVector(~, values, idx0, idx1, frac, defaultValue)
+            value = defaultValue;
+            if isempty(values)
+                return;
+            end
+            values = values(:);
+            if numel(values) < max(idx0, idx1)
+                return;
+            end
+            if idx0 == idx1
+                value = values(idx0);
+            else
+                value = values(idx0) + frac * (values(idx1) - values(idx0));
+            end
+        end
+
+        function crr = getRollingResistanceCoeff(obj)
+            crr = 0.015;
+            vm = obj.vehicleManager;
+            if isempty(vm)
+                return;
+            end
+            tire = [];
+            if isstruct(vm) && isfield(vm, 'tire')
+                tire = vm.tire;
+            elseif isobject(vm) && isprop(vm, 'tire')
+                tire = vm.tire;
+            end
+            if isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            elseif isobject(tire) && isprop(tire, 'rollingResistanceCoeff')
+                crr = tire.rollingResistanceCoeff;
+            end
+            if isempty(crr) || ~isfinite(crr)
+                crr = 0.015;
+            end
+            crr = max(crr, 0);
+        end
+
+        function limits = estimateGGVLimits(obj, speed, templateState, curvature)
+            % ESTIMATEGGVLIMITS Vehicle longitudinal/lateral capability at a speed.
+            %   When curvature [1/m] is supplied, drive and brake force are
+            %   further capped by the traction circle so a corner apex (high
+            %   lateral grip demand) leaves little longitudinal capacity ->
+            %   the plan commands coast/partial there, not full throttle.
+            if nargin < 4 || isempty(curvature) || ~isfinite(curvature)
+                curvature = 0;
+            end
+            vm = obj.vehicleManager;
+            tempState = templateState;
+            tempState.vehicleManager = vm;
+            tempState.speed = max(speed, 0);
+            tempState.vx = tempState.speed;
+            tempState.vy = 0;
+
+            % Use the same component models as the dynamic simulation for the
+            % static capability estimate. This keeps driver targets consistent
+            % with aero downforce, powertrain force, tire load sensitivity, and
+            % rolling resistance used in lts.simulation.Simulator.step().
+            aeroForces = vm.aero.computeForces(tempState);
+            F_drag = max(0, aeroForces.F_drag);
+            totalNormalLoad = vm.totalMass * vm.g + aeroForces.Fz_front + aeroForces.Fz_rear;
+            peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
+            % Grip comes entirely from the tire model (no surface mu cap);
+            % the vehicles run on dry rubber with no friction variability.
+            tireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
+
+            brakeForce = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
+            rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
+            brakeAccel = (brakeForce + F_drag + rollingResistance) / vm.totalMass;
+
+            corneringUsage = 0.98;
+            brakingUsage = 0.98;
+            driveUsage = 0.98;
+            trailBrakeReserve = 0.30;
+            tractionReserve = 0;
+            corneringGripMargin = 0.95;
+            if ~isempty(obj.driverModel)
+                if isprop(obj.driverModel, 'corneringUsage')
+                    corneringUsage = obj.driverModel.corneringUsage;
+                end
+                if isprop(obj.driverModel, 'brakingUsage')
+                    brakingUsage = obj.driverModel.brakingUsage;
+                end
+                if isprop(obj.driverModel, 'driveUsage')
+                    driveUsage = obj.driverModel.driveUsage;
+                end
+                if isprop(obj.driverModel, 'trailBrakeReserve')
+                    trailBrakeReserve = obj.driverModel.trailBrakeReserve;
+                end
+                if isprop(obj.driverModel, 'tractionCircleReserve')
+                    tractionReserve = obj.driverModel.tractionCircleReserve;
+                end
+                if isprop(obj.driverModel, 'corneringGripMargin')
+                    corneringGripMargin = obj.driverModel.corneringGripMargin;
+                end
+            end
+            corneringUsage = max(0, min(1, corneringUsage));
+            brakingUsage = max(0, min(1, brakingUsage));
+            driveUsage = max(0, min(1, driveUsage));
+
+            % --- Traction-circle longitudinal cap from lateral demand ---
+            % At a corner the tires spend grip on ay = v^2 * |kappa|; only the
+            % remainder is available longitudinally. driveScale collapses to
+            % tractionReserve (0 -> coast) at peak lateral demand; brakeScale
+            % trails to trailBrakeReserve (gentler, for trail-braking).
+            ay = tempState.speed^2 * abs(curvature);
+            ayMax = max(corneringUsage * tireAccel, 0.1);
+            margin = max(1e-3, min(1, corneringGripMargin));
+            latUse = min(ay / ayMax / margin, 1);
+            ellipse = sqrt(max(0, 1 - latUse^2));
+            driveScale = max(0, min(1, tractionReserve)) + (1 - max(0, min(1, tractionReserve))) * ellipse;
+            brakeScale = max(0, min(1, trailBrakeReserve)) + (1 - max(0, min(1, trailBrakeReserve))) * ellipse;
+
+            % --- Forward drive capability (speed- and load-dependent) ---
+            % Full-throttle wheel force from the powertrain map, capped by the
+            % driven (rear) axle's traction limit. Net of drag + rolling
+            % resistance so it is the achievable forward accel, not gross.
+            F_drive_full = 0;
+            if ~isempty(vm.powertrain)
+                F_drive_full = max(0, vm.powertrain.computeMaxDriveForce(tempState.speed));
+            end
+            W = vm.totalMass * vm.g;
+            rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
+            rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
+            F_traction_rear = driveUsage * rearMu * rearNormalLoad;
+            F_drive_full = min(F_drive_full, F_traction_rear);
+
+            F_resistance = F_drag + rollingResistance;
+            maxDriveAccel = max(0, (F_drive_full - F_resistance) / vm.totalMass);
+            % Coasting (lift-off) deceleration comes for free from drag +
+            % rolling resistance; no brake needed if the required decel is at
+            % or below this. brakeForceAccel is hydraulic-brake decel only
+            % (drag adds on top during actual braking), used to map a required
+            % decel onto a gradual [0,1] brake command.
+            coastDecel = F_resistance / vm.totalMass;
+            brakeForceAccel = max(0.1, brakingUsage * brakeForce / vm.totalMass);
+
+            limits.maxLatAccel = max(0.1, corneringUsage * tireAccel);
+            limits.maxBrakeAccel = max(0.1, brakingUsage * min(tireAccel, brakeAccel));
+            % --- Capability fields consumed by the physics-based pedal map ---
+            limits.F_drive_full = F_drive_full;        % Full-throttle wheel force, traction-capped [N]
+            limits.F_resistance = F_resistance;        % Drag + rolling resistance at this speed [N]
+            limits.maxDriveAccel = maxDriveAccel;      % Net forward accel capability [m/s^2]
+            limits.coastDecel = coastDecel;            % Free lift-off decel [m/s^2]
+            limits.brakeForceAccel = brakeForceAccel;  % Hydraulic-brake-only decel per unit brake [m/s^2]
+            % Traction-circle output caps applied to the planned pedals: at a
+            % corner apex the lateral grip demand leaves little longitudinal
+            % capacity, so the throttle is capped toward driveScale (0 -> coast)
+            % and the brake toward brakeScale (trail-brake). Applied to the
+            % pedal OUTPUT (not the force input) so the ratio in computePedals
+            % is not distorted.
+            limits.driveScale = driveScale;
+            limits.brakeScale = brakeScale;
+        end
+    end
+
+    methods (Static)
+        function [throttle, brake] = computePedals(axRef, F_drive_full, F_resistance, mass, brakeForceAccel)
+            % COMPUTEPEDALS Map a required longitudinal accel onto pedal commands.
+            %
+            %   [throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
+            %       axRef, F_drive_full, F_resistance, mass, brakeForceAccel)
+            %
+            %   Pure (stateless) physics-based pedal map that produces all three
+            %   regimes a real driver uses:
+            %     - WOT when the required drive force meets/exceeds full-throttle,
+            %     - partial throttle to maintain speed against drag/rolling (cruise),
+            %     - coast (both pedals zero) when drag alone provides the decel,
+            %     - gradual brake proportional to the decel beyond coast.
+            %
+            %   Inputs:
+            %     axRef           - required longitudinal accel [m/s^2] (+ = drive)
+            %     F_drive_full    - full-throttle wheel force, traction-capped [N]
+            %     F_resistance    - drag + rolling resistance at this speed [N]
+            %     mass            - vehicle mass [kg]
+            %     brakeForceAccel - decel per unit brake command [m/s^2]
+            %
+            %   Pedals are mutually exclusive (never both > 0), clamped to [0,1].
+            mass = max(mass, eps);
+            brakeForceAccel = max(brakeForceAccel, eps);
+
+            % Force the wheels must apply at the contact patch to net axRef,
+            % i.e. invert  ax = (F_drive - F_resistance) / mass.
+            F_req = axRef * mass + F_resistance;
+
+            % Coast deadband: a real driver lifts rather than holding a few
+            % percent throttle or dabbing a few percent brake. When the required
+            % force magnitude is below this fraction of the drive/brake scale,
+            % snap to coast. The threshold is small enough (a few %) that it
+            % only suppresses negligible pedal commands, never genuine cruise
+            % throttle (which on this car is ~10%+ to overcome drag).
+            coastFraction = 0.03;
+
+            throttle = 0;
+            brake = 0;
+            if F_req <= 0
+                % No drive force needed: the car must hold speed or slow down.
+                requiredDecel = max(0, -axRef);
+                coastDecel = F_resistance / mass;
+                brakeForceTotal = brakeForceAccel * mass;
+                if requiredDecel <= coastDecel
+                    % Drag/rolling resistance alone covers the decel -> coast.
+                    throttle = 0;
+                    brake = 0;
+                elseif brakeForceTotal > 0 && ...
+                        (requiredDecel - coastDecel) < coastFraction * brakeForceAccel
+                    % Required brake is negligible -> coast.
+                    throttle = 0;
+                    brake = 0;
+                else
+                    % Hydraulic brake fills the gap beyond coast, gradually.
+                    brake = (requiredDecel - coastDecel) / brakeForceAccel;
+                    brake = max(0, min(1, brake));
+                end
+            elseif F_drive_full <= 0
+                % No tractive capability recorded (e.g. at/over rev limit) but
+                % drive was requested: ask for WOT and let the powertrain
+                % return whatever it can.
+                throttle = 1;
+            else
+                throttle = F_req / F_drive_full;
+                throttle = max(0, min(1, throttle));
+                % Negligible throttle (below a few % of full) -> coast.
+                if throttle < coastFraction
+                    throttle = 0;
+                end
+            end
+        end
+    end
+end

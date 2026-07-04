@@ -14,7 +14,7 @@ addpath(fullfile(repoRoot, 'src'));
 parser = inputParser;
 parser.addParameter('SimCsv', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('ReplayCsv', '', @(x) ischar(x) || isstring(x));
-parser.addParameter('VehicleConfig', @vehicles.R25);
+parser.addParameter('VehicleConfig', @lts.vehicles.R25);
 parser.addParameter('Track', '2026enduro');
 parser.addParameter('ReportFile', '', @(x) ischar(x) || isstring(x));
 parser.parse(varargin{:});
@@ -27,7 +27,7 @@ end
 
 cfg = loadVehicleConfig(opts.VehicleConfig);
 track = loadDiagnosticTrack(opts.Track, repoRoot);
-surfaceMu = representativeSurfaceMu(track);
+surfaceMu = lts.util.representativeSurfaceMu(track);
 
 simCsv = char(opts.SimCsv);
 replayCsv = char(opts.ReplayCsv);
@@ -37,20 +37,20 @@ realRaw = readNumericCsv(replayCsv);
 sim = extractSimSignals(simRaw, cfg);
 real = extractReplaySignals(realRaw);
 
-realReport = LateralGDiagnostics.assessSignals( ...
+realReport = lts.diagnostics.LateralGDiagnostics.assessSignals( ...
     real.time, real.rawLatG, real.speedMps, real.yawRateRadps, ...
     real.steerRad, cfg.wheelbase);
-simReport = LateralGDiagnostics.assessSignals( ...
+simReport = lts.diagnostics.LateralGDiagnostics.assessSignals( ...
     sim.time, sim.ayG, sim.speedMps, sim.yawRateRadps, ...
     sim.steerRad, cfg.wheelbase);
 
-realMismatchEvents = LateralGDiagnostics.topMismatchEvents( ...
+realMismatchEvents = lts.diagnostics.LateralGDiagnostics.topMismatchEvents( ...
     realReport.time, realReport.rawLatG, realReport.yawLatG, ...
     realReport.steerLatG, realReport.speedMps, 5, 0.25);
 
 realRawOnSim = interpChannel(real.time, real.rawLatG, sim.time);
 realYawOnSim = interpChannel(real.time, realReport.yawLatG, sim.time);
-simDiffEvents = LateralGDiagnostics.topMismatchEvents( ...
+simDiffEvents = lts.diagnostics.LateralGDiagnostics.topMismatchEvents( ...
     sim.time, realRawOnSim, sim.ayG, realYawOnSim, sim.speedMps, 5, 0.25);
 
 capacity = computeTireCapacity(simRaw, sim, cfg);
@@ -221,7 +221,7 @@ yawRate = angleRateToRadps(yawRate, yawUnit);
 steer = angleToRad(steer, steerUnit, 'deg');
 
 [tireLat, ~] = channel(raw, {'F Tire Lat'}, NaN);
-tireLatG = tireLat ./ max(cfg.totalMass * LateralGDiagnostics.g, eps);
+tireLatG = tireLat ./ max(cfg.totalMass * lts.diagnostics.LateralGDiagnostics.g, eps);
 
 sim = struct( ...
     'time', time, ...
@@ -274,12 +274,12 @@ end
 
 missingPeakMu = all(~isfinite(peakMu(:)));
 if missingPeakMu
-    tire = components.Tire.PacejkaTire(cfg.tire.tirFile);
+    tire = lts.components.Tire.PacejkaTire(cfg.tire.tirFile);
     peakMu = computePeakMuForLoads(tire, loads);
 end
 
 capacityN = sum(max(loads, 0) .* max(peakMu, 0), 2, 'omitnan');
-capacityG = capacityN ./ max(cfg.totalMass * LateralGDiagnostics.g, eps);
+capacityG = capacityN ./ max(cfg.totalMass * lts.diagnostics.LateralGDiagnostics.g, eps);
 utilization = abs(sim.tireLatG) ./ capacityG;
 utilization(~isfinite(utilization)) = NaN;
 
@@ -384,7 +384,7 @@ if isempty(unit)
     unit = normalizeHeader(defaultUnit);
 end
 if strcmp(unit, 'mss') || strcmp(unit, 'ms2') || strcmp(unit, 'mps2')
-    values = values / LateralGDiagnostics.g;
+    values = values / lts.diagnostics.LateralGDiagnostics.g;
 end
 end
 
@@ -425,14 +425,14 @@ end
 function config = loadVehicleConfig(configSpec)
 if isa(configSpec, 'function_handle')
     config = configSpec();
-elseif isa(configSpec, 'VehicleConfig')
+elseif isa(configSpec, 'lts.vehicle.VehicleConfig')
     config = configSpec;
 elseif ischar(configSpec) || isstring(configSpec)
     name = char(configSpec);
     if contains(name, '.')
         fn = str2func(name);
     else
-        fn = str2func(['vehicles.' name]);
+        fn = str2func(['lts.vehicles.' name]);
     end
     config = fn();
 else
@@ -441,31 +441,26 @@ end
 end
 
 function track = loadDiagnosticTrack(trackSpec, repoRoot)
-if isa(trackSpec, 'components.Track')
+if isa(trackSpec, 'lts.components.Track')
     track = trackSpec;
     return;
 end
 
 trackText = char(trackSpec);
 if strcmpi(trackText, '2026enduro')
-    track = components.WaypointTrack.loadMat( ...
+    track = lts.components.WaypointTrack.loadMat( ...
         fullfile(repoRoot, 'tracks', ...
         'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
     track.Width = 5.0;
 elseif endsWith(lower(trackText), '.mat')
-    track = components.WaypointTrack.loadMat(trackText);
+    track = lts.components.WaypointTrack.loadMat(trackText);
 elseif endsWith(lower(trackText), '.csv')
-    track = components.WaypointTrack.fromCsv(trackText);
+    track = lts.components.WaypointTrack.fromCsv(trackText);
 else
-    track = components.TestTrack(trackText);
+    track = lts.components.TestTrack(trackText);
 end
 end
 
-function mu = representativeSurfaceMu(track)
-mu = 1.2;
-if isempty(track)
-    return;
-end
 
 try
     values = track.getSurfaceFriction();

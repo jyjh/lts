@@ -33,10 +33,10 @@ investigate_lateral_g( ...
 ## generate_vehicle.py
 
 Parses an **FSAE (EV) Design Spec Sheet CSV** (the format is stable year-to-year)
-and emits a MATLAB vehicle file under `src/+vehicles/<Name>.m`, structured
-exactly like the reference configs (`vehicles.baseline` / `VehicleConfig`).
+and emits a MATLAB vehicle file under `src/+lts/+vehicles/<Name>.m`, structured
+exactly like the reference configs (`lts.vehicles.baseline` / `lts.vehicle.VehicleConfig`).
 
-The generated car is immediately usable: instantiate `VehicleConfig()`, then
+The generated car is immediately usable: instantiate `lts.vehicle.VehicleConfig()`, then
 override every value the spec sheet can speak to. Each field carries a trailing
 comment recording where its value came from:
 
@@ -56,9 +56,9 @@ python scripts/generate_vehicle.py <spec_sheet.csv> [--name R26]
 | Flag            | Default                          | Description                                                        |
 |-----------------|----------------------------------|--------------------------------------------------------------------|
 | `csv` (pos.)    | —                                | Path to the FSAE Design Spec Sheet CSV.                           |
-| `--name`        | `generated`                      | Vehicle / function name → `src/+vehicles/<Name>.m`. Must be a valid MATLAB identifier. |
+| `--name`        | `generated`                      | Vehicle / function name -> `src/+lts/+vehicles/<Name>.m`. Must be a valid MATLAB identifier. |
 | `--driver-mass` | `68`                             | Driver mass [kg] added to the car's no-driver mass for `totalMass`. |
-| `--output`      | `src/+vehicles/<Name>.m`         | Override the output path.                                          |
+| `--output`      | `src/+lts/+vehicles/<Name>.m`    | Override the output path.                                          |
 | `--force`       | off                              | Overwrite an existing output file (refuses otherwise).            |
 | `--dry-run`     | off                              | Print the generated file and the report; write nothing.           |
 
@@ -70,10 +70,10 @@ Standard library only — no dependencies.
 python scripts/generate_vehicle.py "2026_FSAE_Design_EV_Spec_Sheet.csv" --name R26
 ```
 
-writes `src/+vehicles/R26.m`, then reference it in `run_simulation.m`:
+writes `src/+lts/+vehicles/R26.m`, then reference it from `src/+lts/+app/run_simulation.m`:
 
 ```matlab
-config = vehicles.R26();
+config = lts.vehicles.R26();
 ```
 
 ### What gets mapped
@@ -84,7 +84,7 @@ The tool always prints a sourcing report to stdout with four sections:
   conversions, e.g. mm→m, N/mm→N/m, N·m/deg→N·m/rad, %→fraction).
 - **DERIVED (left as TODO)** — present in the CSV but ambiguous; left at the
   baseline default with the derivation sketched in a comment.
-- **UNMAPPED** — present in the spec sheet but with no field in `VehicleConfig`
+- **UNMAPPED** — present in the spec sheet but with no field in `lts.vehicle.VehicleConfig`
   (e.g. brake hardware, battery pack, frame construction).
 - **MISSING** — config fields with no spec-sheet source (baseline kept).
 

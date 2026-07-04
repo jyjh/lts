@@ -65,8 +65,8 @@ verifyGreaterThan(testCase, highThrottle, lowThrottle);
 end
 
 function [driver, trackData, baseLength] = createSkidpadDriver(rearSlip)
-track = components.TestTrack('skidpad');
-simulator = Simulator([], [], 0.001);
+track = lts.components.TestTrack('skidpad');
+simulator = lts.simulation.Simulator([], [], 0.001);
 [points, curvature, mu, heading] = simulator.repeatClosedTrack( ...
     track.getTrackPoints(), ...
     track.getCurvature(), ...
@@ -80,7 +80,7 @@ vehicle = struct( ...
     'track', track, ...
     'wheelbase', 1.558, ...
     'tire', createTireState(rearSlip));
-driver = DriverModel(vehicle);
+driver = lts.driver.DriverModel(vehicle);
 driver.inputDt = 0.001;
 driver.throttleRampTime = 0;
 driver.brakeRampTime = 0;
@@ -90,7 +90,7 @@ driver.pedalReleaseFilterTime = 0;
 driver.pedalSwitchHoldTime = 0;
 driver.trackArcLen = arcLen;
 driver.trackCurvature = curvature(:);
-driver.inputPlanner = DriverInputPlanner([], driver);
+driver.inputPlanner = lts.driver.DriverInputPlanner([], driver);
 driver.inputProfile = createOpenLoopProfile(arcLen, curvature(:), vehicle.wheelbase);
 
 trackData = struct( ...
@@ -122,7 +122,7 @@ end
 
 function input = sampleDriverAtS(driver, trackData, s, speed, lateralError)
 ref = referenceAtS(trackData, s, lateralError);
-state = VehicleState('s', s, 'speed', speed, 'yaw', ref.heading);
+state = lts.simulation.VehicleState('s', s, 'speed', speed, 'yaw', ref.heading);
 state.refHeading = ref.heading;
 state.refCurvature = ref.curvature;
 state.lateralError = lateralError;
@@ -132,16 +132,16 @@ input = driver.computeInput(state, ref);
 end
 
 function [driver, state] = createStraightDriverWithCrr(crr)
-config = vehicles.baseline();
+config = lts.vehicles.baseline();
 config.maxSpeed = 10;
 config.tire.rollingResistanceCoeff = crr;
-track = components.TestTrack('straight10');
-vehicle = VehicleManager.fromConfig(config, track, 0.001);
-driver = DriverModel(vehicle);
+track = lts.components.TestTrack('straight10');
+vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, 0.001);
+driver = lts.driver.DriverModel(vehicle);
 driver.throttleRampTime = 0;
 driver.brakeRampTime = 0;
 driver.steeringRampTime = 0;
-state = VehicleState('s', 0, 'speed', 10, 'vx', 10, 'yaw', 0, 'x', 0, 'y', 0);
+state = lts.simulation.VehicleState('s', 0, 'speed', 10, 'vx', 10, 'yaw', 0, 'x', 0, 'y', 0);
 state.vehicleManager = vehicle;
 end
 

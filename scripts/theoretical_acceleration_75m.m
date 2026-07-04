@@ -5,7 +5,7 @@
 
 clear; clc;
 
-configName = 'baseline';     % Matches src/run_simulation.m by default
+configName = 'baseline';     % Matches src/+lts/+app/run_simulation.m by default
 distanceM = 75.0;            % FSAE acceleration distance [m]
 dsM = 0.05;                  % Integration distance step [m]
 surfaceMu = [];              % [] = raw tire-file reference surface
@@ -18,8 +18,8 @@ scriptDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(scriptDir);
 addpath(fullfile(repoRoot, 'src'));
 
-cfg = feval(['vehicles.' configName]);
-tire = components.Tire.PacejkaTire(cfg.tire.tirFile);
+cfg = feval(['lts.vehicles.' configName]);
+tire = lts.components.Tire.PacejkaTire(cfg.tire.tirFile);
 tire.wheelInertia = cfg.tire.wheelInertia;
 if isfield(cfg.tire, 'relaxationLength')
     tire.relaxationLength = cfg.tire.relaxationLength;
@@ -31,10 +31,10 @@ if isempty(surfaceMu)
     surfaceMu = tire.surfaceMuReference;
 end
 
-powertrain = components.Powertrain.EMRAX228Powertrain( ...
+powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
     cfg.powertrain.matFile, ...
     cfg.powertrain.efficiency, ...
-    fieldOr(cfg.powertrain, 'motorRotorInertia', 0.07));
+    lts.util.fieldOr(cfg.powertrain, 'motorRotorInertia', 0.07));
 
 massForAccel = effectiveMass(cfg, powertrain, includeRotatingInertia);
 
@@ -52,7 +52,7 @@ avgAx = run.finalSpeed^2 / (2 * distanceM);
 firstPowerIdx = find(run.Fmotor < run.FtractionRear - 1e-6, 1, 'first');
 
 fprintf('\n=== Theoretical 75 m Acceleration Estimate ===\n');
-fprintf('Config:              vehicles.%s\n', configName);
+fprintf('Config:              lts.vehicles.%s\n', configName);
 fprintf('Tire file:           %s\n', cfg.tire.tirFile);
 fprintf('Surface mu input:    %.3f\n', surfaceMu);
 fprintf('Powertrain limit:    %s\n', onOff(usePowertrainLimit));
@@ -62,11 +62,11 @@ fprintf('\n');
 fprintf('Rear static tire peak mu_x: %.3f at kappa %.3f\n', ...
     launch.staticRearMu, launch.staticRearKappa);
 fprintf('Tire-only launch cap:       %.2f m/s^2 (%.2f g)\n', ...
-    launchTireOnlyAx, launchTireOnlyAx / VehicleManager.g);
+    launchTireOnlyAx, launchTireOnlyAx / lts.vehicle.VehicleManager.g);
 fprintf('Launch acceleration used:   %.2f m/s^2 (%.2f g)\n', ...
-    launchAx, launchAx / VehicleManager.g);
+    launchAx, launchAx / lts.vehicle.VehicleManager.g);
 fprintf('Peak acceleration over 75m: %.2f m/s^2 (%.2f g) at %.1f m, %.1f km/h\n', ...
-    peakAx, peakAx / VehicleManager.g, run.s(peakIdx), run.v(peakIdx) * 3.6);
+    peakAx, peakAx / lts.vehicle.VehicleManager.g, run.s(peakIdx), run.v(peakIdx) * 3.6);
 if isempty(firstPowerIdx)
     fprintf('Limiter transition:          never power-limited over %.1f m\n', distanceM);
 else
@@ -77,7 +77,7 @@ fprintf('\n');
 fprintf('Theoretical minimum 75 m time: %.3f s\n', run.time);
 fprintf('Trap speed:                   %.1f km/h\n', run.finalSpeed * 3.6);
 fprintf('Equivalent average accel:      %.2f m/s^2 (%.2f g)\n', ...
-    avgAx, avgAx / VehicleManager.g);
+    avgAx, avgAx / lts.vehicle.VehicleManager.g);
 
 if makePlots
     plotAccelerationDiagnostics(run, cfg, powertrain, distanceM, scriptDir, savePlots);
@@ -162,9 +162,9 @@ end
 
 function [ax, detail] = maxAccelAtSpeed(v, cfg, tire, powertrain, ...
         massForAccel, surfaceMu, usePowertrainLimit)
-    g = VehicleManager.g;
+    g = lts.vehicle.VehicleManager.g;
     W = cfg.totalMass * g;
-    crr = fieldOr(cfg.tire, 'rollingResistanceCoeff', 0);
+    crr = lts.util.fieldOr(cfg.tire, 'rollingResistanceCoeff', 0);
     ax = 0;
 
     for iter = 1:12 %#ok<NASGU>
@@ -288,7 +288,7 @@ function plotAccelerationDiagnostics(run, cfg, powertrain, distanceM, scriptDir,
 
     nexttile;
     yyaxis left;
-    hAccel = plot(s, run.ax / VehicleManager.g, 'LineWidth', 1.5);
+    hAccel = plot(s, run.ax / lts.vehicle.VehicleManager.g, 'LineWidth', 1.5);
     ylabel('Longitudinal accel [g]');
     yyaxis right;
     hMargin = plot(s, forceMargin, 'LineWidth', 1.4);
@@ -432,13 +432,6 @@ function mEff = effectiveMass(cfg, powertrain, includeRotatingInertia)
     mEff = mEff + (2 * baseI + 2 * rearI) / R^2;
 end
 
-function value = fieldOr(s, name, fallback)
-    if isfield(s, name)
-        value = s.(name);
-    else
-        value = fallback;
-    end
-end
 
 function text = onOff(tf)
     if tf

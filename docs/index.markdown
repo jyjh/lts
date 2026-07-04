@@ -7,26 +7,26 @@ An object-oriented MATLAB lap-time simulation framework for FSAE vehicles.
 
 ## Architecture
 
-The project uses a composition-based vehicle model. `VehicleManager` stores the selected vehicle components and parameters, while `Simulator` owns the timestep loop. Components remain swappable through abstract interfaces where practical.
+The project uses a composition-based vehicle model. `lts.vehicle.VehicleManager` stores the selected vehicle components and parameters, while `lts.simulation.Simulator` owns the timestep loop. Components remain swappable through abstract interfaces where practical.
 
 ```text
-VehicleManager
-|-- components.Aero.WholeCarAero
-|-- components.Chassis.SimpleChassis
+lts.vehicle.VehicleManager
+|-- lts.components.Aero.WholeCarAero
+|-- lts.components.Chassis.SimpleChassis
 |   `-- ChassisState
-|-- components.Suspension.SuspensionManager
+|-- lts.components.Suspension.SuspensionManager
 |   |-- SimpleSuspension + SuspensionState (FL)
 |   |-- SimpleSuspension + SuspensionState (FR)
 |   |-- SimpleSuspension + SuspensionState (RL)
 |   `-- SimpleSuspension + SuspensionState (RR)
-|-- components.Powertrain.EMRAX228Powertrain
+|-- lts.components.Powertrain.EMRAX228Powertrain
 |   `-- PowertrainState
-|-- components.Tire.PacejkaTire
+|-- lts.components.Tire.PacejkaTire
 |   |-- TireState (FL)
 |   |-- TireState (FR)
 |   |-- TireState (RL)
 |   `-- TireState (RR)
-`-- components.TestTrack
+`-- lts.components.TestTrack
 ```
 
 See the [class diagram](class-diagram/) for a fuller relationship map.
@@ -34,24 +34,25 @@ See the [physics flow](physics-flow/) for the force equations and timestep data 
 
 ## Simulation Model
 
-- `DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
+- `lts.driver.DriverModel` reads the current state and upcoming curvature to choose throttle and brake.
 - `WholeCarAero` resolves a single center-of-pressure aero resultant into front/rear downforce and total drag.
 - `SimpleChassis` tracks heave, pitch, and roll from accelerations plus aero pitch moments.
 - `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
 - `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
 - `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction.
-- `VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
+- `lts.simulation.VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
 ## Usage
 
 Run the main script in MATLAB:
 
 ```matlab
-run_simulation
+addpath('src')
+lts.app.run_simulation
 ```
 
-Change the track type by editing `trackType` in `src/run_simulation.m`:
+Change the track type by editing `trackType` in `src/+lts/+app/run_simulation.m`:
 
 - `straight10` - 10 m straight for fast export/debug validation
 - `straight` - 200 m straight for acceleration and top-speed validation
@@ -65,24 +66,24 @@ Change the track type by editing `trackType` in `src/run_simulation.m`:
 Tune the EMRAX powertrain after construction if needed:
 
 ```matlab
-powertrain = components.Powertrain.EMRAX228Powertrain();
+powertrain = lts.components.Powertrain.EMRAX228Powertrain();
 powertrain.rpmFalloffFactor = 2.0;  % steeper torque falloff above the map endpoint
 ```
 
 ## Key Files
 
 ```text
-src/run_simulation.m                         Entry-point script
-src/Simulator.m                              Simulation loop and telemetry logging
-src/DriverModel.m                            Look-ahead driver inputs
-src/VehicleManager.m                         Component and vehicle-parameter container
-src/VehicleState.m                           Vehicle dynamic state
-src/+components/+Aero/                       Aero components and manager
-src/+components/+Suspension/                 Four-corner transient suspension
-src/+components/+Powertrain/                 EMRAX powertrain and differentials
-src/+components/+Tire/                       Pacejka tire model
-src/+components/TestTrack.m                  Built-in test tracks
-src/GraphPlotter.m                           Simulation dashboards
+src/+lts/+app/run_simulation.m               Entry-point function
+src/+lts/+simulation/Simulator.m             Simulation loop and telemetry logging
+src/+lts/+driver/DriverModel.m               Look-ahead driver inputs
+src/+lts/+vehicle/VehicleManager.m           Component and vehicle-parameter container
+src/+lts/+simulation/VehicleState.m          Vehicle dynamic state
+src/+lts/+components/+Aero/                  Aero components and manager
+src/+lts/+components/+Suspension/            Four-corner transient suspension
+src/+lts/+components/+Powertrain/            EMRAX powertrain and differentials
+src/+lts/+components/+Tire/                  Pacejka tire model
+src/+lts/+components/TestTrack.m             Built-in test tracks
+src/+lts/+telemetry/GraphPlotter.m           Simulation dashboards
 ```
 
 ## Requirements

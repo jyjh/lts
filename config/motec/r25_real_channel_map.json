@@ -112,6 +112,70 @@
         "km/h": 0.2777777777777778
       }
     },
+    "wheel_speed_fl_mps": {
+      "names": [
+        "Wheel Speed Front Left Sensor Linear",
+        "Wheel Speed Front Left",
+        "Front Left Wheel Speed",
+        "Wheel Speed FL",
+        "FL Wheel Speed",
+        "Speed FL"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "wheel_speed_fr_mps": {
+      "names": [
+        "Wheel Speed Front Right Sensor Linear",
+        "Wheel Speed Front Right",
+        "Front Right Wheel Speed",
+        "Wheel Speed FR",
+        "FR Wheel Speed",
+        "Speed FR"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "wheel_speed_rl_mps": {
+      "names": [
+        "Wheel Speed Rear Left Sensor Linear",
+        "Wheel Speed Rear Left",
+        "Rear Left Wheel Speed",
+        "Wheel Speed RL",
+        "RL Wheel Speed",
+        "Speed RL"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
+    "wheel_speed_rr_mps": {
+      "names": [
+        "Wheel Speed Rear Right Sensor Linear",
+        "Wheel Speed Rear Right",
+        "Rear Right Wheel Speed",
+        "Wheel Speed RR",
+        "RR Wheel Speed",
+        "Speed RR"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "m/s": 1.0,
+        "km/h": 0.2777777777777778
+      }
+    },
     "vx_mps": {
       "names": ["Vx", "Body Vx", "Longitudinal Velocity", "Longitudinal Speed"],
       "required": false,

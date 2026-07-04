@@ -13,7 +13,7 @@ verifyGreaterThan(testCase, numel(pt.torqueCurveNm), 0);
 end
 
 function testLegacyCCMapLoadsUppercaseTorqueField(testCase)
-pt = components.Powertrain.EMRAX228Powertrain( ...
+pt = lts.components.Powertrain.EMRAX228Powertrain( ...
     powertrainMapPath('EMRAX228CC Single_4.5.mat'));
 verifyEqual(testCase, pt.totalGearRatio, 4.5, 'RelTol', 1e-12);
 verifyGreaterThan(testCase, pt.maxEngineTorque, 0);
@@ -82,7 +82,7 @@ expectedDriven = pt.motorRotorInertia * pt.totalGearRatio^2;
 verifyEqual(testCase, pt.getReflectedRotorInertia(), expectedDriven, 'RelTol', 1e-12);
 verifyGreaterThan(testCase, expectedDriven, 0);
 
-% A standalone powertrain has no Simulator cache; the per-corner split is
+% A standalone powertrain has no lts.simulation.Simulator cache; the per-corner split is
 % verified through getWheelInertia semantics indirectly: the reflected
 % inertia is strictly positive and material relative to a 0.5 wheel inertia.
 verifyGreaterThan(testCase, expectedDriven, 0.5);
@@ -90,10 +90,10 @@ end
 
 function testSimulatorSplitsReflectedRotorInertiaAcrossRearWheels(testCase)
 pt = createPowertrain();
-tire = components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.wheelInertia = 0.5;
-vehicle = VehicleManager([], [], pt, tire, []);
-simulator = Simulator(vehicle, [], 0.001);
+vehicle = lts.vehicle.VehicleManager([], [], pt, tire, []);
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 inertia = simulator.getWheelInertia();
 
 expectedRear = tire.wheelInertia + 0.5 * pt.getReflectedRotorInertia();
@@ -119,7 +119,7 @@ function testLockedDiffReturnsMeanCarrierAndEqualSplit(testCase)
 % Fix 3: the spool no longer forward-integrates drive torque (which double-
 % counted the impulse). It returns a 50/50 split and the mean carrier speed,
 % leaving dynamics to the per-corner solver.
-diff = components.Powertrain.LockedDifferential();
+diff = lts.components.Powertrain.LockedDifferential();
 out = diff.solveDrive(600, 40, 60, 0.5, 0.001);
 verifyEqual(testCase, out.TL, 300, 'RelTol', 1e-12);
 verifyEqual(testCase, out.TR, 300, 'RelTol', 1e-12);
@@ -130,7 +130,7 @@ end
 function testLockedDiffZeroTorqueKeepsMeanSpeed(testCase)
 % Fix 3: with no drive torque, carrierOmega is just the mean — no spurious
 % acceleration term remains.
-diff = components.Powertrain.LockedDifferential();
+diff = lts.components.Powertrain.LockedDifferential();
 out = diff.solveDrive(0, 30, 50, 0.5, 0.001);
 verifyEqual(testCase, out.carrierOmega, 40, 'RelTol', 1e-12);
 verifyEqual(testCase, out.TL + out.TR, 0, 'AbsTol', 1e-12);
@@ -140,7 +140,7 @@ function testLSDConservesTotalTorqueAtLowCommand(testCase)
 % Fix 4: with a high preload relative to a small commanded torque, the old
 % code drove the fast side negative and broke TL+TR == T_total after the
 % non-negative clamp. The Tlock cap now prevents this.
-diff = components.Powertrain.ClutchLSDDifferential('preload', 20);
+diff = lts.components.Powertrain.ClutchLSDDifferential('preload', 20);
 T_total = 10;   % preload (20) >> base (5) → would invert the fast side pre-fix
 out = diff.solveDrive(T_total, 40, 60, 0.5, 0.001);
 verifyEqual(testCase, out.TL + out.TR, T_total, 'AbsTol', 1e-9);
@@ -149,7 +149,7 @@ verifyGreaterThanOrEqual(testCase, out.TR, 0);
 end
 
 function testLSDZeroTorqueCannotProduceNegativeTorque(testCase)
-diff = components.Powertrain.ClutchLSDDifferential('preload', 20);
+diff = lts.components.Powertrain.ClutchLSDDifferential('preload', 20);
 
 out = diff.solveDrive(0, 40, 60, 0.5, 0.001);
 
@@ -160,7 +160,7 @@ end
 
 function testLSDBiasesTowardSlowerWheel(testCase)
 % Fix 4: the slower wheel receives more torque than the faster one.
-diff = components.Powertrain.ClutchLSDDifferential('preload', 0, 'ramp', 0.5);
+diff = lts.components.Powertrain.ClutchLSDDifferential('preload', 0, 'ramp', 0.5);
 out = diff.solveDrive(400, 30, 60, 0.5, 0.001);   % left is slower
 verifyGreaterThan(testCase, out.TL, out.TR);
 verifyEqual(testCase, out.TL + out.TR, 400, 'AbsTol', 1e-9);
@@ -169,7 +169,7 @@ end
 function testLSDBiasRatioRespected(testCase)
 % Fix 4: T_slow / T_fast must not exceed biasRatio.
 biasRatio = 2.0;
-diff = components.Powertrain.ClutchLSDDifferential( ...
+diff = lts.components.Powertrain.ClutchLSDDifferential( ...
     'preload', 0, 'ramp', 1.0, 'biasRatio', biasRatio);
 out = diff.solveDrive(400, 30, 60, 0.5, 0.001);
 mx = max(out.TL, out.TR);
@@ -181,18 +181,18 @@ verifyEqual(testCase, out.TL + out.TR, 400, 'AbsTol', 1e-9);
 end
 
 function testDrexlerRequiresCalibrationBeforeSolving(testCase)
-diff = components.Powertrain.DrexlerRampPlateDifferential();
+diff = lts.components.Powertrain.DrexlerRampPlateDifferential();
 
 verifyError(testCase, @() diff.solveDrive(100, 30, 60, 0.5, 0.001), ...
     'DrexlerRampPlateDifferential:Uncalibrated');
 end
 
 function testDrexlerVehicleConfigRequiresCalibration(testCase)
-cfg = VehicleConfig();
+cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.differential = struct('type', 'drexler');
 
 verifyError(testCase, ...
-    @() VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001), ...
+    @() lts.vehicle.VehicleManager.fromConfig(cfg, lts.components.TestTrack('straight10'), 0.001), ...
     'DrexlerRampPlateDifferential:Uncalibrated');
 end
 
@@ -249,7 +249,7 @@ end
 
 function testDrexlerDoesNotUseHydraulicBrakeTorqueAsDecelRampInput(testCase)
 % Rear hydraulic brake torque is applied after the differential in
-% Simulator.step, so it is not an input to this driveline solve.
+% lts.simulation.Simulator.step, so it is not an input to this driveline solve.
 diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 0, ...
     'rampTorqueScale', 1);
 
@@ -273,7 +273,7 @@ verifyEqual(testCase, motulOut.TR, referenceOut.TR, 'RelTol', 1e-12);
 end
 
 function testDrexlerMetadataCarriesThroughVehicleConfig(testCase)
-cfg = VehicleConfig();
+cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.differential = struct( ...
     'type', 'drexler', ...
     'accelRampAngleDeg', 30, ...
@@ -282,10 +282,10 @@ cfg.powertrain.differential = struct( ...
     'rampTorqueScale', 0.25, ...
     'fluid', "Motul Gear Competition 75W-140");
 
-vehicle = VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001);
+vehicle = lts.vehicle.VehicleManager.fromConfig(cfg, lts.components.TestTrack('straight10'), 0.001);
 
 verifyClass(testCase, vehicle.differential, ...
-    'components.Powertrain.DrexlerRampPlateDifferential');
+    'lts.components.Powertrain.DrexlerRampPlateDifferential');
 verifyEqual(testCase, vehicle.differential.fluid, ...
     "Motul Gear Competition 75W-140");
 end
@@ -387,10 +387,10 @@ verifyError(testCase, @() pt.computeDriveTorque(12, 0.5), ...
 end
 
 function testVehicleConfigDoesNotHideEmptyThrottleMap(testCase)
-cfg = VehicleConfig();
+cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.throttleMapInput = [];
 cfg.powertrain.throttleMapOutput = [];
-vehicle = VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001);
+vehicle = lts.vehicle.VehicleManager.fromConfig(cfg, lts.components.TestTrack('straight10'), 0.001);
 vehicle.powertrain.updateStateFromVehicleSpeed(12);
 
 verifyError(testCase, @() vehicle.powertrain.computeDriveTorque(12, 0.5), ...
@@ -428,11 +428,11 @@ end
 % ---------- helpers ----------
 
 function pt = createPowertrain()
-pt = components.Powertrain.EMRAX228Powertrain();
+pt = lts.components.Powertrain.EMRAX228Powertrain();
 end
 
 function diff = createCalibratedDrexler(varargin)
-diff = components.Powertrain.DrexlerRampPlateDifferential( ...
+diff = lts.components.Powertrain.DrexlerRampPlateDifferential( ...
     'preloadBreakawayTorqueNm', 30, ...
     'rampTorqueScale', 0.2, ...
     varargin{:});
@@ -441,5 +441,5 @@ end
 function path = powertrainMapPath(fileName)
 testDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(testDir);
-path = fullfile(repoRoot, 'src', '+components', '+Powertrain', fileName);
+path = fullfile(repoRoot, 'src', '+lts', '+components', '+Powertrain', fileName);
 end

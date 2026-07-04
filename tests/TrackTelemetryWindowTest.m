@@ -3,7 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testSkidpadDeclaresWarmupAndRecordedLap(testCase)
-track = components.TestTrack('skidpad');
+track = lts.components.TestTrack('skidpad');
 
 verifyTrue(testCase, track.isClosedLoop());
 verifyEqual(testCase, track.getWarmupLaps(), 1);
@@ -11,10 +11,10 @@ verifyEqual(testCase, track.getRecordedLaps(), 1);
 end
 
 function testDefaultInitialYawAlignsToTrackHeading(testCase)
-track = components.TestTrack('skidpad');
+track = lts.components.TestTrack('skidpad');
 trackData = createTrackData(track);
-simulator = Simulator([], [], 0.001);
-state = VehicleState('s', 0, 'speed', 0.1);
+simulator = lts.simulation.Simulator([], [], 0.001);
+state = lts.simulation.VehicleState('s', 0, 'speed', 0.1);
 
 state = simulator.initializePlanarState(state, trackData);
 
@@ -23,10 +23,10 @@ verifyEqual(testCase, state.heading, trackData.heading(1), 'AbsTol', 1e-12);
 end
 
 function testExplicitInitialYawIsPreserved(testCase)
-track = components.TestTrack('skidpad');
+track = lts.components.TestTrack('skidpad');
 trackData = createTrackData(track);
-simulator = Simulator([], [], 0.001);
-state = VehicleState('s', 0, 'speed', 0.1, 'yaw', 0);
+simulator = lts.simulation.Simulator([], [], 0.001);
+state = lts.simulation.VehicleState('s', 0, 'speed', 0.1, 'yaw', 0);
 
 state = simulator.initializePlanarState(state, trackData);
 
@@ -35,8 +35,8 @@ verifyEqual(testCase, state.heading, 0, 'AbsTol', 1e-12);
 end
 
 function testClosedTrackRepeatHasContinuousArcLength(testCase)
-track = components.TestTrack('skidpad');
-simulator = Simulator([], [], 0.001);
+track = lts.components.TestTrack('skidpad');
+simulator = lts.simulation.Simulator([], [], 0.001);
 
 [points, curvature, mu, heading] = simulator.repeatClosedTrack( ...
     track.getTrackPoints(), ...
@@ -55,7 +55,7 @@ verifyEqual(testCase, arcLen(end), 2 * track.getTotalLength(), 'AbsTol', 1e-6);
 end
 
 function testTelemetryWindowDropsWarmupAndRezeros(testCase)
-simulator = Simulator([], [], 0.001);
+simulator = lts.simulation.Simulator([], [], 0.001);
 stateLog = createStateLog();
 
 [stateLog, lapTime, recordedSteps] = simulator.applyTelemetryLapWindow( ...
@@ -71,7 +71,7 @@ verifyEqual(testCase, lapTime, 2);
 end
 
 function testTelemetryWindowPreservesNormalLapTiming(testCase)
-simulator = Simulator([], [], 0.001);
+simulator = lts.simulation.Simulator([], [], 0.001);
 stateLog = createStateLog();
 
 [stateLog, lapTime, recordedSteps] = simulator.applyTelemetryLapWindow( ...
@@ -84,7 +84,7 @@ verifyEqual(testCase, lapTime, 6);
 end
 
 function testTelemetryWindowCanReturnEmptyTimedLap(testCase)
-simulator = Simulator([], [], 0.001);
+simulator = lts.simulation.Simulator([], [], 0.001);
 stateLog = createStateLog();
 
 lastwarn('');
@@ -97,13 +97,13 @@ verifyEqual(testCase, recordedSteps, 0);
 verifyEqual(testCase, lapTime, 0);
 verifyTrue(testCase, isempty(stateLog.time));
 verifyTrue(testCase, isempty(stateLog.s));
-verifyEqual(testCase, warnId, 'Simulator:NoRecordedTelemetry');
+verifyEqual(testCase, warnId, 'lts_simulation_Simulator:NoRecordedTelemetry');
 verifyTrue(testCase, contains(warnMsg, 'Max simulated s'));
 verifyTrue(testCase, contains(warnMsg, 'minimum track margin'));
 end
 
 function testProjectToReferenceMatchesWithPrecomputedSegments(testCase)
-simulator = Simulator([], [], 0.001);
+simulator = lts.simulation.Simulator([], [], 0.001);
 trackData = projectionTrackData();
 cachedTrackData = simulator.precomputeTrackSegments(trackData);
 
@@ -119,7 +119,7 @@ verifyEqual(testCase, cachedRef.mu, uncachedRef.mu, 'AbsTol', 1e-12);
 end
 
 function testProjectToReferenceFallsBackWhenLocalWindowIsStale(testCase)
-simulator = Simulator([], [], 0.001);
+simulator = lts.simulation.Simulator([], [], 0.001);
 trackData = simulator.precomputeTrackSegments(longProjectionTrackData());
 
 ref = simulator.projectToReference(195, 0.2, trackData, 1);
