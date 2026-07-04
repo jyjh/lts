@@ -13,7 +13,7 @@ classdef (Abstract) ChassisComponent
         reset(obj)
 
         % Update heave, pitch, and roll from vehicle accelerations
-        updateFromAccelerations(obj, ax, ay, aeroForces, dt)
+        updateFromAccelerations(obj, ax, ay, aeroForces, dt, yawAccel)
 
         % Return current per-corner chassis displacement/velocity structs
         cornerKinematics = computeCornerKinematics(obj)

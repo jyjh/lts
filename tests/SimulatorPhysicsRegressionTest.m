@@ -113,6 +113,58 @@ verifyFalse(testCase, isempty(simulator.cachedHasChassis));
 verifyEqual(testCase, simulator.cachedHasChassis, false);
 end
 
+function testPlanarDynamicsReportsAxleSpecificLateralAcceleration(testCase)
+vehicle = VehicleManager([], [], [], [], []);
+vehicle.totalMass = 256;
+vehicle.wheelbase = 1.6;
+vehicle.staticFrontWeight = 0.45;
+vehicle.yawInertia = 100;
+simulator = Simulator(vehicle, [], 0.001);
+state = VehicleState('speed', 10, 'vx', 10, 'vy', 0);
+state.vehicleManager = vehicle;
+tireData = struct( ...
+    'sumFxBody', 0, ...
+    'sumFyBody', 512, ...
+    'yawMoment', 300);
+
+dynamics = simulator.computePlanarDynamics(state, tireData, 0);
+
+frontArm = vehicle.wheelbase * (1 - vehicle.staticFrontWeight);
+rearArm = vehicle.wheelbase * vehicle.staticFrontWeight;
+verifyEqual(testCase, dynamics.ay, 2, 'AbsTol', 1e-12);
+verifyEqual(testCase, dynamics.yawAccel, 3, 'AbsTol', 1e-12);
+verifyEqual(testCase, dynamics.frontAxleAy, ...
+    dynamics.ay + dynamics.yawAccel * frontArm, 'AbsTol', 1e-12);
+verifyEqual(testCase, dynamics.rearAxleAy, ...
+    dynamics.ay - dynamics.yawAccel * rearArm, 'AbsTol', 1e-12);
+end
+
+function testLeanTelemetryAndMotecExportIncludeAxleAccelerations(testCase)
+simulator = Simulator(VehicleManager([], [], [], [], []), [], 0.001);
+stateLog = simulator.createLeanStateLog(2);
+verifyTrue(testCase, isfield(stateLog, 'frontAxleAy'));
+verifyTrue(testCase, isfield(stateLog, 'rearAxleAy'));
+
+stateLog.time = [0; 0.001];
+stateLog.s = [0; 0.01];
+stateLog.speed = [10; 10];
+stateLog.speedKmh = stateLog.speed * 3.6;
+stateLog.ax = [0; 0];
+stateLog.ay = [1; 1.1];
+stateLog.frontAxleAy = [1.2; 1.3];
+stateLog.rearAxleAy = [0.8; 0.9];
+
+csvFile = [tempname '.csv'];
+cleanup = onCleanup(@() deleteIfExists(csvFile)); %#ok<NASGU>
+TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
+header = firstCsvLine(csvFile);
+
+verifyTrue(testCase, contains(header, 'Front Axle Lat Accel Raw'));
+verifyTrue(testCase, contains(header, 'Rear Axle Lat Accel Raw'));
+verifyTrue(testCase, contains(header, 'G Sensor Front Axle Acceleration Lateral'));
+verifyTrue(testCase, contains(header, 'G Sensor Rear Axle Acceleration Lateral'));
+end
+
 function initializeWheelSpeeds(tire, speed)
 corners = {tire.FL, tire.FR, tire.RL, tire.RR};
 for i = 1:numel(corners)
@@ -132,4 +184,16 @@ trackData = struct( ...
     'trackWidth', 3, ...
     'trackHalfWidth', 1.5, ...
     'nPts', 2);
+end
+
+function line = firstCsvLine(fileName)
+fid = fopen(fileName, 'r');
+cleanup = onCleanup(@() fclose(fid)); %#ok<NASGU>
+line = fgetl(fid);
+end
+
+function deleteIfExists(fileName)
+if exist(fileName, 'file')
+    delete(fileName);
+end
 end

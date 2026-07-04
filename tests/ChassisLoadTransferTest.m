@@ -39,6 +39,36 @@ verifyGreaterThan(testCase, chassis.getRollAngle(), 0);
 verifyGreaterThan(testCase, rightLoad, leftLoad);
 end
 
+function testYawAccelerationCreatesOpposedAxleRollExcitation(testCase)
+[~, ~, chassis] = createVehicleWithChassis();
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+chassis.updateFromAccelerations(0, 0, zeroAero, dt, 3);
+
+verifyGreaterThan(testCase, chassis.state.frontRollAccel, 0);
+verifyLessThan(testCase, chassis.state.rearRollAccel, 0);
+end
+
+function testZeroYawAccelerationMatchesScalarLateralRoll(testCase)
+[~, ~, scalarChassis] = createVehicleWithChassis();
+[~, ~, explicitChassis] = createVehicleWithChassis();
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+scalarChassis.updateFromAccelerations(0, 6, zeroAero, dt);
+explicitChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+
+verifyEqual(testCase, explicitChassis.state.frontRollAccel, ...
+    scalarChassis.state.frontRollAccel, 'AbsTol', 1e-12);
+verifyEqual(testCase, explicitChassis.state.rearRollAccel, ...
+    scalarChassis.state.rearRollAccel, 'AbsTol', 1e-12);
+verifyEqual(testCase, explicitChassis.getFrontRollAngle(), ...
+    scalarChassis.getFrontRollAngle(), 'AbsTol', 1e-12);
+verifyEqual(testCase, explicitChassis.getRearRollAngle(), ...
+    scalarChassis.getRearRollAngle(), 'AbsTol', 1e-12);
+end
+
 function testDragAboveCgCreatesPositivePitchMoment(testCase)
 [~, ~, chassis] = createVehicleWithChassis();
 aeroForces = zeroAeroForces();
@@ -103,6 +133,32 @@ loadValues = [loads.FL; loads.FR; loads.RL; loads.RR];
 
 verifyTrue(testCase, all(isfinite(loadValues)));
 verifyTrue(testCase, all(loadValues >= 0));
+end
+
+function testAlgebraicFallbackUsesAxleSpecificLateralAcceleration(testCase)
+config = vehicles.baseline();
+vehicle = VehicleManager([], [], [], [], []);
+vehicle.totalMass = config.totalMass;
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.cgHeight = config.cgHeight;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+geometry = components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
+suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
+vehicle.suspension = suspension;
+suspension.warmup(vehicle.totalMass, 0.001);
+state = VehicleState('speed', 20);
+state.vehicleManager = vehicle;
+state.ax = 0;
+state.ay = 0;
+state.frontAxleAy = 5;
+state.rearAxleAy = -5;
+
+loads = suspension.estimateCornerLoads(state, 0, 0, vehicle.totalMass);
+
+verifyGreaterThan(testCase, loads.FR, loads.FL);
+verifyGreaterThan(testCase, loads.RL, loads.RR);
 end
 
 function [vehicle, suspension, chassis] = createVehicleWithChassis()

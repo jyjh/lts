@@ -230,6 +230,22 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             W = totalMass * obj.g;
             ax = state.ax;
             ay = state.ay;
+            frontAxleAy = ay;
+            rearAxleAy = ay;
+            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+                    isfinite(state.frontAxleAy)
+                frontAxleAy = state.frontAxleAy;
+            elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
+                    isfinite(state.frontAxleAy)
+                frontAxleAy = state.frontAxleAy;
+            end
+            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+                    isfinite(state.rearAxleAy)
+                rearAxleAy = state.rearAxleAy;
+            elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
+                    isfinite(state.rearAxleAy)
+                rearAxleAy = state.rearAxleAy;
+            end
             
             % Geometry (stored in corners from VehicleManager)
             tw = obj.frontLeft.trackWidth;
@@ -262,19 +278,22 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             % the roll-stiffness distribution. With hrcF = hrcR = 0 the
             % geometric part vanishes and the split collapses to the legacy
             % CG-height-only behavior.
-            latForce = totalMass * abs(ay);
+            equivalentAy = frontWeightFrac * abs(frontAxleAy) + ...
+                (1 - frontWeightFrac) * abs(rearAxleAy);
+            latForce = totalMass * equivalentAy;
             totalLatTransfer = latForce * cgH / tw;
-            geoLatFront = latForce * hrcF / tw;
-            geoLatRear  = latForce * hrcR / tw;
+            geoLatFront = totalMass * abs(frontAxleAy) * hrcF / tw;
+            geoLatRear  = totalMass * abs(rearAxleAy) * hrcR / tw;
             elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
             frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
             rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
 
-            sign_ay = sign(ay);
-            Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
-            Fz_lat_FR =  sign_ay * frontLatTransfer / 2;
-            Fz_lat_RL = -sign_ay * rearLatTransfer / 2;
-            Fz_lat_RR =  sign_ay * rearLatTransfer / 2;
+            signFrontAy = sign(frontAxleAy);
+            signRearAy = sign(rearAxleAy);
+            Fz_lat_FL = -signFrontAy * frontLatTransfer / 2;
+            Fz_lat_FR =  signFrontAy * frontLatTransfer / 2;
+            Fz_lat_RL = -signRearAy * rearLatTransfer / 2;
+            Fz_lat_RR =  signRearAy * rearLatTransfer / 2;
             
             % --- Longitudinal load transfer ---
             % positive ax (acceleration) → load transfers to rear
@@ -346,6 +365,22 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             W = totalMass * obj.g;
             ax = state.ax;
             ay = state.ay;
+            frontAxleAy = ay;
+            rearAxleAy = ay;
+            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+                    isfinite(state.frontAxleAy)
+                frontAxleAy = state.frontAxleAy;
+            elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
+                    isfinite(state.frontAxleAy)
+                frontAxleAy = state.frontAxleAy;
+            end
+            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+                    isfinite(state.rearAxleAy)
+                rearAxleAy = state.rearAxleAy;
+            elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
+                    isfinite(state.rearAxleAy)
+                rearAxleAy = state.rearAxleAy;
+            end
 
             tw = obj.frontLeft.trackWidth;
             wb = obj.frontLeft.wheelbase;
@@ -367,19 +402,22 @@ classdef SuspensionManager < components.Suspension.SuspensionComponent
             Fz_aero_RL = Fz_aero_rear  / 2;
             Fz_aero_RR = Fz_aero_rear  / 2;
 
-            latForce = totalMass * abs(ay);
+            equivalentAy = frontWeightFrac * abs(frontAxleAy) + ...
+                (1 - frontWeightFrac) * abs(rearAxleAy);
+            latForce = totalMass * equivalentAy;
             totalLatTransfer = latForce * cgH / tw;
-            geoLatFront = latForce * hrcF / tw;
-            geoLatRear  = latForce * hrcR / tw;
+            geoLatFront = totalMass * abs(frontAxleAy) * hrcF / tw;
+            geoLatRear  = totalMass * abs(rearAxleAy) * hrcR / tw;
             elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
             frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
             rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
 
-            sign_ay = sign(ay);
-            Fz_lat_FL = -sign_ay * frontLatTransfer / 2;
-            Fz_lat_FR =  sign_ay * frontLatTransfer / 2;
-            Fz_lat_RL = -sign_ay * rearLatTransfer / 2;
-            Fz_lat_RR =  sign_ay * rearLatTransfer / 2;
+            signFrontAy = sign(frontAxleAy);
+            signRearAy = sign(rearAxleAy);
+            Fz_lat_FL = -signFrontAy * frontLatTransfer / 2;
+            Fz_lat_FR =  signFrontAy * frontLatTransfer / 2;
+            Fz_lat_RL = -signRearAy * rearLatTransfer / 2;
+            Fz_lat_RR =  signRearAy * rearLatTransfer / 2;
 
             totalLongTransfer = totalMass * ax * cgH / wb;
             Fz_long_FL = -totalLongTransfer / 2;

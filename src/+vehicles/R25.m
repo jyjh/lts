@@ -143,11 +143,7 @@ function cfg = R25()
         'efficiency', 0.85, ...          % [not in spec sheet] [0-1]
         'throttleMapInput', [0.00 0.15 0.35 0.60 0.80 1.00], ...
         'throttleMapOutput', [0.00 0.02 0.10 0.28 0.58 1.00], ...
-        'differential', struct('type', 'lsd'));  %   [CSV r122: Drexler M-Diff LSD, non-adjustable preload]
-    % TODO Drexler target: type='drexler', accelRampAngleDeg=30,
-    % decelRampAngleDeg=45, fluid="Motul Gear Competition 75W-140".
-    % Leave disabled until preloadBreakawayTorqueNm and rampTorqueScale are
-    % measured/calibrated.
+        'differential', struct(type='drexler', accelRampAngleDeg=30, decelRampAngleDeg=45, fluid="Motul Gear Competition 75W-140", rampTorqueScale = 1, preloadBreakawayTorqueNm = 10));  %   [CSV r122: Drexler M-Diff LSD, non-adjustable preload]
 
     %% ====================================================================
     %  TIRE

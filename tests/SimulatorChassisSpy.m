@@ -9,7 +9,7 @@ classdef SimulatorChassisSpy < components.Chassis.ChassisComponent
             obj.state.reset();
         end
 
-        function updateFromAccelerations(obj, ~, ~, aeroForces, ~)
+        function updateFromAccelerations(obj, ~, ~, aeroForces, ~, ~)
             obj.updateCalls = obj.updateCalls + 1;
             fdrag = 0;
             dragHeight = 0;

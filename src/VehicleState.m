@@ -33,6 +33,10 @@ classdef VehicleState
         
         % Lateral acceleration [m/s^2] (positive = left)
         ay          = 0
+
+        % Axle-center lateral accelerations [m/s^2] (positive = left)
+        frontAxleAy = 0
+        rearAxleAy  = 0
         
         % Heading angle [rad]
         heading     = 0
@@ -128,6 +132,8 @@ classdef VehicleState
             
             obj.ax = ax;
             obj.ay = ay;
+            obj.frontAxleAy = ay;
+            obj.rearAxleAy = ay;
             obj.s = obj.s + ds;
             obj.speed = max(0, obj.speed + ax * dt);
             obj.vx = obj.speed;
@@ -161,7 +167,7 @@ classdef VehicleState
 
         function obj = updateFromPlanarDynamics(obj, ax, ay, yawAccel, ...
                 vx, vy, yawRate, yaw, x, y, refS, refHeading, refCurvature, ...
-                lateralError, dt, mu)
+                lateralError, dt, mu, frontAxleAy, rearAxleAy)
             % UPDATEFROMPLANARDYNAMICS Store a free planar 4-wheel state update.
             % The simulator has already integrated body/world velocity and
             % yaw from Newton/Euler equations. This method commits those
@@ -170,6 +176,14 @@ classdef VehicleState
             obj.ax = ax;
             obj.ay = ay;
             obj.yawAccel = yawAccel;
+            if nargin < 17 || isempty(frontAxleAy)
+                frontAxleAy = ay;
+            end
+            if nargin < 18 || isempty(rearAxleAy)
+                rearAxleAy = ay;
+            end
+            obj.frontAxleAy = frontAxleAy;
+            obj.rearAxleAy = rearAxleAy;
             obj.vx = vx;
             obj.vy = vy;
             obj.speed = hypot(vx, vy);
@@ -298,6 +312,8 @@ classdef VehicleState
             log.bodySlipAngle = obj.bodySlipAngle;
             log.ax        = obj.ax;
             log.ay        = obj.ay;
+            log.frontAxleAy = obj.frontAxleAy;
+            log.rearAxleAy  = obj.rearAxleAy;
             log.heading   = obj.heading;
         log.yawRate   = obj.yawRate;
         log.yawAccel  = obj.yawAccel;

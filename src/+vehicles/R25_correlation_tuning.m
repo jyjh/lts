@@ -14,7 +14,7 @@ function cfg = R25_correlation_tuning(cfg)
     % 3.36 ratio embedded in the default EMRAX map. Use 3.5 as the current
     % working hypothesis for lap5/raw correlation.
     cfg.powertrain.finalDriveRatio = 3.36;
-    cfg.powertrain.efficiency = 0.9;
+    cfg.powertrain.efficiency = 0.85;
 
     % The first pressure-brake pulse in lap5/raw under-decelerates with the
     % spec-sheet pressure calibration. Keep this in the correlation overlay
@@ -32,7 +32,7 @@ function cfg = R25_correlation_tuning(cfg)
     % current/torque request than as raw pedal * full-throttle force. This
     % first-pass correlation curve is post-deadband: it softens low/mid pedal
     % while preserving the EMRAX full-throttle envelope at 100% pedal.
-    cfg.powertrain.throttleMapInput = [0.00 0.15 0.35 0.60 0.80 1.00];
+    cfg.powertrain.throttleMapInput = [0.00 0.20 0.35 0.60 0.80 1.00];
     cfg.powertrain.throttleMapOutput = [0.00 0.15 0.35 0.6 0.8 1.00];
     cfg.powertrain.motoringDragTorque = 15;
     cfg.powertrain.motoringDragThrottleThreshold = 0.2;

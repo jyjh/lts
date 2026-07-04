@@ -116,19 +116,22 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 obj.wheelbase, obj.trackWidth, obj.staticFrontWeight);
         end
 
-        function updateFromAccelerations(obj, ax, ay, aeroForces, dt)
+        function updateFromAccelerations(obj, ax, ay, aeroForces, dt, yawAccel)
             % UPDATEFROMACCELERATIONS Integrate heave, pitch, and roll
             % ax > 0 creates nose-up pitch. ay > 0 creates right-side-down roll.
             if nargin < 4 || isempty(aeroForces)
                 aeroForces = struct('Fz_front', 0, 'Fz_rear', 0, ...
                     'F_drag', 0, 'dragHeight', 0);
             end
+            if nargin < 6 || isempty(yawAccel)
+                yawAccel = 0;
+            end
 
             nSubsteps = obj.integrationSubsteps(dt);
             if nSubsteps > 1
                 subDt = dt / nSubsteps;
                 for idx = 1:nSubsteps
-                    obj.updateFromAccelerations(ax, ay, aeroForces, subDt);
+                    obj.updateFromAccelerations(ax, ay, aeroForces, subDt, yawAccel);
                 end
                 return;
             end
@@ -153,28 +156,31 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 - obj.pitchDamping * obj.state.pitchRate;
 
             % --- Roll: front/rear split DOFs coupled by a torsion spring ---
-            % The sprung-mass roll moment (m*ay*cgH) is split between the
-            % axles by static weight distribution; each axle is resisted by
-            % its own roll stiffness (wheel springs + ARB, read from the
-            % suspension so the chassis and load-transfer models agree) and
-            % coupled to the other axle by the chassis torsion spring on the
-            % twist angle (frontRollAngle - rearRollAngle). With
+            % The sprung-mass roll moment is evaluated at each axle center:
+            % ay_front = ay + yawAccel*frontArm, ay_rear = ay - yawAccel*rearArm.
+            % Each axle is resisted by its own roll stiffness (wheel springs
+            % + ARB, read from the suspension so the chassis and load-transfer
+            % models agree) and coupled to the other axle by the chassis
+            % torsion spring on the twist angle (frontRollAngle - rearRollAngle). With
             % torsionalRigidity = Inf the two ends roll together (perfectly
             % rigid tub); a finite value lets the body twist under asymmetric
             % load. The legacy whole-car rollAngle is kept as the average.
             massFrac = obj.staticFrontWeight;
-            rollMomentF = obj.sprungMass * ay * obj.cgHeight * massFrac;
-            rollMomentR = obj.sprungMass * ay * obj.cgHeight * (1 - massFrac);
+            rearMassFrac = 1 - massFrac;
+            frontAxleAy = ay + yawAccel * obj.frontArm;
+            rearAxleAy  = ay - yawAccel * obj.rearArm;
+            rollMomentF = obj.sprungMass * massFrac * frontAxleAy * obj.cgHeight;
+            rollMomentR = obj.sprungMass * rearMassFrac * rearAxleAy * obj.cgHeight;
 
             [KrollF, KrollR] = obj.getAxleRollStiffnessRad();
             CrollF = obj.rollDamping * massFrac;
-            CrollR = obj.rollDamping * (1 - massFrac);
+            CrollR = obj.rollDamping * rearMassFrac;
 
             % If no per-axle stiffness is available, fall back to the legacy
             % whole-car rollStiffness split so the model remains stable.
             if KrollF <= 0 && KrollR <= 0
                 KrollF = obj.rollStiffness * massFrac;
-                KrollR = obj.rollStiffness * (1 - massFrac);
+                KrollR = obj.rollStiffness * rearMassFrac;
             end
 
             twist = obj.state.frontRollAngle - obj.state.rearRollAngle;

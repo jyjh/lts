@@ -201,6 +201,14 @@ verifyTrue(testCase, contains(header, "Unsprung Vel RL (mm/s)"));
 verifyTrue(testCase, contains(header, "Body Slip Angle (deg)"));
 verifyTrue(testCase, contains(header, "Engine RPM (rpm)"));
 verifyTrue(testCase, contains(header, "Motor RPM (rpm)"));
+verifyTrue(testCase, contains(header, "Wheel Speed Front Left Sensor Linear (m/s)"));
+
+headers = split(header, ",");
+tireSpeedFLCol = find(headers == "Wheel Speed Front Left Sensor Linear (m/s)", 1);
+verifyNotEmpty(testCase, tireSpeedFLCol);
+data = readmatrix(csvFile, 'NumHeaderLines', 1);
+expectedTireSpeed = stateLog.omega_FL(2) * stateLog.wheelRadius_FL(2);
+verifyEqual(testCase, data(2, tireSpeedFLCol), expectedTireSpeed, 'AbsTol', 1e-8);
 end
 
 function testStaticBumpStopContributesToRollStiffness(testCase)
@@ -322,6 +330,8 @@ for idx = 1:numel(corners)
     stateLog.(sprintf('camber_%s', corner)) = (idx:idx+n-1)' * 0.01;
     stateLog.(sprintf('toe_%s', corner)) = (idx:idx+n-1)' * 0.001;
     stateLog.(sprintf('wheelSteer_%s', corner)) = (idx:idx+n-1)' * 0.02;
+    stateLog.(sprintf('omega_%s', corner)) = (idx:idx+n-1)' * 10;
+    stateLog.(sprintf('wheelRadius_%s', corner)) = ones(n, 1) * (0.24 + idx * 0.01);
 end
 end
 

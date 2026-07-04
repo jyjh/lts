@@ -234,6 +234,18 @@ classdef TelemetryExporter
                     stateLog.ay(:) / 9.81, 'G', nSamples);
             end
 
+            if isfield(stateLog, 'frontAxleAy')
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'frontAxleAyG', ...
+                    'G Sensor Front Axle Acceleration Lateral', ...
+                    stateLog.frontAxleAy(:) / 9.81, 'G', nSamples);
+            end
+
+            if isfield(stateLog, 'rearAxleAy')
+                tableData = TelemetryExporter.addComputedChannel(tableData, 'rearAxleAyG', ...
+                    'G Sensor Rear Axle Acceleration Lateral', ...
+                    stateLog.rearAxleAy(:) / 9.81, 'G', nSamples);
+            end
+
             pctChannels = { ...
                 'throttle', 'Throttle Pedal'; ...
                 'replayThrottle', 'Replay Throttle Input'; ...
@@ -358,6 +370,28 @@ classdef TelemetryExporter
                         stateLog.(field)(:) * (60 / (2 * pi)), 'rpm', nSamples);
                 end
             end
+
+            tireSpeedChannels = { ...
+                'FL', 'Wheel Speed Front Left Sensor Linear'; ...
+                'FR', 'Wheel Speed Front Right Sensor Linear'; ...
+                'RL', 'Wheel Speed Rear Left Sensor Linear'; ...
+                'RR', 'Wheel Speed Rear Right Sensor Linear'};
+            for i = 1:size(tireSpeedChannels, 1)
+                corner = tireSpeedChannels{i, 1};
+                field = ['tireSpeed_' corner];
+                if isfield(stateLog, field)
+                    tableData = TelemetryExporter.addRawChannel( ...
+                        tableData, stateLog, field, tireSpeedChannels{i, 2}, 'm/s', nSamples);
+                    continue;
+                end
+
+                omegaField = ['omega_' corner];
+                radius = TelemetryExporter.tireRadiusForCorner(stateLog, corner, nSamples);
+                if isfield(stateLog, omegaField) && ~isempty(radius)
+                    tableData = TelemetryExporter.addComputedChannel(tableData, field, tireSpeedChannels{i, 2}, ...
+                        stateLog.(omegaField)(:) .* radius, 'm/s', nSamples);
+                end
+            end
         end
 
         function tableData = addFakeGpsChannels(tableData, stateLog, nSamples)
@@ -403,6 +437,34 @@ classdef TelemetryExporter
                 (eastMeters / (earthRadiusM * cos(originLatitude * pi / 180))) * (180 / pi);
         end
 
+        function radius = tireRadiusForCorner(stateLog, corner, nSamples)
+            radius = [];
+            candidateFields = { ...
+                ['wheelRadius_' corner], ...
+                ['tireRadius_' corner], ...
+                'wheelRadius', ...
+                'tireRadius'};
+
+            for i = 1:numel(candidateFields)
+                field = candidateFields{i};
+                if ~isfield(stateLog, field)
+                    continue;
+                end
+
+                values = double(stateLog.(field)(:));
+                if isscalar(values)
+                    radius = repmat(values, nSamples, 1);
+                elseif numel(values) == nSamples
+                    radius = values;
+                else
+                    continue;
+                end
+
+                radius(~isfinite(radius) | radius < 0) = 0;
+                return;
+            end
+        end
+
         function tableData = addRawChannel(tableData, stateLog, field, channelName, unit, nSamples)
             values = stateLog.(field)(:);
             tableData = TelemetryExporter.addComputedChannel(tableData, field, channelName, values, unit, nSamples);
@@ -432,6 +494,7 @@ classdef TelemetryExporter
         function fields = defaultChannelOrder(stateLog)
             preferred = { ...
                 'time', 's', 'speedKmh', 'speed', 'ax', 'ay', ...
+                'frontAxleAy', 'rearAxleAy', ...
                 'gpsLatitude', 'gpsLongitude', ...
                 'throttle', 'brake', 'brakeRequested', 'steer', ...
                 'brakePressureMode', 'brakePressureFrontBar', 'brakePressureRearBar', ...
@@ -467,6 +530,7 @@ classdef TelemetryExporter
                 'wheelSteer_FL', 'wheelSteer_FR', 'wheelSteer_RL', 'wheelSteer_RR', ...
                 'slipRatio_FL', 'slipRatio_FR', 'slipRatio_RL', 'slipRatio_RR', ...
                 'omega_FL', 'omega_FR', 'omega_RL', 'omega_RR', ...
+                'tireSpeed_FL', 'tireSpeed_FR', 'tireSpeed_RL', 'tireSpeed_RR', ...
                 'tireFx_FL', 'tireFx_FR', 'tireFx_RL', 'tireFx_RR', ...
                 'tireFy_FL', 'tireFy_FR', 'tireFy_RL', 'tireFy_RR', ...
                 'aeroFz_front', 'aeroFz_rear'};
@@ -499,6 +563,10 @@ classdef TelemetryExporter
                     name = 'Long Accel Raw'; unit = 'm/s/s';
                 case 'ay'
                     name = 'Lat Accel Raw'; unit = 'm/s/s';
+                case 'frontAxleAy'
+                    name = 'Front Axle Lat Accel Raw'; unit = 'm/s/s';
+                case 'rearAxleAy'
+                    name = 'Rear Axle Lat Accel Raw'; unit = 'm/s/s';
                 case 'throttle'
                     name = 'Throttle Raw'; unit = 'ratio';
                 case 'replayThrottle'
@@ -547,6 +615,14 @@ classdef TelemetryExporter
                     name = 'Brake Total Force'; unit = 'N';
                 case 'drivenWheelRPM'
                     name = 'Driven Wheel RPM'; unit = 'rpm';
+                case 'tireSpeed_FL'
+                    name = 'Wheel Speed Front Left Sensor Linear'; unit = 'm/s';
+                case 'tireSpeed_FR'
+                    name = 'Wheel Speed Front Right Sensor Linear'; unit = 'm/s';
+                case 'tireSpeed_RL'
+                    name = 'Wheel Speed Rear Left Sensor Linear'; unit = 'm/s';
+                case 'tireSpeed_RR'
+                    name = 'Wheel Speed Rear Right Sensor Linear'; unit = 'm/s';
                 case 'rpmLimitActive'
                     name = 'RPM Limit Active'; unit = 'bool';
                 case 'onTrack'
@@ -581,7 +657,8 @@ classdef TelemetryExporter
                 unit = 'm';
             elseif startsWith(field, 'damperVel_') || ...
                     startsWith(field, 'sprungVelocity_') || ...
-                    startsWith(field, 'unsprungVelocity_')
+                    startsWith(field, 'unsprungVelocity_') || ...
+                    startsWith(field, 'tireSpeed_')
                 unit = 'm/s';
             elseif startsWith(field, 'camber_') || startsWith(field, 'toe_') || ...
                     startsWith(field, 'wheelSteer_') || strcmp(field, 'pitchAngle') || ...
@@ -591,6 +668,9 @@ classdef TelemetryExporter
                 unit = 'ratio';
             elseif startsWith(field, 'omega_')
                 unit = 'rad/s';
+            elseif startsWith(field, 'wheelRadius_') || startsWith(field, 'tireRadius_') || ...
+                    strcmp(field, 'wheelRadius') || strcmp(field, 'tireRadius')
+                unit = 'm';
             elseif endsWith(field, 'Bar')
                 unit = 'bar';
             end

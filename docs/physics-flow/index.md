@@ -313,6 +313,8 @@ netFy = sum(Fy_body) - F_drag * vy / speed
 ax = netFx / mass
 ay = netFy / mass
 yawAccel = Mz / yawInertia
+ay_front = ay + yawAccel * frontArm
+ay_rear = ay - yawAccel * rearArm
 ```
 
 Rolling resistance is already included as a wheel torque and therefore appears through tire `Fx`. It is logged separately but not applied again as a body force.
@@ -332,7 +334,7 @@ Rolling resistance is already included as a wheel torque and therefore appears t
 
 ### 11. Update Chassis Attitude
 
-After tire forces determine `ax` and `ay`, `SimpleChassis.updateFromAccelerations` advances platform attitude for the next step.
+After tire forces determine `ax`, `ay`, and `yawAccel`, `SimpleChassis.updateFromAccelerations` advances platform attitude for the next step.
 
 Heave is driven by aero downforce and resisted by platform stiffness/damping:
 
@@ -352,18 +354,25 @@ M_pitch = sprungMass * ax * cg_height
         - C_pitch*pitchRate
 ```
 
-Roll is split into front and rear roll degrees of freedom. Each axle receives a share of the lateral roll moment, is resisted by axle roll stiffness, and is coupled to the other axle by chassis torsional rigidity:
+Roll is split into front and rear roll degrees of freedom. Each axle receives the lateral roll moment from its own axle-center lateral acceleration, is resisted by axle roll stiffness, and is coupled to the other axle by chassis torsional rigidity:
 
 ```text
+ay_front = ay + yawAccel*frontArm
+ay_rear = ay - yawAccel*rearArm
 twist = frontRoll - rearRoll
-M_front_roll = mass*ay*cg_height*frontWeight
+M_front_roll = sprungMass*frontWeight*ay_front*cg_height
              - K_roll_front*frontRoll
              - C_roll_front*frontRollRate
              - K_torsion*twist
              - C_torsion*twistRate
+M_rear_roll = sprungMass*rearWeight*ay_rear*cg_height
+             - K_roll_rear*rearRoll
+             - C_roll_rear*rearRollRate
+             + K_torsion*twist
+             + C_torsion*twistRate
 ```
 
-The rear equation uses the opposite torsion sign. The legacy `rollAngle` telemetry is the average of front and rear roll.
+When `yawAccel = 0`, both axles see the CG lateral acceleration and this collapses to the previous scalar-`ay` behavior. The legacy `rollAngle` telemetry is the average of front and rear roll.
 
 ### 12. Project To Reference Track
 
@@ -384,7 +393,7 @@ In free mode, used by correlation replay, progress is the world distance travell
 
 `simulate` logs a wide state struct. Full telemetry includes:
 
-- body state: position, velocity, yaw, accelerations, body slip,
+- body state: position, velocity, yaw, CG and axle lateral accelerations, body slip,
 - controls and driver targets,
 - reference projection and track margin,
 - aero forces and pitch moments,

@@ -14,11 +14,13 @@ classdef DrexlerRampPlateDifferential < components.Powertrain.DifferentialCompon
 
         % Measured static breakaway torque difference across the outputs [Nm].
         % NaN means the differential is intentionally not calibration-ready.
-        preloadBreakawayTorqueNm = NaN
+        % TODO temp numbers
+        preloadBreakawayTorqueNm = 10
 
         % Calibrated multiplier from wheel-side driveline torque to output
         % torque-difference capacity. NaN prevents accidental activation.
-        rampTorqueScale = NaN
+        % TODO temp numbers
+        rampTorqueScale = 1
 
         % Fluid metadata; not used in the equations.
         fluid = "Motul Gear Competition 75W-140"
