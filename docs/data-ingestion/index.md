@@ -74,7 +74,8 @@ python -m pip install cantools numpy
    full log is imported, which is useful for autocross and other one-run logs.
 3. `config/motec/default_channel_map.json` maps channel names and units to
    the normalized replay contract:
-   `time_s`, `distance_m`, `throttle_ratio`, `brake_ratio`, `steer_rad`, and
+   `time_s`, `distance_m`, `throttle_ratio`, `brake_ratio`,
+   `brake_pressure_front_bar`, `brake_pressure_rear_bar`, `steer_rad`, and
    `speed_mps`, with optional yaw, GPS, course, and acceleration channels.
    `run_correlation` defaults to `config/motec/r25_real_channel_map.json`,
    which applies the R25 real logger steering ratio/sign convention while
@@ -84,6 +85,9 @@ python -m pip install cantools numpy
    converts both channels to bar, sums front plus rear pressure, maps the peak
    combined pressure in the imported log/window to `1.0`, and scales every other
    sample by that same peak.
+   Passing `'BrakeMode', 'pressure'` to `run_correlation` uses the front and rear
+   pressure columns directly with the vehicle brake-pressure calibration instead
+   of the peak-normalized `brake_ratio`.
 4. `CorrelationReplayProfile` validates the normalized CSV and synthesizes
    distance from speed when the log has no lap-distance channel.
 5. `CorrelationTrackAlignment` estimates the start station from GPS true course
@@ -95,6 +99,11 @@ python -m pip install cantools numpy
 7. `TelemetryExporter.exportToMoTeCLog` writes the simulated replay as a new
    `.csv` and `.ld` for direct comparison in MoTeC i2.
 
+Correlation-specific vehicle assumptions can be layered on top of the base car
+with `TuningFile` or `VehicleTuning`. This keeps `vehicles.R25` as the source
+vehicle and moves lap-specific drivetrain investigation into an overlay such as
+`src/+vehicles/R25_correlation_tuning.m`.
+
 Example:
 
 ```matlab
@@ -103,6 +112,7 @@ run_correlation( ...
     'MoTeCFile', 'data/real_run.ld', ...
     'Lap', 4, ...
     'VehicleConfig', @vehicles.R25, ...
+    'TuningFile', 'R25_correlation_tuning', ...
     'Track', '2026enduro')
 ```
 

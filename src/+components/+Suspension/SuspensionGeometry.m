@@ -74,6 +74,14 @@ classdef SuspensionGeometry
 
         function kin = computeCornerKinematics(obj, corner, wheelTravel, steerInput)
             % COMPUTECORNERKINEMATICS Return tire-facing geometry for a corner.
+            %
+            % Functionality: interpolate suspension tables at the current
+            % wheel travel, resolve the road-wheel steer angle, and return
+            % camber/toe/motion ratio/contact-patch position for the tire.
+            %
+            % Physics: camber and toe change the tire's local force axes and
+            % Magic Formula inputs; trail/scrub move the contact patch relative
+            % to the wheel center, changing the local velocity and yaw moment.
             axle = components.Suspension.SuspensionGeometry.getAxle(corner);
             side = components.Suspension.SuspensionGeometry.getSide(corner);
 
@@ -130,6 +138,10 @@ classdef SuspensionGeometry
 
     methods (Access = private)
         function wheelSteer = computeWheelSteer(obj, corner, steerInput)
+            % COMPUTEWHEELSTEER Convert driver road-wheel command to corner angle.
+            % Front steering blends parallel steer with ideal Ackermann:
+            % the inside wheel steers more than the outside wheel so both
+            % wheels point toward a common low-speed turn center.
             axle = components.Suspension.SuspensionGeometry.getAxle(corner);
             if strcmp(axle, 'rear')
                 wheelSteer = obj.rearSteerRatio * steerInput;
@@ -203,6 +215,9 @@ classdef SuspensionGeometry
         end
 
         function camber = applySteeringAxisCamber(~, baseCamber, wheelHeading, axis, side)
+            % Steering about a tilted axis changes camber even if the static
+            % camber curve is flat. Rotate the wheel-top vector about the
+            % caster/KPI axis, then measure its outward lean in the wheel frame.
             topVector = [0, side * sin(baseCamber), cos(baseCamber)];
             topVector = components.Suspension.SuspensionGeometry.rotateVector( ...
                 topVector, axis, wheelHeading);

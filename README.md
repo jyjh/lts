@@ -47,6 +47,7 @@ run_correlation( ...
     'MoTeCFile', 'data/real_run.ld', ...
     'Lap', 4, ...
     'VehicleConfig', @vehicles.R25, ...
+    'TuningFile', 'R25_correlation_tuning', ...
     'Track', '2026enduro')
 ```
 
@@ -60,6 +61,11 @@ map remains at `config/motec/default_channel_map.json`; copy either map for a
 specific logger or car if the channels use different names, signs, units, or
 calibration. The normalized replay CSV and extraction manifest are written
 beside the simulated output under `exports/correlation_*`.
+
+For correlation-only setup changes, keep `vehicles.R25` as the base vehicle and
+pass a tuning overlay with `TuningFile` or `VehicleTuning`. The supplied
+`src/+vehicles/R25_correlation_tuning.m` overlay currently applies the
+lap5/raw drivetrain assumptions without changing the base car definition.
 
 Correlation replay is a free-space replay: it uses the imported driver inputs
 and initial vehicle state, then lets the physics model produce the path without
@@ -77,6 +83,11 @@ If the log has no direct brake pedal channel, the default map derives
 both pressures to bar, sums the front and rear pressure traces, maps the peak
 combined pressure in the imported log/window to `1.0`, and scales the remaining
 samples by the same peak.
+For correlation runs that should use the logged line pressures directly, pass
+`'BrakeMode', 'pressure'`. The extractor also carries
+`brake_pressure_front_bar` and `brake_pressure_rear_bar` into the replay CSV,
+and the simulator converts them through the vehicle's brake-pressure
+calibration instead of the peak-normalized `brake_ratio` path.
 
 Edit `trackType` in `src/run_simulation.m` to switch between:
 
@@ -141,6 +152,7 @@ Full documentation is available at [jyjh.github.io/lts](https://jyjh.github.io/l
 - [Architecture & Usage](https://jyjh.github.io/lts/)
 - [UML Class Diagram](https://jyjh.github.io/lts/class-diagram/)
 - [Simulation Loop](https://jyjh.github.io/lts/simulation-loop/)
+- [Physics Flow](https://jyjh.github.io/lts/physics-flow/)
 - [Department Workflow](https://jyjh.github.io/lts/workflow/)
 - [Data Ingestion](https://jyjh.github.io/lts/data-ingestion/)
 

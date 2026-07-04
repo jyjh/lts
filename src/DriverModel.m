@@ -232,6 +232,11 @@ classdef DriverModel < handle
 
         function input = correctPlannedInput(obj, plannedInput, state, ref)
             % CORRECTPLANNEDINPUT Add path-following corrections to centerline feedforward input.
+            %
+            % The feedforward plan supplies pedals and curvature steer. This
+            % layer adds Stanley-style heading/cross-track feedback plus track
+            % edge protection. It is driver/controller behavior; tire forces
+            % still decide whether the requested path can actually be followed.
             input = plannedInput;
             if ~isfield(input, 'throttle')
                 input.throttle = 0;
@@ -301,6 +306,11 @@ classdef DriverModel < handle
 
     methods (Access = private)
         function input = applyDriveSlipLimit(obj, input)
+            % APPLYDRIVESLIPLIMIT Simple traction-control-like driver behavior.
+            % When driven rear slip exceeds driveSlipTarget, throttle is
+            % reduced toward zero by driveSlipCutoff. This limits commanded
+            % torque before it reaches the powertrain; it is not a tire force
+            % clamp and does not change the physics after the pedal command.
             if ~obj.enableDriveSlipLimit || ~isfield(input, 'throttle') || ...
                     input.throttle <= 0
                 return;
@@ -868,6 +878,10 @@ classdef DriverModel < handle
             %     maxDriveAccel   - net forward accel capability [m/s^2]
             %     coastDecel      - free lift-off decel [m/s^2]
             %     brakeForceAccel - hydraulic-brake-only decel per unit brake [m/s^2]
+            %
+            % This is a quasi-static capability estimate used only by the
+            % driver. The true dynamic acceleration comes later from summed
+            % tire forces, drag, and yaw moment in Simulator.step().
             vm = obj.vehicleManager;
             aeroForces = vm.aero.computeForces(state);
             F_drag = max(0, aeroForces.F_drag);

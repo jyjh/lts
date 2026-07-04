@@ -721,6 +721,9 @@ classdef PacejkaTire < components.Tire.TireModel
         end
 
         function alpha = computeCornerSlipAngle(~, vx, vy, yawRate, x, y, kin)
+            % Contact patch velocity = CG velocity + yaw-rate cross position.
+            % Rotate that velocity into the steered/toed wheel frame; slip
+            % angle is positive when the tire must generate force to the left.
             vxCorner = vx - yawRate * y;
             vyCorner = vy + yawRate * x;
             wheelHeading = kin.steerAngle + kin.toeAngle;
@@ -730,6 +733,9 @@ classdef PacejkaTire < components.Tire.TireModel
         end
 
         function kappa = computeSlipRatioFromOmega(~, cornerState, omega, longitudinalSpeed)
+            % Same slip convention as Simulator.computeLocalSlipRatio, used by
+            % the older single-corner contact solver. The low-speed blend
+            % keeps launch/brake-to-zero behavior continuous.
             wheelSpeed = omega * cornerState.wheelRadius;
             denom = max(abs(wheelSpeed), abs(longitudinalSpeed));
             slipSpeedFloor = 1.0;
@@ -761,6 +767,10 @@ classdef PacejkaTire < components.Tire.TireModel
 
         function [Fx, Fy, Mx, My, Mz, peakMu] = evaluateForces(obj, ...
                 Fz, alpha, kappa, gamma, surfaceMu, longitudinalSpeed, computePeakMu)
+            % EVALUATEFORCES Thin wrapper around MFeval's combined-slip mode.
+            % Inputs follow MFeval's [Fz, kappa, alpha, gamma, phit, Vx, P]
+            % order. The raw .tir file is treated as the dry-reference
+            % surface; surfaceMu scales forces linearly for alternate surfaces.
             if Fz <= 0
                 Fx = 0;
                 Fy = 0;
@@ -854,6 +864,9 @@ classdef PacejkaTire < components.Tire.TireModel
         end
 
         function scale = computeSurfaceScale(obj, surfaceMu)
+            % Track mu is a multiplier relative to the tire file's reference
+            % surface, not an extra friction cap. This keeps the Pacejka load
+            % sensitivity intact while allowing lower-grip tracks.
             if nargin < 2 || isempty(surfaceMu) || ~isfinite(surfaceMu)
                 surfaceMu = obj.surfaceMuReference;
             end
@@ -881,6 +894,9 @@ classdef PacejkaTire < components.Tire.TireModel
         end
 
         function Vx = computeMFevalSpeed(obj, longitudinalSpeed)
+            % MFeval has a low-speed singularity/guard; feed it speed magnitude
+            % above VXLOW while the simulator's own slip definitions handle
+            % sign and near-zero blending.
             if isnan(obj.cachedMFevalLowSpeed)
                 obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
             end

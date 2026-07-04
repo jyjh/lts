@@ -35,6 +35,8 @@
       "distance_m": "Lap distance in meters. Optional; if missing or all NaN, the extractor integrates speed_mps over time.",
       "throttle_ratio": "Driver throttle command as a 0.0 to 1.0 ratio.",
       "brake_ratio": "Driver brake command as a normalized ratio. Can be read directly or derived from front and rear pressure channels.",
+      "brake_pressure_front_bar": "Front brake line pressure in bar, carried through for pressure-based correlation braking.",
+      "brake_pressure_rear_bar": "Rear brake line pressure in bar, carried through for pressure-based correlation braking.",
       "steer_rad": "Road-wheel steering angle in radians. Use source-specific scale for steering sensor ratio and sign conventions.",
       "speed_mps": "Vehicle speed in meters per second.",
       "yaw_rad": "Vehicle yaw or heading angle in radians.",
@@ -103,6 +105,30 @@
             "psi": 0.0689475729
           }
         }
+      }
+    },
+    "brake_pressure_front_bar": {
+      "names": ["Brake Pressure Front", "Front Brake Pressure", "Brake Front Pressure"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "bar": 1.0,
+        "kPa": 0.01,
+        "Pa": 0.00001,
+        "MPa": 10.0,
+        "psi": 0.0689475729
+      }
+    },
+    "brake_pressure_rear_bar": {
+      "names": ["Brake Pressure Rear", "Rear Brake Pressure", "Brake Rear Pressure"],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "bar": 1.0,
+        "kPa": 0.01,
+        "Pa": 0.00001,
+        "MPa": 10.0,
+        "psi": 0.0689475729
       }
     },
     "steer_rad": {

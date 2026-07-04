@@ -1,5 +1,9 @@
 classdef CorrelationStateInitializer
     % CORRELATIONSTATEINITIALIZER Builds VehicleState from imported telemetry.
+    %
+    % Replays should start from measured speed/yaw/position when available;
+    % otherwise they fall back to a neutral free-space state. This keeps
+    % correlation runs from inheriting synthetic track-start assumptions.
 
     methods (Static)
         function state = fromReplayProfile(profile, track, vehicleManager, varargin)

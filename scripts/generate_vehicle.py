@@ -368,6 +368,8 @@ def extract(rows, driver_mass):
         pf = parse_num(val_after(r46, "front pres"))
         pr = parse_num(val_after(r46, "rear pres"))
         if pf is not None and pr is not None:
+            s.brake_pressure_front_at_1g_bar = pf
+            s.brake_pressure_rear_at_1g_bar = pr
             # Crude: clamp force ~ pressure x piston-count (ignores bore diff).
             # Front 4-piston, rear 2-piston per the caliper rows.
             est = (pf * 4) / (pf * 4 + pr * 2)
@@ -673,6 +675,18 @@ def build_matlab(name, s):
          src_comment(s, "brakeBiasFront", "0.60") + " [0-1]")
     line("cfg.brakeForceCoefficient", 0.70,
          src_comment(s, "brakeForceCoefficient", "0.70"))
+    brake_pressure_front = getattr(s, "brake_pressure_front_at_1g_bar", None)
+    brake_pressure_rear = getattr(s, "brake_pressure_rear_at_1g_bar", None)
+    if brake_pressure_front is not None and brake_pressure_rear is not None:
+        A(f"    brakePressureFrontAt1gBar = {fmt(brake_pressure_front)};"
+          "            %  [CSV r46: front line pressure at 1g deceleration] [bar]")
+        A(f"    brakePressureRearAt1gBar = {fmt(brake_pressure_rear)};"
+          "             %  [CSV r46: rear line pressure at 1g deceleration] [bar]")
+        A("    cfg.brakePressure = struct( ...")
+        A("        'frontForcePerBar', cfg.totalMass * 9.80665 * "
+          "cfg.brakeBiasFront / brakePressureFrontAt1gBar, ...")
+        A("        'rearForcePerBar', cfg.totalMass * 9.80665 * "
+          "(1 - cfg.brakeBiasFront) / brakePressureRearAt1gBar);")
     line("cfg.maxSpeed", 80,
          src_comment(s, "maxSpeed", "80") + " [m/s] (~288 km/h)")
     line("cfg.unsprungMass", 25,

@@ -20,6 +20,23 @@ verifyGreaterThan(testCase, pt.maxEngineTorque, 0);
 verifyGreaterThan(testCase, numel(pt.torqueCurveNm), 0);
 end
 
+function testFinalDriveOverrideScalesWheelForceAndMotorSpeed(testCase)
+pt = createPowertrain();
+baseRatio = pt.totalGearRatio;
+newRatio = 4.15;
+rpm = 3000;
+baseForce = pt.lookupTractiveForceByRPM(rpm);
+
+pt = pt.setFinalDriveRatio(newRatio);
+pt.updateStateFromVehicleSpeed(10);
+
+verifyEqual(testCase, pt.totalGearRatio, newRatio, 'RelTol', 1e-12);
+verifyEqual(testCase, pt.lookupTractiveForceByRPM(rpm), ...
+    baseForce * newRatio / baseRatio, 'RelTol', 1e-12);
+verifyEqual(testCase, pt.state.motorRPM, ...
+    10 / (2 * pi * pt.wheelRadius) * 60 * newRatio, 'RelTol', 1e-12);
+end
+
 function testConstantPowerFalloffDoesNotCollapseAtRevLimit(testCase)
 % Fix 1: the old linear falloff drove wheel force to ~0 at the rev limit.
 % Constant power must keep substantial force right up to the cap.
@@ -163,6 +180,116 @@ end
 verifyEqual(testCase, out.TL + out.TR, 400, 'AbsTol', 1e-9);
 end
 
+function testDrexlerRequiresCalibrationBeforeSolving(testCase)
+diff = components.Powertrain.DrexlerRampPlateDifferential();
+
+verifyError(testCase, @() diff.solveDrive(100, 30, 60, 0.5, 0.001), ...
+    'DrexlerRampPlateDifferential:Uncalibrated');
+end
+
+function testDrexlerVehicleConfigRequiresCalibration(testCase)
+cfg = VehicleConfig();
+cfg.powertrain.differential = struct('type', 'drexler');
+
+verifyError(testCase, ...
+    @() VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001), ...
+    'DrexlerRampPlateDifferential:Uncalibrated');
+end
+
+function testDrexlerAccelRampUsesThirtyDegreeSide(testCase)
+diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 0, ...
+    'rampTorqueScale', 1);
+
+out = diff.solveDriveline(100, 0, 30, 60, 0.5, 0.001);
+
+expectedLockDifference = 100 * (1 / tand(30));
+expectedBias = 0.5 * expectedLockDifference;
+verifyEqual(testCase, out.TL, 50 + expectedBias, 'RelTol', 1e-12);
+verifyEqual(testCase, out.TR, 50 - expectedBias, 'RelTol', 1e-12);
+verifyGreaterThan(testCase, out.TL, out.TR);
+end
+
+function testDrexlerDecelRampUsesFortyFiveDegreeSide(testCase)
+diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 0, ...
+    'rampTorqueScale', 1);
+
+out = diff.solveDriveline(0, -100, 30, 60, 0.5, 0.001);
+
+expectedLockDifference = 100 * (1 / tand(45));
+expectedBias = 0.5 * expectedLockDifference;
+verifyEqual(testCase, out.TL, -50 + expectedBias, 'RelTol', 1e-12);
+verifyEqual(testCase, out.TR, -50 - expectedBias, 'RelTol', 1e-12);
+verifyLessThan(testCase, out.TR, out.TL);  % faster wheel gets more braking
+end
+
+function testDrexlerConservesSignedDrivelineTorque(testCase)
+diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 40, ...
+    'rampTorqueScale', 0.25);
+
+cases = [100 0; 0 -80; 30 -10; 0 0];
+for i = 1:size(cases, 1)
+    driveTorque = cases(i, 1);
+    coastTorque = cases(i, 2);
+    out = diff.solveDriveline(driveTorque, coastTorque, 30, 60, 0.5, 0.001);
+    verifyEqual(testCase, out.TL + out.TR, driveTorque + coastTorque, ...
+        'AbsTol', 1e-10);
+end
+end
+
+function testDrexlerPreloadCanActAsZeroNetInternalTorque(testCase)
+diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 40, ...
+    'rampTorqueScale', 0);
+
+out = diff.solveDriveline(0, 0, 30, 60, 0.5, 0.001);
+
+verifyEqual(testCase, out.TL, 20, 'RelTol', 1e-12);
+verifyEqual(testCase, out.TR, -20, 'RelTol', 1e-12);
+verifyEqual(testCase, out.TL + out.TR, 0, 'AbsTol', 1e-12);
+end
+
+function testDrexlerDoesNotUseHydraulicBrakeTorqueAsDecelRampInput(testCase)
+% Rear hydraulic brake torque is applied after the differential in
+% Simulator.step, so it is not an input to this driveline solve.
+diff = createCalibratedDrexler('preloadBreakawayTorqueNm', 0, ...
+    'rampTorqueScale', 1);
+
+out = diff.solveDriveline(0, 0, 30, 60, 0.5, 0.001);
+
+verifyEqual(testCase, out.TL, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, out.TR, 0, 'AbsTol', 1e-12);
+end
+
+function testDrexlerFluidMetadataDoesNotChangePhysics(testCase)
+motulDiff = createCalibratedDrexler( ...
+    'fluid', "Motul Gear Competition 75W-140");
+referenceDiff = createCalibratedDrexler('fluid', "Reference calibration oil");
+
+motulOut = motulDiff.solveDriveline(80, -20, 30, 60, 0.5, 0.001);
+referenceOut = referenceDiff.solveDriveline(80, -20, 30, 60, 0.5, 0.001);
+
+verifyEqual(testCase, motulDiff.fluid, "Motul Gear Competition 75W-140");
+verifyEqual(testCase, motulOut.TL, referenceOut.TL, 'RelTol', 1e-12);
+verifyEqual(testCase, motulOut.TR, referenceOut.TR, 'RelTol', 1e-12);
+end
+
+function testDrexlerMetadataCarriesThroughVehicleConfig(testCase)
+cfg = VehicleConfig();
+cfg.powertrain.differential = struct( ...
+    'type', 'drexler', ...
+    'accelRampAngleDeg', 30, ...
+    'decelRampAngleDeg', 45, ...
+    'preloadBreakawayTorqueNm', 40, ...
+    'rampTorqueScale', 0.25, ...
+    'fluid', "Motul Gear Competition 75W-140");
+
+vehicle = VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001);
+
+verifyClass(testCase, vehicle.differential, ...
+    'components.Powertrain.DrexlerRampPlateDifferential');
+verifyEqual(testCase, vehicle.differential.fluid, ...
+    "Motul Gear Competition 75W-140");
+end
+
 function testCoastdownTorqueZeroWhenDisabled(testCase)
 % Fix 5c: with regen + motoring drag off (defaults), no coastdown torque.
 pt = createPowertrain();
@@ -182,6 +309,92 @@ pt.updateStateFromVehicleSpeed(20);   % forward → positive motor omega
 T = pt.computeCoastdownTorque(20, 0);
 verifyLessThan(testCase, T, 0);   % braking
 verifyEqual(testCase, -T, 10 * pt.totalGearRatio, 'RelTol', 1e-9);
+end
+
+function testMotoringDragCanBeLimitedToLowThrottle(testCase)
+pt = createPowertrain();
+pt.motoringDragTorque = 10;
+pt.motoringDragThrottleThreshold = 0.2;
+pt.updateStateFromVehicleSpeed(20);
+
+verifyLessThan(testCase, pt.computeCoastdownTorque(20, 0.1), 0);
+verifyEqual(testCase, pt.computeCoastdownTorque(20, 0.3), 0, 'AbsTol', 1e-12);
+end
+
+function testThrottleDeadbandZerosAndRescalesDriveTorque(testCase)
+pt = createPowertrain();
+pt.updateStateFromVehicleSpeed(12);
+referenceTorque = pt.computeDriveTorque(12, 0.5);
+
+pt = createPowertrain();
+pt.throttleDeadband = 0.2;
+pt.updateStateFromVehicleSpeed(12);
+verifyEqual(testCase, pt.computeDriveTorque(12, 0.1), 0, 'AbsTol', 1e-12);
+
+pt.updateStateFromVehicleSpeed(12);
+verifyEqual(testCase, pt.computeDriveTorque(12, 0.6), ...
+    referenceTorque, 'RelTol', 1e-12);
+end
+
+function testDefaultThrottleMapIsControllerShaped(testCase)
+pt = createPowertrain();
+
+pt.updateStateFromVehicleSpeed(12);
+fullTorque = pt.computeDriveTorque(12, 1.0);
+pt.updateStateFromVehicleSpeed(12);
+halfPedalTorque = pt.computeDriveTorque(12, 0.5);
+
+verifyGreaterThan(testCase, fullTorque, 0);
+verifyGreaterThan(testCase, halfPedalTorque, 0);
+verifyLessThan(testCase, halfPedalTorque, 0.5 * fullTorque);
+end
+
+function testThrottleMapShapesPostDeadbandTorqueRequest(testCase)
+% The throttle map represents the controller torque/current request after
+% any pedal deadband has been removed.
+pt = createPowertrain();
+pt.throttleDeadband = 0.2;
+pt.throttleMapInput = [0 0.5 1];
+pt.throttleMapOutput = [0 0.25 1];
+
+pt.updateStateFromVehicleSpeed(12);
+fullTorque = pt.computeDriveTorque(12, 1.0);
+pt.updateStateFromVehicleSpeed(12);
+shapedTorque = pt.computeDriveTorque(12, 0.6);  % (0.6 - 0.2)/(1 - 0.2) = 0.5
+
+verifyGreaterThan(testCase, fullTorque, 0);
+verifyEqual(testCase, shapedTorque, 0.25 * fullTorque, 'RelTol', 1e-12);
+end
+
+function testThrottleMapRejectsInvalidBreakpoints(testCase)
+pt = createPowertrain();
+pt.throttleMapInput = [0 0.5 0.5 1];
+pt.throttleMapOutput = [0 0.2 0.4 1];
+pt.updateStateFromVehicleSpeed(12);
+
+verifyError(testCase, @() pt.computeDriveTorque(12, 0.5), ...
+    'EMRAX228Powertrain:InvalidThrottleMap');
+end
+
+function testThrottleMapRejectsEmptyBreakpoints(testCase)
+pt = createPowertrain();
+pt.throttleMapInput = [];
+pt.throttleMapOutput = [];
+pt.updateStateFromVehicleSpeed(12);
+
+verifyError(testCase, @() pt.computeDriveTorque(12, 0.5), ...
+    'EMRAX228Powertrain:InvalidThrottleMap');
+end
+
+function testVehicleConfigDoesNotHideEmptyThrottleMap(testCase)
+cfg = VehicleConfig();
+cfg.powertrain.throttleMapInput = [];
+cfg.powertrain.throttleMapOutput = [];
+vehicle = VehicleManager.fromConfig(cfg, components.TestTrack('straight10'), 0.001);
+vehicle.powertrain.updateStateFromVehicleSpeed(12);
+
+verifyError(testCase, @() vehicle.powertrain.computeDriveTorque(12, 0.5), ...
+    'EMRAX228Powertrain:InvalidThrottleMap');
 end
 
 function testRegenZeroAtThrottleAndTapersNearRest(testCase)
@@ -216,6 +429,13 @@ end
 
 function pt = createPowertrain()
 pt = components.Powertrain.EMRAX228Powertrain();
+end
+
+function diff = createCalibratedDrexler(varargin)
+diff = components.Powertrain.DrexlerRampPlateDifferential( ...
+    'preloadBreakawayTorqueNm', 30, ...
+    'rampTorqueScale', 0.2, ...
+    varargin{:});
 end
 
 function path = powertrainMapPath(fileName)

@@ -81,6 +81,10 @@ classdef (Abstract) Track
             % COMPUTECURVATURE Compute signed curvature from discrete waypoints.
             %   Uses the circumcircle through neighboring waypoints, which is
             %   well behaved for non-constant-radius and nonuniformly-spaced data.
+            %
+            % Physics convention: curvature kappa = 1/R with sign from the
+            % turn direction. The driver uses v_limit = sqrt(ay_limit/|kappa|);
+            % the simulator stores curvature as reference telemetry only.
             if nargin < 2
                 closed = false;
             end
@@ -127,6 +131,9 @@ classdef (Abstract) Track
 
         function theta = computeHeading(points, closed)
             % COMPUTEHEADING Compute unwrapped heading angle from waypoints.
+            % Heading defines the local tangent used for projection telemetry
+            % and driver path following. Vehicle yaw is still integrated from
+            % tire yaw moment, so heading is not imposed on the car.
             if nargin < 2
                 closed = false;
             end

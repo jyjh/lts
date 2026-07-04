@@ -52,6 +52,9 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
         % wheel-rate roll stiffness so the chassis roll model and the
         % load-transfer split share the same numbers. Optional.
         suspension
+
+        % Internal integration cap for the stiff vertical attitude states.
+        maxIntegrationStep = 0.001
     end
 
     properties (Transient = true) %#ok<MCNPC>
@@ -119,6 +122,15 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
             if nargin < 4 || isempty(aeroForces)
                 aeroForces = struct('Fz_front', 0, 'Fz_rear', 0, ...
                     'F_drag', 0, 'dragHeight', 0);
+            end
+
+            nSubsteps = obj.integrationSubsteps(dt);
+            if nSubsteps > 1
+                subDt = dt / nSubsteps;
+                for idx = 1:nSubsteps
+                    obj.updateFromAccelerations(ax, ay, aeroForces, subDt);
+                end
+                return;
             end
 
             FzFront = obj.getStructField(aeroForces, 'Fz_front', 0);
@@ -277,6 +289,15 @@ classdef SimpleChassis < components.Chassis.ChassisComponent
                 torque = 1e9 * twist;
             else
                 torque = Kt * twist;
+            end
+        end
+
+        function n = integrationSubsteps(obj, dt)
+            maxStep = obj.maxIntegrationStep;
+            if ~isfinite(maxStep) || maxStep <= 0
+                n = 1;
+            else
+                n = max(1, ceil(dt / maxStep));
             end
         end
     end

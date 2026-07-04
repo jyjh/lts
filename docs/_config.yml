@@ -13,6 +13,7 @@ plugins:
 header_pages:
   - class-diagram/index.md
   - simulation-loop/index.md
+  - physics-flow/index.md
   - workflow/index.md
   - data-ingestion/index.md
   - about.md

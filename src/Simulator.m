@@ -11,6 +11,13 @@ classdef Simulator < handle
     % The Simulator composes a VehicleManager and asks a driver/controller
     % for inputs during full-lap simulation. Vehicle dynamics remain in
     % step(); driver policy remains outside the physics transition.
+    %
+    % One step follows this physics chain:
+    %   driver inputs -> aero loads/drag -> tire normal loads ->
+    %   powertrain/diff/brake wheel torques -> wheel slip -> Pacejka tire
+    %   forces -> body accelerations/yaw moment -> planar state integration.
+    % Track geometry is a reference/progress signal only; the car is not
+    % kinematically constrained to the centerline.
     
     properties
         % Reference to VehicleManager (components + vehicle parameters)
@@ -43,6 +50,7 @@ classdef Simulator < handle
         % applied as recorded after channel-map scaling.
         enforcePedalExclusivity = true
         applySteeringSlew = true
+        brakeMode = "ratio"
         stopOnOffTrack = true
         stopAtTrackEnd = true
         stopTime = inf
@@ -88,6 +96,14 @@ classdef Simulator < handle
             % Driver inputs are supplied by a driver/controller. Track
             % curvature is reference telemetry only; planar motion comes
             % from summed tire forces and yaw moment.
+            %
+            % The method is intentionally force-first:
+            %   1. estimate loads and wheel torques from the old state,
+            %   2. solve wheel angular velocity and tire force together,
+            %   3. sum body forces/moment,
+            %   4. integrate vx/vy/yaw/x/y once.
+            % This avoids the old "speed follows track curvature" shortcut;
+            % yaw and lateral position now emerge from the four contact patches.
             
             vm = obj.vehicleManager;
             input = obj.normalizeDriverInput(input, state);
@@ -121,8 +137,16 @@ classdef Simulator < handle
             suspensionInputState = state;
             suspensionInputState.steer = steer;
             if obj.hasChassis()
+                % Chassis-coupled path: use the sprung-mass attitude from the
+                % previous completed step to impose corner motion on the
+                % suspension. The chassis is then advanced later in this step
+                % with the newly computed accelerations, giving a stable
+                % one-step stagger between tire loads and platform attitude.
                 cornerLoads = obj.getCurrentCornerLoads(steer);
             else
+                % Algebraic fallback: without a chassis state, estimate static
+                % + aero + longitudinal/lateral load transfer directly from
+                % the current accelerations.
                 cornerLoads = vm.suspension.estimateCornerLoads( ...
                     suspensionInputState, aeroForces.Fz_front, aeroForces.Fz_rear, vm.totalMass);
             end
@@ -137,11 +161,12 @@ classdef Simulator < handle
 
             % Off-throttle motoring/regen drag on the driven axle (opt-in via
             % motoringDragTorque / regenEnabled on the powertrain; 0 when off,
-            % so baseline behavior is unchanged). Applied equally to both rear
-            % wheels as a coastdown braking torque opposing rotation.
-            T_coast_rear = 0;
+            % so baseline behavior is unchanged). This is signed driveline
+            % torque, so ramp-plate LSDs can use their decel ramps. Hydraulic
+            % brake torque remains outside the differential model.
+            totalCoastdownTorque = 0;
             if ismethod(vm.powertrain, 'computeCoastdownTorque')
-                T_coast_rear = 0.5 * vm.powertrain.computeCoastdownTorque( ...
+                totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
                     state.speed, throttle);
             end
 
@@ -155,25 +180,22 @@ classdef Simulator < handle
             % behavior (mean-speed carrier).
             inertia = obj.getWheelInertia();  % struct FL/FR/RL/RR
             diffOut = obj.solveDifferential( ...
-                totalDriveTorque, vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
+                totalDriveTorque, totalCoastdownTorque, ...
+                vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
                 inertia.RL, obj.dt);
-            T_drive_RL = diffOut.TL + T_coast_rear;
-            T_drive_RR = diffOut.TR + T_coast_rear;
+            T_drive_RL = diffOut.TL;
+            T_drive_RR = diffOut.TR;
 
             % --- BRAKE TORQUE ---
-            brakeCommand = max(0, min(1, brake));
-            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
-            brakeBiasRear = 1 - brakeBiasFront;
-            % Existing brakeForceCoefficient is preserved as an equivalent
-            % total brake force capacity, then converted to wheel torque.
-            % The vehicles have no ABS, so commanded brake torque is applied
-            % directly at a fixed front/rear bias (wheels may lock).
+            % Ratio mode preserves the legacy brake_force_coefficient path.
+            % Pressure mode converts logged front/rear line pressure to
+            % independent axle brake forces via vehicle calibration.
             totalNormalLoad = W + F_downforce;
-            brakeForceCapacity = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
-            brakeForceMag = brakeCommand * brakeForceCapacity;
-            F_brake_front_cmd = brakeForceMag * brakeBiasFront;
-            F_brake_rear_cmd = brakeForceMag * brakeBiasRear;
-            effectiveBrakeCommand = brakeCommand;
+            brakeForces = obj.computeBrakeForces(input, totalNormalLoad);
+            brakeCommand = brakeForces.requestedCommand;
+            effectiveBrakeCommand = brakeForces.effectiveCommand;
+            F_brake_front_cmd = brakeForces.frontForce;
+            F_brake_rear_cmd = brakeForces.rearForce;
             
             % --- WHEEL DYNAMICS & SLIP RATIO ---
             % Per-corner brake torque by axle bias
@@ -201,10 +223,11 @@ classdef Simulator < handle
                 % locked diff enforces a common speed and an LSD re-biases
                 % torque. Driven-wheel speed then feeds the powertrain.
                 diffOut = obj.solveDifferential( ...
-                    totalDriveTorque, vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
+                    totalDriveTorque, totalCoastdownTorque, ...
+                    vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
                     inertia.RL, obj.dt);
-                T_drive_RL = diffOut.TL + T_coast_rear;
-                T_drive_RR = diffOut.TR + T_coast_rear;
+                T_drive_RL = diffOut.TL;
+                T_drive_RR = diffOut.TR;
 
                 % A locked differential mechanically forces both driven
                 % wheels to the carrier speed.
@@ -309,10 +332,16 @@ classdef Simulator < handle
             yNew = state.y + 0.5 * (vyWorld0 + vyWorld) * obj.dt;
 
             if obj.isFreeReference(ref)
+                % Free reference mode is used by correlation replay: progress
+                % is just distance travelled in world space, with a fixed
+                % surface mu, and no track-limit projection.
                 dsFree = hypot(xNew - state.x, yNew - state.y);
                 nextRef = obj.freeReferenceForState( ...
                     newState, state.s + dsFree, xNew, yNew, yawNew);
             else
+                % Track reference mode projects the freely integrated x/y back
+                % onto the centerline for progress, curvature/mu lookup, and
+                % lateral-error telemetry. Projection does not overwrite x/y.
                 nextRef = obj.projectToReference(xNew, yNew, ref.trackData, ref.idx);
             end
             
@@ -348,11 +377,15 @@ classdef Simulator < handle
             forces.F_brake_RR = min(0, vm.tire.RR.Fx);
             forces.brakeCommand = brakeCommand;
             forces.brake = effectiveBrakeCommand;
+            forces.brakePressureMode = brakeForces.pressureModeActive;
+            forces.brakePressureFrontBar = brakeForces.frontPressureBar;
+            forces.brakePressureRearBar = brakeForces.rearPressureBar;
             forces.brakeGrip_FL = max(vm.tire.FL.peakMu, 0) * max(cornerLoads.FL, 0);
             forces.brakeGrip_FR = max(vm.tire.FR.peakMu, 0) * max(cornerLoads.FR, 0);
             forces.brakeGrip_RL = max(vm.tire.RL.peakMu, 0) * max(cornerLoads.RL, 0);
             forces.brakeGrip_RR = max(vm.tire.RR.peakMu, 0) * max(cornerLoads.RR, 0);
             forces.driveTorqueTotal = totalDriveTorque;
+            forces.coastdownTorqueTotal = totalCoastdownTorque;
             forces.driveTorque_RL = T_drive_RL;
             forces.driveTorque_RR = T_drive_RR;
             forces.brakeTorque_FL = T_brake_front;
@@ -402,6 +435,11 @@ classdef Simulator < handle
             %
             %   initialState - VehicleState at simulation start
             %   track        - Track object with geometry and surface data
+            %
+            % This is orchestration rather than physics: it prepares the track
+            % reference, initializes the vehicle/controller, repeats warmup
+            % laps for closed circuits when requested, calls step(), and
+            % records telemetry. The state transition itself lives in step().
             
             vm = obj.vehicleManager;
             
@@ -458,6 +496,9 @@ classdef Simulator < handle
                 'totalLaps', totalLaps, ...
                 'lapBreakS', (0:totalLaps)' * baseTrackLen, ...
                 'nPts', nPts);
+            % trackData is the simulator's immutable reference bundle. The
+            % mutable vehicle state stores only its current projection fields
+            % (refS/refHeading/refCurvature/lateralError/mu/onTrack).
             trackData = obj.precomputeTrackSegments(trackData);
             initialState = obj.initializePlanarState(initialState, trackData, ...
                 obj.referenceMode, obj.freeSurfaceMu);
@@ -504,6 +545,9 @@ classdef Simulator < handle
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
                 'brakeRequested', zeros(maxSteps, 1), ...
+                'brakePressureMode', false(maxSteps, 1), ...
+                'brakePressureFrontBar', NaN(maxSteps, 1), ...
+                'brakePressureRearBar', NaN(maxSteps, 1), ...
                 'steer',       zeros(maxSteps, 1), ...
                 'targetSpeed', NaN(maxSteps, 1), ...
                 'axRef',       NaN(maxSteps, 1), ...
@@ -714,6 +758,9 @@ classdef Simulator < handle
                     stateLog.throttle(step)    = input.throttle;
                     stateLog.brake(step)       = forces.brake;
                     stateLog.brakeRequested(step) = forces.brakeCommand;
+                    stateLog.brakePressureMode(step) = forces.brakePressureMode;
+                    stateLog.brakePressureFrontBar(step) = forces.brakePressureFrontBar;
+                    stateLog.brakePressureRearBar(step) = forces.brakePressureRearBar;
                     stateLog.steer(step)       = input.steer;
                     targetSpeedForLog = localGetField(input, 'targetSpeed', NaN);
                     stateLog.targetSpeed(step) = targetSpeedForLog;
@@ -915,6 +962,7 @@ classdef Simulator < handle
             parser.addParameter('ReplayDomain', 'distance', @(x) ischar(x) || isstring(x));
             parser.addParameter('AllowPedalOverlap', true, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('ApplySteeringSlew', false, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('BrakeMode', 'ratio', @(x) ischar(x) || isstring(x));
             parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
@@ -932,6 +980,7 @@ classdef Simulator < handle
             previousMethod = obj.cachedDriverInputMethod;
             previousPedalPolicy = obj.enforcePedalExclusivity;
             previousSteerPolicy = obj.applySteeringSlew;
+            previousBrakeMode = obj.brakeMode;
             previousOffTrackPolicy = obj.stopOnOffTrack;
             previousTrackEndPolicy = obj.stopAtTrackEnd;
             previousStopTime = obj.stopTime;
@@ -939,7 +988,7 @@ classdef Simulator < handle
             previousFreeSurfaceMu = obj.freeSurfaceMu;
             cleanup = onCleanup(@() obj.restoreReplayPolicies( ...
                 previousDriver, previousMethod, previousPedalPolicy, ...
-                previousSteerPolicy, previousOffTrackPolicy, ...
+                previousSteerPolicy, previousBrakeMode, previousOffTrackPolicy, ...
                 previousTrackEndPolicy, previousStopTime, ...
                 previousReferenceMode, previousFreeSurfaceMu));
 
@@ -948,6 +997,7 @@ classdef Simulator < handle
             obj.cachedDriverInputMethod = [];
             obj.enforcePedalExclusivity = ~logical(parser.Results.AllowPedalOverlap);
             obj.applySteeringSlew = logical(parser.Results.ApplySteeringSlew);
+            obj.brakeMode = obj.validateBrakeMode(parser.Results.BrakeMode);
             obj.stopOnOffTrack = logical(parser.Results.StopOnOffTrack);
             obj.stopAtTrackEnd = logical(parser.Results.StopAtTrackEnd);
             obj.referenceMode = lower(string(parser.Results.ReferenceMode));
@@ -983,6 +1033,12 @@ classdef Simulator < handle
                 profile.time, profile.throttle, queryTime);
             stateLog.replayBrake = localInterpProfileChannel( ...
                 profile.time, profile.brake, queryTime);
+            if profile.hasBrakePressure()
+                stateLog.replayBrakePressureFrontBar = localInterpProfileChannel( ...
+                    profile.time, profile.brakePressureFrontBar, queryTime);
+                stateLog.replayBrakePressureRearBar = localInterpProfileChannel( ...
+                    profile.time, profile.brakePressureRearBar, queryTime);
+            end
             stateLog.replaySteer = localInterpProfileChannel( ...
                 profile.time, profile.steer, queryTime);
             stateLog.replaySpeed = localInterpProfileChannel( ...
@@ -990,19 +1046,20 @@ classdef Simulator < handle
         end
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
-                steerPolicy, offTrackPolicy, trackEndPolicy, stopTime, ...
+                steerPolicy, brakeMode, offTrackPolicy, trackEndPolicy, stopTime, ...
                 referenceMode, freeSurfaceMu)
             obj.driverModel = driverModel;
             obj.cachedDriverInputMethod = inputMethod;
             obj.enforcePedalExclusivity = pedalPolicy;
             obj.applySteeringSlew = steerPolicy;
+            obj.brakeMode = brakeMode;
             obj.stopOnOffTrack = offTrackPolicy;
             obj.stopAtTrackEnd = trackEndPolicy;
             obj.stopTime = stopTime;
-            if nargin >= 9
+            if nargin >= 10
                 obj.referenceMode = referenceMode;
             end
-            if nargin >= 10
+            if nargin >= 11
                 obj.freeSurfaceMu = freeSurfaceMu;
             end
         end
@@ -1044,7 +1101,89 @@ classdef Simulator < handle
             end
         end
 
+        function brakeForces = computeBrakeForces(obj, input, totalNormalLoad)
+            % COMPUTEBRAKEFORCES Convert brake command/pressure to axle force.
+            %
+            % Ratio mode is a simple hydraulic capacity model:
+            %   F_brake_total = brake[0..1] * brakeForceCoefficient * Fz_total
+            % and brakeBiasFront splits that total between axles.
+            %
+            % Pressure mode is for telemetry replay: front/rear line pressure
+            % channels are converted through vehicle calibration [N/bar]. Tire
+            % saturation is not applied here; the wheel torque feeds the tire
+            % slip solve, and Pacejka decides how much braking force appears
+            % at the contact patch.
+            vm = obj.vehicleManager;
+            brakeCommand = max(0, min(1, localGetField(input, 'brake', 0)));
+            totalNormalLoad = max(0, totalNormalLoad);
+            brakeForceCapacity = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
+            mode = obj.validateBrakeMode(obj.brakeMode);
+
+            brakeForces = struct( ...
+                'requestedCommand', brakeCommand, ...
+                'effectiveCommand', brakeCommand, ...
+                'frontForce', 0, ...
+                'rearForce', 0, ...
+                'frontPressureBar', NaN, ...
+                'rearPressureBar', NaN, ...
+                'pressureModeActive', false);
+
+            if mode == "pressure"
+                frontPressureBar = localGetField(input, 'brakePressureFrontBar', NaN);
+                rearPressureBar = localGetField(input, 'brakePressureRearBar', NaN);
+                if ~isfinite(frontPressureBar) || ~isfinite(rearPressureBar)
+                    error('Simulator:MissingBrakePressureInput', ...
+                        ['BrakeMode "pressure" requires finite brakePressureFrontBar ' ...
+                        'and brakePressureRearBar inputs from the replay profile.']);
+                end
+
+                frontForcePerBar = vm.brakePressureFrontForcePerBar;
+                rearForcePerBar = vm.brakePressureRearForcePerBar;
+                if ~isfinite(frontForcePerBar) || frontForcePerBar < 0 || ...
+                        ~isfinite(rearForcePerBar) || rearForcePerBar < 0
+                    error('Simulator:MissingBrakePressureCalibration', ...
+                        ['BrakeMode "pressure" requires vehicle brakePressure ' ...
+                        'frontForcePerBar and rearForcePerBar calibration.']);
+                end
+
+                frontPressureBar = max(0, frontPressureBar);
+                rearPressureBar = max(0, rearPressureBar);
+                brakeForces.frontPressureBar = frontPressureBar;
+                brakeForces.rearPressureBar = rearPressureBar;
+                brakeForces.frontForce = frontPressureBar * frontForcePerBar;
+                brakeForces.rearForce = rearPressureBar * rearForcePerBar;
+                if brakeForceCapacity > eps
+                    brakeForces.effectiveCommand = min(1, ...
+                        (brakeForces.frontForce + brakeForces.rearForce) / brakeForceCapacity);
+                else
+                    brakeForces.effectiveCommand = ...
+                        double(brakeForces.frontForce + brakeForces.rearForce > 0);
+                end
+                brakeForces.pressureModeActive = true;
+                return;
+            end
+
+            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
+            brakeBiasRear = 1 - brakeBiasFront;
+            brakeForceMag = brakeCommand * brakeForceCapacity;
+            brakeForces.frontForce = brakeForceMag * brakeBiasFront;
+            brakeForces.rearForce = brakeForceMag * brakeBiasRear;
+        end
+
+        function mode = validateBrakeMode(~, mode)
+            mode = lower(string(mode));
+            if mode ~= "ratio" && mode ~= "pressure"
+                error('Simulator:InvalidBrakeMode', ...
+                    'BrakeMode must be "ratio" or "pressure".');
+            end
+        end
+
         function state = initializePlanarState(obj, state, trackData, referenceMode, surfaceMu)
+            % INITIALIZEPLANARSTATE Fill missing x/y/yaw/vx reference fields.
+            %
+            % Track mode starts on the first reference waypoint and heading
+            % unless the caller supplied logged/free-space state. Free mode is
+            % deliberately decoupled from track geometry for correlation runs.
             if nargin < 4 || isempty(referenceMode)
                 referenceMode = "track";
             end
@@ -1171,6 +1310,9 @@ classdef Simulator < handle
                 'throttle',    zeros(maxSteps, 1), ...
                 'brake',       zeros(maxSteps, 1), ...
                 'brakeRequested', zeros(maxSteps, 1), ...
+                'brakePressureMode', false(maxSteps, 1), ...
+                'brakePressureFrontBar', NaN(maxSteps, 1), ...
+                'brakePressureRearBar', NaN(maxSteps, 1), ...
                 'steer',       zeros(maxSteps, 1), ...
                 'targetSpeed', NaN(maxSteps, 1), ...
                 'axRef',       NaN(maxSteps, 1), ...
@@ -1523,6 +1665,13 @@ classdef Simulator < handle
         end
 
         function ref = projectToReference(~, x, y, trackData, previousIdx)
+            % PROJECTTOREFERENCE Project world position to nearest track segment.
+            %
+            % The local search window is a speed optimization that assumes the
+            % car advances mostly forward along the route. If the best local
+            % segment is suspiciously far away or lies on the search boundary,
+            % a full-track scan recovers from spins, large timesteps, or a
+            % badly initialized reference index.
             if nargin < 5 || isempty(previousIdx) || previousIdx < 1
                 previousIdx = 1;
             end
@@ -1720,6 +1869,9 @@ classdef Simulator < handle
                 cwh = cos(wh); swh = sin(wh);
                 longSpeed = vxCorner * cwh + vyCorner * swh;
                 latSpeed  = -vxCorner * swh + vyCorner * cwh;
+                % Slip angle is the angle between wheel heading and local
+                % contact-patch velocity. The 0.1 m/s denominator floor avoids
+                % undefined atan behavior while the car is nearly stationary.
                 alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
                 tireState = vm.tire.(corner);
                 kappa = obj.computeLocalSlipRatio(tireState, longSpeed);
@@ -1776,6 +1928,8 @@ classdef Simulator < handle
 
                 sumFxBody = sumFxBody + FxBody;
                 sumFyBody = sumFyBody + FyBody;
+                % Planar yaw moment about CG: Mz = x*Fy - y*Fx for each
+                % contact patch, using suspension geometry contact positions.
                 yawMoment = yawMoment + ...
                     cornerKin.xPosition * FyBody - cornerKin.yPosition * FxBody;
             end
@@ -1974,6 +2128,13 @@ classdef Simulator < handle
         end
 
         function kappa = computeLocalSlipRatio(~, cornerState, longitudinalSpeed)
+            % COMPUTELOCALSLIPRATIO SAE-style longitudinal slip.
+            %   kappa = (omega*R - Vx) / max(|omega*R|, |Vx|, floor)
+            %
+            % Positive kappa means the tread is trying to drive the road
+            % backwards (tractive force); negative means braking. Below the
+            % 1 m/s floor the result blends toward the previous slip to avoid
+            % violent sign flips when both wheel and ground speeds are tiny.
             wheelSpeed = cornerState.angularVelocity * cornerState.wheelRadius;
             denom = max(abs(wheelSpeed), abs(longitudinalSpeed));
             slipSpeedFloor = 1.0;
@@ -2019,17 +2180,36 @@ classdef Simulator < handle
             obj.cachedWheelInertia = inertia;
         end
 
-        function out = solveDifferential(obj, totalWheelTorque, omegaL, omegaR, wheelInertia, dt)
+        function out = solveDifferential(obj, totalDriveTorque, varargin)
             % SOLVEDIFFERENTIAL Split driven-axle torque via the configured
             % differential. Falls back to the legacy open behavior (50/50
             % torque, mean-speed carrier) when no differential is present.
+            if numel(varargin) == 4
+                totalCoastdownTorque = 0;
+                omegaL = varargin{1};
+                omegaR = varargin{2};
+                wheelInertia = varargin{3};
+                dt = varargin{4};
+            elseif numel(varargin) == 5
+                totalCoastdownTorque = varargin{1};
+                omegaL = varargin{2};
+                omegaR = varargin{3};
+                wheelInertia = varargin{4};
+                dt = varargin{5};
+            else
+                error('Simulator:BadDifferentialArgs', ...
+                    'Expected drive torque plus omega/inertia/dt, optionally with coastdown torque.');
+            end
+
             vm = obj.vehicleManager;
             if ~isempty(vm.differential) && ...
                     isa(vm.differential, 'components.Powertrain.DifferentialComponent')
-                out = vm.differential.solveDrive( ...
-                    totalWheelTorque, omegaL, omegaR, wheelInertia, dt);
+                out = vm.differential.solveDriveline( ...
+                    totalDriveTorque, totalCoastdownTorque, ...
+                    omegaL, omegaR, wheelInertia, dt);
             else
-                totalWheelTorque = max(0, totalWheelTorque);
+                totalDriveTorque = max(0, totalDriveTorque);
+                totalWheelTorque = totalDriveTorque + totalCoastdownTorque;
                 out.TL = 0.5 * totalWheelTorque;
                 out.TR = 0.5 * totalWheelTorque;
                 out.carrierOmega = 0.5 * (omegaL + omegaR);

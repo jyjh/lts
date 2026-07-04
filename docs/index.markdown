@@ -30,6 +30,7 @@ VehicleManager
 ```
 
 See the [class diagram](class-diagram/) for a fuller relationship map.
+See the [physics flow](physics-flow/) for the force equations and timestep data flow.
 
 ## Simulation Model
 

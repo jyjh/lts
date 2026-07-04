@@ -74,6 +74,33 @@ class ExtractMotecLapTest(unittest.TestCase):
         self.assertEqual(signal["peak_combined_pressure_bar"], 200.0)
         np.testing.assert_allclose(signal["values"], [0.0, 0.35, 1.0])
 
+    def test_front_and_rear_brake_pressure_are_export_columns(self):
+        data = FakeData(
+            [
+                FakeChannel("Brake Pressure Front", "kPa", 10, [0, 250, 500]),
+                FakeChannel("Brake Pressure Rear", "bar", 10, [0, 3, 6]),
+            ]
+        )
+        channel_map = extract_motec_lap.load_channel_map(
+            REPO_ROOT / "config" / "motec" / "default_channel_map.json"
+        )
+
+        front = extract_motec_lap.extract_raw_signal(
+            data,
+            "brake_pressure_front_bar",
+            channel_map["channels"]["brake_pressure_front_bar"],
+        )
+        rear = extract_motec_lap.extract_raw_signal(
+            data,
+            "brake_pressure_rear_bar",
+            channel_map["channels"]["brake_pressure_rear_bar"],
+        )
+
+        self.assertIn("brake_pressure_front_bar", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("brake_pressure_rear_bar", extract_motec_lap.REPLAY_COLUMNS)
+        np.testing.assert_allclose(front["values"], [0.0, 2.5, 5.0])
+        np.testing.assert_allclose(rear["values"], [0.0, 3.0, 6.0])
+
     def test_brake_ratio_peak_scales_combined_pressure_trace(self):
         spec = {
             "required": True,

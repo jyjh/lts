@@ -4,6 +4,11 @@ classdef DriverInputPlanner
     % The planner treats the track centerline as a reference for estimating
     % throttle, brake, and steering commands. It does not perform path
     % tracking and does not constrain vehicle motion to the centerline.
+    %
+    % Physics role: this is a GGV-style speed planner, not a vehicle model.
+    % It asks aero/tire/powertrain/brake models for approximate capability,
+    % propagates speed limits forward/backward along distance, then converts
+    % required longitudinal acceleration into pedal commands.
 
     properties
         vehicleManager
@@ -59,6 +64,12 @@ classdef DriverInputPlanner
         end
 
         function profile = buildOpenLoopProfile(obj, initialState, trackData)
+            % BUILDOPENLOOPPROFILE Construct a distance-indexed control plan.
+            %
+            % The pass order mirrors classic lap-time envelope logic:
+            %   lateral limit from curvature -> backward braking sweep ->
+            %   forward acceleration sweep -> pedal and steer references.
+            % The actual Simulator later closes the loop with tire forces.
             vm = obj.vehicleManager;
             n = trackData.nPts;
             line = obj.buildRacingLine(trackData);
@@ -568,6 +579,10 @@ classdef DriverInputPlanner
             tempState.vx = tempState.speed;
             tempState.vy = 0;
 
+            % Use the same component models as the dynamic simulation for the
+            % static capability estimate. This keeps driver targets consistent
+            % with aero downforce, powertrain force, tire load sensitivity, and
+            % rolling resistance used in Simulator.step().
             aeroForces = vm.aero.computeForces(tempState);
             F_drag = max(0, aeroForces.F_drag);
             totalNormalLoad = vm.totalMass * vm.g + aeroForces.Fz_front + aeroForces.Fz_rear;

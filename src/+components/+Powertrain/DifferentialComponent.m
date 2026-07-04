@@ -9,7 +9,9 @@ classdef (Abstract) DifferentialComponent
     % Concrete implementations:
     %   - OpenDifferential         50/50 torque split, carrier = mean(omega)
     %   - LockedDifferential       spool: equal rear wheel speed
-    %   - ClutchLSDDifferential    torque-biasing limited-slip
+    %   - ClutchLSDDifferential    legacy torque-biasing limited-slip
+    %   - DrexlerRampPlateDifferential
+    %                              signed ramp-plate LSD with accel/decel ramps
     %
     % The solve is called once per wheel-contact iteration in Simulator.step,
     % so the returned carrier speed stays consistent with the converged wheel
@@ -36,6 +38,18 @@ classdef (Abstract) DifferentialComponent
     end
 
     methods
+        function out = solveDriveline(obj, driveWheelTorque, coastdownWheelTorque, omegaL, omegaR, wheelInertia, dt)
+            % SOLVEDRIVELINE Split signed driveline torque.
+            %   Default adapter preserves the historical behavior: split the
+            %   non-negative drive torque through solveDrive, then add signed
+            %   motor coastdown/regen torque equally to both driven wheels.
+            %   Hydraulic brake torque is intentionally outside this API.
+            driveWheelTorque = max(0, driveWheelTorque);
+            out = obj.solveDrive(driveWheelTorque, omegaL, omegaR, wheelInertia, dt);
+            out.TL = out.TL + 0.5 * coastdownWheelTorque;
+            out.TR = out.TR + 0.5 * coastdownWheelTorque;
+        end
+
         function name = getName(obj)
             name = 'DifferentialComponent';
         end

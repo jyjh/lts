@@ -33,6 +33,7 @@ classdef VehicleConfig
         staticFrontWeight    = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront       = 0.60 % Brake force fraction to front axle [0-1]
         brakeForceCoefficient = 0.70 % Brake force capacity as a fraction of total normal load (no ABS)
+        brakePressure        % Pressure-based brake calibration [N/bar] for correlation replay
         maxSpeed      = 80       % Soft speed limiter [m/s] (~288 km/h)
         unsprungMass  = 25       % Per-corner unsprung mass [kg]
 
@@ -144,7 +145,16 @@ classdef VehicleConfig
                     'steeringRatio',      1.0, ...
                     'ackermann',          0.8872, ...
                     'maxWheelSteerAngle', 0.6, ...
-                    'rearSteerRatio',     0.0));
+                'rearSteerRatio',     0.0));
+
+            % --- Brakes ---
+            %   Ratio mode uses brakeBiasFront + brakeForceCoefficient.
+            %   Correlation pressure mode uses front/rear line pressures:
+            %     frontForcePerBar / rearForcePerBar [N/bar] are total axle
+            %     longitudinal brake force magnitudes before tire slip limits.
+            obj.brakePressure = struct( ...
+                'frontForcePerBar', NaN, ...
+                'rearForcePerBar', NaN);
 
             % --- Chassis (sprung-mass platform heave/pitch/roll) ---
             %   The sprung mass is a lumped heave/pitch/2xroll body. Heave
@@ -170,23 +180,40 @@ classdef VehicleConfig
             %   Single-speed EV (EMRAX 228). The motor map is tractive-force
             %   vs RPM with a rev limiter; final drive is fixed in the map.
             %     matFile: '' uses the default EMRAX 228 map in +Powertrain/
+            %     finalDriveRatio [ratio] optional override for the map FDR
             %     efficiency [0-1] drivetrain efficiency (gearbox + bearings)
             %     motorRotorInertia [kg*m^2] motor rotor inertia, reflected as
             %       I*ratio^2 onto the driven (rear) wheels (default 0.07).
             %     regenEnabled (false) opt-in regenerative braking at off-throttle
             %     motoringDragTorque [Nm] (0) opt-in motor coastdown drag
+            %     motoringDragThrottleThreshold [-] throttle at/below which
+            %       motoring drag applies; Inf preserves always-on drag when set
             %     regenTorqueLimitNm [Nm] (30) max regen torque, motor-side
-            %     differential.type: 'open' | 'locked' (spool) | 'lsd'
+            %     regenEnabledSpeedFloor [m/s] speed below which regen tapers
+            %     throttleDeadband [-] pedal command below which drive torque is 0
+            %     throttleMapInput / throttleMapOutput shape post-deadband
+            %       pedal into motor torque/current request fraction.
+            %     differential.type: 'open' | 'locked' (spool) | 'lsd' | 'drexler'
             %       'lsd' may carry preload [N*m], ramp [-], speedGain [-],
             %       biasRatio [-] (torque-bias cap).
+            %       'drexler' is a signed ramp-plate LSD with accel/decel
+            %       ramp angles [deg], preloadBreakawayTorqueNm [N*m],
+            %       rampTorqueScale [-], and fluid metadata. It requires
+            %       finite calibrated preload/ramp values before simulation.
             %   Drivetrain is RWD (drive torque only on the rear axle).
             obj.powertrain = struct( ...
                 'matFile', '', ...
+                'finalDriveRatio', NaN, ...
                 'efficiency', 0.92, ...
                 'motorRotorInertia', 0.07, ...
                 'regenEnabled', false, ...
                 'motoringDragTorque', 0, ...
+                'motoringDragThrottleThreshold', Inf, ...
                 'regenTorqueLimitNm', 30, ...
+                'regenEnabledSpeedFloor', 1.0, ...
+                'throttleDeadband', 0, ...
+                'throttleMapInput', [0.00 0.15 0.35 0.60 0.80 1.00], ...
+                'throttleMapOutput', [0.00 0.02 0.10 0.28 0.58 1.00], ...
                 'differential', struct('type', 'open'));
 
             % --- Tire ---

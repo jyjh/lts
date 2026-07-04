@@ -27,6 +27,11 @@ function cfg = R25()
     cfg.staticFrontWeight            = 0.5095;     %  [CSV r11: 50.95% front] [0-1]
     cfg.brakeBiasFront               = 0.6;        %  TODO derivable: CSV r46: line pressures F 14.524/R 20.836 bar, r44 pistons F4/R2 => front clamp-fraction ~ 0.582 (rough; ignores piston bore 25 vs 25.4 mm). Verify against bias bar. [0-1]
     cfg.brakeForceCoefficient        = 0.7;        %  TODO derivable: CSV r46 is a 'Force @ 1g Deceleration' table; the system is sized for ~1g but brakeForceCoefficient is tyre-limited capacity. baseline 0.70 left as-is.
+    brakePressureFrontAt1gBar = 14.524;            %  [CSV r46: front line pressure at 1g deceleration] [bar]
+    brakePressureRearAt1gBar = 20.836;             %  [CSV r46: rear line pressure at 1g deceleration] [bar]
+    cfg.brakePressure = struct( ...
+        'frontForcePerBar', cfg.totalMass * 9.80665 * cfg.brakeBiasFront / brakePressureFrontAt1gBar, ...
+        'rearForcePerBar', cfg.totalMass * 9.80665 * (1 - cfg.brakeBiasFront) / brakePressureRearAt1gBar);
     cfg.maxSpeed                     = 80;         %  [not in spec sheet -- baseline default 80] [m/s] (~288 km/h)
     cfg.unsprungMass                 = 9.3;         %  TODO derivable: CSV r47-53 list upright/hub/bearing/axle/brake components as text (no clean per-corner mass). Sum them manually if needed; baseline 25 kg/corner left as-is. [kg/corner]
 
@@ -130,15 +135,19 @@ function cfg = R25()
     %  POWERTRAIN
     %  Single-speed EV. matFile = '' selects the default motor map;
     %  final drive is fixed in the map. Drivetrain is RWD.
-    %    differential.type: 'open' | 'locked' (spool) | 'lsd'
+    %    differential.type: 'open' | 'locked' (spool) | 'lsd' | 'drexler'
     %  ====================================================================
     % matFile '' = default EMRAX 228 map (CSV r85 confirms 'Emrax 228')
     cfg.powertrain = struct( ...
         'matFile', '', ...
         'efficiency', 0.85, ...          % [not in spec sheet] [0-1]
+        'throttleMapInput', [0.00 0.15 0.35 0.60 0.80 1.00], ...
+        'throttleMapOutput', [0.00 0.02 0.10 0.28 0.58 1.00], ...
         'differential', struct('type', 'lsd'));  %   [CSV r122: Drexler M-Diff LSD, non-adjustable preload]
-    % TODO lsd params: VehicleManager.def supplies preload/ramp/
-    % speedGain/biasRatio defaults if omitted; set explicitly if known.
+    % TODO Drexler target: type='drexler', accelRampAngleDeg=30,
+    % decelRampAngleDeg=45, fluid="Motul Gear Competition 75W-140".
+    % Leave disabled until preloadBreakawayTorqueNm and rampTorqueScale are
+    % measured/calibrated.
 
     %% ====================================================================
     %  TIRE

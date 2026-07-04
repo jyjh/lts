@@ -46,6 +46,9 @@ classdef SimpleSuspension
 
         % --- Transient state ---
         state                        % SuspensionState handle object
+
+        % Internal integration cap for stiff tire/suspension vertical modes.
+        maxIntegrationStep = 0.001
     end
 
     methods
@@ -133,6 +136,13 @@ classdef SimpleSuspension
             %   Mutates cornerState in-place, updating:
             %     .damperPosition, .damperVelocity, .tireDeflection,
             %     .tireNormalForce, .suspensionForce, .demandedLoad
+            %
+            % Physics model:
+            %   sprung mass:   m_s * z_s_ddot = demandedLoad - F_suspension
+            %   unsprung mass: m_u * z_u_ddot = F_suspension - F_tire
+            % where positive z is downward/compression-producing. Spring,
+            % damper, bump-stop, and anti-roll-bar forces act through
+            % F_suspension; the tire is a vertical spring to the road.
 
             if nargin < 5 || isempty(antiRollBarForce)
                 antiRollBarForce = 0;
@@ -146,6 +156,15 @@ classdef SimpleSuspension
             if cornerState.staticLoad <= 0 && cornerState.tireNormalForce <= 0
                 obj.initializeStaticLoad(cornerState, max(demandedLoad, 0));
                 cornerState.antiRollBarForce = antiRollBarForce;
+            end
+
+            nSubsteps = obj.integrationSubsteps(dt);
+            if nSubsteps > 1
+                subDt = dt / nSubsteps;
+                for idx = 1:nSubsteps
+                    obj.updateCorner(cornerState, demandedLoad, subDt, antiRollBarForce);
+                end
+                return;
             end
 
             z_s_prev = cornerState.sprungPosition;
@@ -196,6 +215,10 @@ classdef SimpleSuspension
                 sprungVelocity, dt, antiRollBarForce)
             % UPDATECORNERFROMCHASSIS Update unsprung/tire load from chassis motion.
             % Sprung motion is imposed by the chassis heave/pitch/roll model.
+            %
+            % Compared with updateCorner(), the sprung DOF is not integrated
+            % here. The chassis has already solved it; this corner only
+            % advances the unsprung mass against suspension and tire springs.
 
             if nargin < 6 || isempty(antiRollBarForce)
                 antiRollBarForce = 0;
@@ -208,6 +231,24 @@ classdef SimpleSuspension
                 obj.initializeStaticLoad(cornerState, 0);
             end
             cornerState.antiRollBarForce = antiRollBarForce;
+
+            nSubsteps = obj.integrationSubsteps(dt);
+            if nSubsteps > 1
+                subDt = dt / nSubsteps;
+                startSprungPosition = cornerState.sprungPosition;
+                startSprungVelocity = cornerState.sprungVelocity;
+                for idx = 1:nSubsteps
+                    blend = idx / nSubsteps;
+                    subSprungPosition = startSprungPosition + ...
+                        blend * (sprungPosition - startSprungPosition);
+                    subSprungVelocity = startSprungVelocity + ...
+                        blend * (sprungVelocity - startSprungVelocity);
+                    obj.updateCornerFromChassis( ...
+                        cornerState, subSprungPosition, subSprungVelocity, ...
+                        subDt, antiRollBarForce);
+                end
+                return;
+            end
 
             z_u_prev = cornerState.unsprungPosition;
             v_u_prev = cornerState.unsprungVelocity;
@@ -281,6 +322,9 @@ classdef SimpleSuspension
         function [F_suspension, F_spring, F_damper, F_bumpstop] = ...
                 computeSuspensionForce(obj, cornerState, suspensionDeflection, ...
                 suspensionVelocity, K_eff, MR_eff)
+            % Suspension force is measured relative to static equilibrium:
+            % staticLoad carries the steady car weight, while spring/damper
+            % and bump-stop deltas add transient load from chassis motion.
             F_spring = K_eff * suspensionDeflection;
             if suspensionVelocity >= 0
                 C_eff = obj.dampingCoeff * MR_eff^2;
@@ -300,6 +344,9 @@ classdef SimpleSuspension
         end
 
         function F_tire = computeTireNormalForce(obj, cornerState, unsprungPosition)
+            % The road is flat and fixed in z; unsprung downward motion adds
+            % tire compression to the static tire deflection. Negative normal
+            % force is clipped to zero to represent loss of contact.
             tireDeflection = cornerState.staticTireDeflection + unsprungPosition;
             F_tire = max(obj.tireSpringRate * tireDeflection, 0);
         end
@@ -319,6 +366,15 @@ classdef SimpleSuspension
             force = 0;
             if compression > obj.bumpStopLength
                 force = obj.bumpStopRate * (compression - obj.bumpStopLength);
+            end
+        end
+
+        function n = integrationSubsteps(obj, dt)
+            maxStep = obj.maxIntegrationStep;
+            if ~isfinite(maxStep) || maxStep <= 0
+                n = 1;
+            else
+                n = max(1, ceil(dt / maxStep));
             end
         end
     end

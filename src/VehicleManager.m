@@ -22,7 +22,7 @@ classdef VehicleManager
         track       % components.Track
 
         % Driven-axle differential. Default OpenDifferential (set by
-        % run_simulation); may be LockedDifferential or ClutchLSDDifferential.
+        % run_simulation); may be locked, legacy clutch LSD, or Drexler ramp LSD.
         differential  % components.Powertrain.DifferentialComponent
         
         % Vehicle parameters
@@ -35,6 +35,8 @@ classdef VehicleManager
         staticFrontWeight = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
         brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
+        brakePressureFrontForcePerBar = NaN % Front axle brake force per line pressure [N/bar]
+        brakePressureRearForcePerBar = NaN  % Rear axle brake force per line pressure [N/bar]
         
         % Simulation parameters
         maxSpeed      = 80       % Speed limiter [m/s] (~288 km/h)
@@ -76,6 +78,13 @@ classdef VehicleManager
             %   order dependencies and warmup steps of the original
             %   run_simulation.m setup, and returns a VehicleManager ready to
             %   hand to DriverModel + Simulator.
+            %
+            % Build-order physics dependency:
+            %   aero/powertrain/tire are independent,
+            %   VehicleManager supplies global mass/geometry,
+            %   suspension geometry needs that mass/geometry,
+            %   chassis needs the suspension roll stiffness,
+            %   differential is attached last for rear-axle torque splitting.
 
             if nargin < 3 || isempty(dt)
                 dt = 0.001;
@@ -99,14 +108,30 @@ classdef VehicleManager
             powertrain = components.Powertrain.EMRAX228Powertrain( ...
                 config.powertrain.matFile, config.powertrain.efficiency, ...
                 VehicleManager.def(config.powertrain, 'motorRotorInertia', 0.07));
+            finalDriveRatio = VehicleManager.def(config.powertrain, 'finalDriveRatio', NaN);
+            if isfinite(finalDriveRatio) && finalDriveRatio > 0
+                powertrain = powertrain.setFinalDriveRatio(finalDriveRatio);
+            end
             % Opt-in coastdown/regen (off by default; baseline unchanged).
             powertrain.regenEnabled = ...
                 VehicleManager.def(config.powertrain, 'regenEnabled', false);
             powertrain.motoringDragTorque = ...
                 VehicleManager.def(config.powertrain, 'motoringDragTorque', 0);
+            powertrain.motoringDragThrottleThreshold = ...
+                VehicleManager.def(config.powertrain, 'motoringDragThrottleThreshold', Inf);
+            powertrain.throttleDeadband = ...
+                VehicleManager.def(config.powertrain, 'throttleDeadband', 0);
+            powertrain.throttleMapInput = ...
+                VehicleManager.fieldOrDefault(config.powertrain, ...
+                'throttleMapInput', powertrain.throttleMapInput);
+            powertrain.throttleMapOutput = ...
+                VehicleManager.fieldOrDefault(config.powertrain, ...
+                'throttleMapOutput', powertrain.throttleMapOutput);
             if powertrain.regenEnabled
                 powertrain.regenTorqueLimitNm = ...
                     VehicleManager.def(config.powertrain, 'regenTorqueLimitNm', 30);
+                powertrain.regenEnabledSpeedFloor = ...
+                    VehicleManager.def(config.powertrain, 'regenEnabledSpeedFloor', 1.0);
             end
             fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
                 powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
@@ -154,6 +179,10 @@ classdef VehicleManager
             vehicle.staticFrontWeight    = config.staticFrontWeight;
             vehicle.brakeBiasFront       = config.brakeBiasFront;
             vehicle.brakeForceCoefficient = config.brakeForceCoefficient;
+            vehicle.brakePressureFrontForcePerBar = ...
+                VehicleManager.def(config.brakePressure, 'frontForcePerBar', NaN);
+            vehicle.brakePressureRearForcePerBar = ...
+                VehicleManager.def(config.brakePressure, 'rearForcePerBar', NaN);
             vehicle.maxSpeed             = config.maxSpeed;
 
             %% ---- Suspension geometry + anti-roll bars ----
@@ -238,6 +267,18 @@ classdef VehicleManager
                         'ramp',      VehicleManager.def(d, 'ramp', 0.5), ...
                         'speedGain', VehicleManager.def(d, 'speedGain', 2.0), ...
                         'biasRatio', VehicleManager.def(d, 'biasRatio', 2.0));
+                case {'drexler', 'drexlerrampplate', 'rampplate'}
+                    d = config.powertrain.differential;
+                    differential = components.Powertrain.DrexlerRampPlateDifferential( ...
+                        'accelRampAngleDeg', VehicleManager.def(d, 'accelRampAngleDeg', 30), ...
+                        'decelRampAngleDeg', VehicleManager.def(d, 'decelRampAngleDeg', 45), ...
+                        'preloadBreakawayTorqueNm', ...
+                            VehicleManager.def(d, 'preloadBreakawayTorqueNm', NaN), ...
+                        'rampTorqueScale', VehicleManager.def(d, 'rampTorqueScale', NaN), ...
+                        'fluid', VehicleManager.def(d, 'fluid', "Motul Gear Competition 75W-140"), ...
+                        'slipSmoothingRadPerSec', ...
+                            VehicleManager.def(d, 'slipSmoothingRadPerSec', 0));
+                    differential.validateCalibration();
                 otherwise
                     error('VehicleManager:UnknownDifferential', ...
                         'Unknown differential type "%s".', diffType);
@@ -251,6 +292,15 @@ classdef VehicleManager
         function value = def(s, fieldName, defaultValue)
             % DEF Struct field with a fallback if missing/empty.
             if isfield(s, fieldName) && ~isempty(s.(fieldName))
+                value = s.(fieldName);
+            else
+                value = defaultValue;
+            end
+        end
+
+        function value = fieldOrDefault(s, fieldName, defaultValue)
+            % FIELDORDEFAULT Struct field with a fallback only when missing.
+            if isfield(s, fieldName)
                 value = s.(fieldName);
             else
                 value = defaultValue;

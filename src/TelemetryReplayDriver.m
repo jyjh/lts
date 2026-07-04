@@ -4,6 +4,10 @@ classdef TelemetryReplayDriver < handle
     % This class intentionally does not add path-following feedback, input
     % slew, or pedal exclusivity. The Simulator owns any remaining safety
     % clamping requested by the caller.
+    %
+    % In correlation mode the "driver" is the data log: throttle, brake,
+    % pressure, and steer are interpolated by time or distance and handed to
+    % the same physics step used for synthetic laps.
 
     properties
         profile

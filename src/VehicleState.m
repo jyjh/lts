@@ -163,6 +163,10 @@ classdef VehicleState
                 vx, vy, yawRate, yaw, x, y, refS, refHeading, refCurvature, ...
                 lateralError, dt, mu)
             % UPDATEFROMPLANARDYNAMICS Store a free planar 4-wheel state update.
+            % The simulator has already integrated body/world velocity and
+            % yaw from Newton/Euler equations. This method commits those
+            % results and refreshes derived telemetry (speed, body slip,
+            % pitch/roll/ride height readbacks, reference projection fields).
             obj.ax = ax;
             obj.ay = ay;
             obj.yawAccel = yawAccel;

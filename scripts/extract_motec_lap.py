@@ -19,6 +19,8 @@ REPLAY_COLUMNS = [
     "distance_m",
     "throttle_ratio",
     "brake_ratio",
+    "brake_pressure_front_bar",
+    "brake_pressure_rear_bar",
     "steer_rad",
     "speed_mps",
     "vx_mps",

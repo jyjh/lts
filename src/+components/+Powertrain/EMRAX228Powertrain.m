@@ -2,6 +2,12 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
     % EMRAX228POWERTRAIN EMRAX 228 electric powertrain from a MAT map
     % Uses the provided EMRAX228LC Single_3.36.mat data for motor torque and
     % tractive force with the final drive ratio stored in the map.
+    %
+    % The simulator consumes wheel torque, but the physical limiter is motor
+    % speed. Each step updates PowertrainState from driven-wheel omega, then
+    % this model reads the full-throttle tractive-force map by motor RPM,
+    % scales by throttle request and efficiency, and returns total rear-axle
+    % wheel torque for the differential to split.
     
     properties
         matFilePath = ""
@@ -10,8 +16,10 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         motorRPMCurve = []          % Motor speed breakpoints [rpm]
         torqueCurveNm = []          % Motor torque breakpoints [Nm]
         tractiveForceCurveN = []    % Wheel tractive-force breakpoints [N]
+        baseTractiveForceCurveN = [] % Map tractive force at mapGearRatio [N]
         state                       % components.Powertrain.PowertrainState
         totalGearRatio = 3        % Final drive ratio [-]
+        mapGearRatio = NaN        % Final drive ratio embedded in the MAT map [-]
         wheelRadius = 0.228        % Effective tire radius [m]
         drivetrainEfficiency = 0.92  % Additional drivetrain efficiency [0-1]
         motorRotorInertia = 0.07    % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to wheels
@@ -21,8 +29,12 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
         % track reverse rotation and apply a coastdown drag torque.
         regenEnabled = false            % Apply regenerative braking at off-throttle
         motoringDragTorque = 0          % Motor coastdown drag torque [Nm] (motor-side), 0 = off
+        motoringDragThrottleThreshold = Inf % Apply motoring drag at/below this throttle command [-]
         regenTorqueLimitNm = 30         % Max regen torque (motor-side) at off-throttle [Nm]
         regenEnabledSpeedFloor = 1.0    % Vehicle speed below which regen tapers to 0 [m/s]
+        throttleDeadband = 0            % Pedal command below this produces zero drive torque [-]
+        throttleMapInput = [0.00 0.15 0.35 0.60 0.80 1.00] % Post-deadband pedal breakpoints [-]
+        throttleMapOutput = [0.00 0.02 0.10 0.28 0.58 1.00] % Motor torque/current request fraction [-]
         maxVehicleSpeed = 0         % Highest speed in the MAT tractive map [m/s]
         maxEngineTorque = 0         % Compatibility alias for existing scripts [Nm]
         maxEngineRPM = 0            % Compatibility alias for existing scripts [rpm]
@@ -78,7 +90,8 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
                     'MAT file is missing required field "Torque" or "torque".');
             end
             
-            obj.totalGearRatio = data.FDR;
+            obj.mapGearRatio = data.FDR;
+            obj.totalGearRatio = obj.mapGearRatio;
             
             rawSpeed = data.Speed(:);
             rawForce = data.Tractive_force(:);
@@ -109,6 +122,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
                 obj.motorRPMCurve = obj.vehicleSpeedToMotorRPM(obj.speedCurve);
                 obj.tractiveForceCurveN = rawForce;
             end
+            obj.baseTractiveForceCurveN = obj.tractiveForceCurveN;
             
             obj.maxEngineTorque = max(obj.torqueCurveNm);
             % The constant-power rolloff is anchored at the top of the measured
@@ -121,12 +135,50 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             obj.maxEngineRPM = obj.rpmLimitRPM;
             obj.maxVehicleSpeed = max(obj.speedCurve);
         end
+
+        function obj = setFinalDriveRatio(obj, ratio)
+            % SETFINALDRIVERATIO Override the final drive ratio.
+            %
+            % The MAT gearing map stores wheel force for its original FDR.
+            % When a tuning overlay changes FDR, preserve the same motor torque
+            % curve by scaling wheel tractive force in proportion to the ratio.
+            if isempty(ratio) || (isnumeric(ratio) && isscalar(ratio) && isnan(ratio))
+                return;
+            end
+            ratio = double(ratio);
+            if ~isscalar(ratio) || ~isfinite(ratio) || ratio <= 0
+                error('EMRAX228Powertrain:InvalidFinalDriveRatio', ...
+                    'Final drive ratio must be a positive finite scalar.');
+            end
+
+            if isempty(obj.baseTractiveForceCurveN)
+                obj.baseTractiveForceCurveN = obj.tractiveForceCurveN;
+            end
+            if ~isfinite(obj.mapGearRatio) || obj.mapGearRatio <= 0
+                obj.mapGearRatio = obj.totalGearRatio;
+            end
+
+            obj.totalGearRatio = ratio;
+            obj.tractiveForceCurveN = obj.baseTractiveForceCurveN .* ...
+                (obj.totalGearRatio / obj.mapGearRatio);
+            if ~isempty(obj.motorRPMCurve)
+                obj.speedCurve = obj.motorRPMCurve ./ obj.totalGearRatio .* ...
+                    (2 * pi * obj.wheelRadius / 60);
+                obj.maxVehicleSpeed = max(obj.speedCurve);
+            end
+        end
         
         function wheelTorque = computeDriveTorque(obj, speed, throttle)
             % Compute total driven-axle wheel torque from current motor RPM.
+            % The speed argument is only a fallback for initializing state.
+            % Once wheel dynamics are active, motorRPM comes from the rear
+            % wheels through updateStateFromDrivenWheels, so wheelspin and the
+            % differential affect the rev limiter.
             throttle = max(0, min(1, throttle));
+            effectiveThrottle = obj.applyThrottleDeadband(throttle);
+            torqueRequest = obj.mapThrottleToTorqueRequest(effectiveThrottle);
             
-            if throttle == 0
+            if torqueRequest == 0
                 wheelTorque = 0;
                 obj.state.updateOutputs(throttle, 0, 0, 0, obj.drivetrainEfficiency);
                 return;
@@ -148,7 +200,7 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
             
             fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
             
-            equivalentDriveForce = fullThrottleForce * throttle * obj.drivetrainEfficiency;
+            equivalentDriveForce = fullThrottleForce * torqueRequest * obj.drivetrainEfficiency;
             wheelTorque = equivalentDriveForce * obj.wheelRadius;
             if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
                 motorTorque = wheelTorque / ...
@@ -273,7 +325,13 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
                 motorSign = 1;  % forward coastdown from rest-forward
             end
             if obj.motoringDragTorque > 0
-                T = T - motorSign * obj.motoringDragTorque * obj.totalGearRatio;
+                threshold = obj.motoringDragThrottleThreshold;
+                if ~isfinite(threshold)
+                    threshold = Inf;
+                end
+                if throttle <= max(0, min(1, threshold))
+                    T = T - motorSign * obj.motoringDragTorque * obj.totalGearRatio;
+                end
             end
             if obj.regenEnabled && throttle == 0 && vehicleSpeed > 0
                 % Taper regen to zero near rest so it cannot reverse the car.
@@ -290,6 +348,42 @@ classdef EMRAX228Powertrain < components.Powertrain.PowertrainComponent
     end
     
     methods (Access = private)
+        function effectiveThrottle = applyThrottleDeadband(obj, throttle)
+            deadband = obj.throttleDeadband;
+            if ~isfinite(deadband)
+                deadband = 0;
+            end
+            deadband = max(0, min(0.99, deadband));
+            if throttle <= deadband
+                effectiveThrottle = 0;
+            else
+                effectiveThrottle = (throttle - deadband) / (1 - deadband);
+            end
+        end
+
+        function torqueRequest = mapThrottleToTorqueRequest(obj, effectiveThrottle)
+            % MAPTHROTTLETOTORQUEREQUEST Convert pedal to controller request.
+            % EV inverters such as the BAMOCAR command motor current/torque
+            % rather than output power directly. The RPM map remains the
+            % full-throttle capability envelope; this curve shapes how much
+            % of that envelope a partial pedal command requests.
+            effectiveThrottle = max(0, min(1, effectiveThrottle));
+            x = obj.throttleMapInput(:);
+            y = obj.throttleMapOutput(:);
+
+            if isempty(x) || isempty(y) || numel(x) ~= numel(y) || numel(x) < 2 || ...
+                    any(~isfinite(x)) || any(~isfinite(y)) || ...
+                    any(x < 0) || any(x > 1) || any(y < 0) || any(y > 1) || ...
+                    any(diff(x) <= 0) || abs(x(1)) > 1e-12 || abs(x(end) - 1) > 1e-12
+                error('EMRAX228Powertrain:InvalidThrottleMap', ...
+                    ['Throttle map input/output must be equal-length finite vectors ' ...
+                    'with strictly increasing input from 0 to 1 and output in [0,1].']);
+            end
+
+            torqueRequest = interp1(x, y, effectiveThrottle, 'linear');
+            torqueRequest = max(0, min(1, torqueRequest));
+        end
+
         function rpm = vehicleSpeedToMotorRPM(obj, speed)
             rpm = speed ./ (2 * pi * obj.wheelRadius) * 60 * obj.totalGearRatio;
         end

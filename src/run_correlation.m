@@ -6,6 +6,7 @@ function [stateLog, lapTime, outputs] = run_correlation(varargin)
 %       'MoTeCFile', 'data/real_run.ld', ...
 %       'Lap', 4, ...
 %       'VehicleConfig', @vehicles.R25, ...
+%       'TuningFile', 'R25_correlation_tuning', ...
 %       'Track', '2026enduro')
 
 repoRoot = fileparts(fileparts(mfilename('fullpath')));
@@ -21,8 +22,11 @@ parser.addParameter('Lap', [], @(x) isempty(x) || isnumeric(x) || ischar(x) || i
 parser.addParameter('LdxFile', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('ChannelMap', defaultChannelMap, @(x) ischar(x) || isstring(x));
 parser.addParameter('VehicleConfig', @vehicles.R25);
+parser.addParameter('VehicleTuning', [], @(x) isempty(x) || isa(x, 'function_handle') || ischar(x) || isstring(x) || isa(x, 'VehicleConfig') || isstruct(x));
+parser.addParameter('TuningFile', [], @(x) isempty(x) || isa(x, 'function_handle') || ischar(x) || isstring(x) || isa(x, 'VehicleConfig') || isstruct(x));
 parser.addParameter('Track', '2026enduro');
 parser.addParameter('ReplayDomain', 'time', @(x) ischar(x) || isstring(x));
+parser.addParameter('BrakeMode', 'ratio', @(x) ischar(x) || isstring(x));
 parser.addParameter('Dt', 0.001, @(x) isnumeric(x) && isscalar(x) && x > 0);
 parser.addParameter('ImportFrequency', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x) && x > 0));
 parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
@@ -36,6 +40,7 @@ parser.addParameter('UseLoggedYawRate', true, @(x) islogical(x) || isnumeric(x))
 parser.addParameter('ShowPlots', false, @(x) islogical(x) || isnumeric(x));
 parser.parse(varargin{:});
 opts = parser.Results;
+opts.BrakeMode = validateBrakeMode(opts.BrakeMode);
 
 if isempty(opts.ReplayCsv) && isempty(opts.MoTeCFile)
     error('run_correlation:MissingInput', ...
@@ -44,12 +49,14 @@ end
 
 track = loadCorrelationTrack(opts.Track, repoRoot);
 config = loadVehicleConfig(opts.VehicleConfig);
+config = applyVehicleTuning(config, opts.VehicleTuning, opts.TuningFile);
 dt = opts.Dt;
 
 outputs = struct();
 outputs.outputBase = buildOutputBase(opts, config, repoRoot);
 outputs.replayCsv = char(opts.ReplayCsv);
 outputs.extractManifest = '';
+outputs.vehicleConfig = char(config.name);
 
 if isempty(outputs.replayCsv)
     outputs.replayCsv = [outputs.outputBase '_replay.csv'];
@@ -61,9 +68,10 @@ profile = CorrelationReplayProfile.fromCsv(outputs.replayCsv);
 surfaceMu = representativeSurfaceMu(track);
 outputs.referenceMode = 'free';
 outputs.surfaceMu = surfaceMu;
+outputs.brakeMode = char(opts.BrakeMode);
 
 vehicle = VehicleManager.fromConfig(config, track, dt);
-preflightCorrelation(profile, track, vehicle, surfaceMu, outputs.extractManifest);
+preflightCorrelation(profile, track, vehicle, surfaceMu, outputs.extractManifest, opts.BrakeMode);
 initialState = CorrelationStateInitializer.fromReplayProfile( ...
     profile, [], vehicle, ...
     'UseLoggedPosition', opts.UseLoggedPosition, ...
@@ -73,6 +81,7 @@ simulator = Simulator(vehicle, [], dt);
 [stateLog, lapTime] = simulator.simulateReplay( ...
     initialState, track, profile, ...
     'ReplayDomain', opts.ReplayDomain, ...
+    'BrakeMode', opts.BrakeMode, ...
     'AllowPedalOverlap', true, ...
     'ApplySteeringSlew', false, ...
     'StopOnOffTrack', opts.StopOnOffTrack, ...
@@ -112,12 +121,14 @@ end
 fprintf('Lap Time:   %.3f s\n', lapTime);
 end
 
-function preflightCorrelation(profile, track, vehicle, surfaceMu, manifestFile)
+function preflightCorrelation(profile, track, vehicle, surfaceMu, manifestFile, brakeMode)
 fprintf('\n=== Correlation Preflight ===\n');
 printExtractionSummary(manifestFile);
 fprintf('Reference mode: free-space replay\n');
 fprintf('Surface mu: %.3f\n', surfaceMu);
+fprintf('Brake mode: %s\n', char(brakeMode));
 printReplayRanges(profile);
+validatePressureBrakeMode(profile, vehicle, brakeMode);
 warnOnSteeringScale(profile, vehicle, 120);
 warnOnBrakeScale(profile);
 
@@ -178,6 +189,51 @@ fprintf('Throttle range: %.3f to %.3f\n', min(profile.throttle), max(profile.thr
 fprintf('Steer range: %.2f to %.2f deg\n', ...
     min(profile.steer) * 180 / pi, max(profile.steer) * 180 / pi);
 fprintf('Brake range: %.3f to %.3f\n', min(profile.brake), max(profile.brake));
+if profile.hasBrakePressure()
+    fprintf('Brake pressure front range: %.3f to %.3f bar\n', ...
+        minFinite(profile.brakePressureFrontBar), maxFinite(profile.brakePressureFrontBar));
+    fprintf('Brake pressure rear range: %.3f to %.3f bar\n', ...
+        minFinite(profile.brakePressureRearBar), maxFinite(profile.brakePressureRearBar));
+end
+end
+
+function validatePressureBrakeMode(profile, vehicle, brakeMode)
+if brakeMode ~= "pressure"
+    return;
+end
+
+if ~any(isfinite(profile.brakePressureFrontBar)) || ...
+        ~any(isfinite(profile.brakePressureRearBar))
+    error('run_correlation:MissingBrakePressureChannels', ...
+        ['BrakeMode "pressure" requires brake_pressure_front_bar and ' ...
+        'brake_pressure_rear_bar in the replay CSV. Re-extract the log with ' ...
+        'the R25 channel map so Brake Pressure Front/Rear are carried through.']);
+end
+
+if ~isfinite(vehicle.brakePressureFrontForcePerBar) || ...
+        ~isfinite(vehicle.brakePressureRearForcePerBar)
+    error('run_correlation:MissingBrakePressureCalibration', ...
+        ['BrakeMode "pressure" requires vehicle brakePressure.frontForcePerBar ' ...
+        'and brakePressure.rearForcePerBar calibration.']);
+end
+end
+
+function value = minFinite(values)
+finiteValues = values(isfinite(values));
+if isempty(finiteValues)
+    value = NaN;
+else
+    value = min(finiteValues);
+end
+end
+
+function value = maxFinite(values)
+finiteValues = values(isfinite(values));
+if isempty(finiteValues)
+    value = NaN;
+else
+    value = max(finiteValues);
+end
 end
 
 function warnOnSteeringScale(profile, vehicle, alignmentDistanceM)
@@ -248,6 +304,14 @@ if isstruct(s) && isfield(s, field)
     if isempty(value)
         value = defaultValue;
     end
+end
+end
+
+function mode = validateBrakeMode(mode)
+mode = lower(string(mode));
+if mode ~= "ratio" && mode ~= "pressure"
+    error('run_correlation:InvalidBrakeMode', ...
+        'BrakeMode must be "ratio" or "pressure".');
 end
 end
 
@@ -355,6 +419,125 @@ elseif ischar(configSpec) || isstring(configSpec)
     config = fn();
 else
     config = configSpec;
+end
+end
+
+function config = applyVehicleTuning(config, vehicleTuning, tuningFile)
+hasVehicleTuning = ~isempty(vehicleTuning);
+hasTuningFile = ~isempty(tuningFile);
+if hasVehicleTuning && hasTuningFile
+    error('run_correlation:DuplicateTuning', ...
+        'Use either VehicleTuning or TuningFile, not both.');
+end
+if ~hasVehicleTuning && ~hasTuningFile
+    return;
+end
+
+tuningSpec = vehicleTuning;
+if hasTuningFile
+    tuningSpec = tuningFile;
+end
+
+if isa(tuningSpec, 'VehicleConfig')
+    config = tuningSpec;
+elseif isstruct(tuningSpec)
+    config = applyVehicleOverrideStruct(config, tuningSpec);
+elseif isa(tuningSpec, 'function_handle')
+    config = applyVehicleTuningFunction(config, tuningSpec);
+elseif ischar(tuningSpec) || isstring(tuningSpec)
+    config = applyVehicleTuningFunction(config, tuningFunctionFromName(tuningSpec));
+else
+    error('run_correlation:InvalidTuning', ...
+        'Vehicle tuning must be a function, config, struct, or tuning file name.');
+end
+end
+
+function config = applyVehicleTuningFunction(config, fn)
+try
+    if nargin(fn) == 0
+        tuned = fn();
+    else
+        tuned = fn(config);
+    end
+catch err
+    error('run_correlation:TuningFailed', ...
+        'Vehicle tuning function failed: %s', err.message);
+end
+
+if isa(tuned, 'VehicleConfig')
+    config = tuned;
+elseif isstruct(tuned)
+    config = applyVehicleOverrideStruct(config, tuned);
+else
+    error('run_correlation:InvalidTuningResult', ...
+        'Vehicle tuning function must return a VehicleConfig or override struct.');
+end
+end
+
+function fn = tuningFunctionFromName(tuningSpec)
+name = char(tuningSpec);
+[folder, baseName, ext] = fileparts(name);
+if strcmpi(ext, '.m')
+    packageName = packageNameFromFolder(folder);
+    if ~isempty(packageName)
+        fn = str2func([packageName '.' baseName]);
+    else
+        if ~isempty(folder)
+            addpath(folder);
+        end
+        fn = str2func(baseName);
+    end
+elseif contains(name, '.')
+    fn = str2func(name);
+else
+    fn = str2func(['vehicles.' name]);
+end
+end
+
+function packageName = packageNameFromFolder(folder)
+packageParts = {};
+while ~isempty(folder)
+    [parent, leaf] = fileparts(folder);
+    if startsWith(leaf, '+')
+        packageParts = [{leaf(2:end)} packageParts]; %#ok<AGROW>
+        folder = parent;
+    else
+        break;
+    end
+end
+packageName = strjoin(packageParts, '.');
+end
+
+function config = applyVehicleOverrideStruct(config, overrides)
+fields = fieldnames(overrides);
+for i = 1:numel(fields)
+    field = fields{i};
+    if ~isprop(config, field)
+        error('run_correlation:UnknownVehicleOverride', ...
+            'Unknown VehicleConfig override field "%s".', field);
+    end
+
+    currentValue = config.(field);
+    overrideValue = overrides.(field);
+    if isstruct(currentValue) && isstruct(overrideValue)
+        config.(field) = mergeStructRecursive(currentValue, overrideValue);
+    else
+        config.(field) = overrideValue;
+    end
+end
+end
+
+function out = mergeStructRecursive(base, overrides)
+out = base;
+fields = fieldnames(overrides);
+for i = 1:numel(fields)
+    field = fields{i};
+    overrideValue = overrides.(field);
+    if isfield(out, field) && isstruct(out.(field)) && isstruct(overrideValue)
+        out.(field) = mergeStructRecursive(out.(field), overrideValue);
+    else
+        out.(field) = overrideValue;
+    end
 end
 end
 
