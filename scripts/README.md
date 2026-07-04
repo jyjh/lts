@@ -18,6 +18,17 @@ the top to switch vehicle configs.
   acceleration estimate, full-throttle force capped by rear-axle tire grip from
   the active `.tir` file. Saves
   `exports/theoretical_acceleration_75m_diagnostics.png`.
+- **`investigate_lateral_g.m`** — correlation sanity report for lateral
+  acceleration. Compares raw MoTeC lateral accel, speed*yaw-rate, steering
+  demand, simulated body/tire Ay, and tire-capacity/utilization. Pass
+  `SimCsv`, `ReplayCsv`, and optionally `ReportFile`:
+
+```matlab
+investigate_lateral_g( ...
+    'SimCsv', 'exports/correlation_run.csv', ...
+    'ReplayCsv', 'exports/correlation_run_replay.csv', ...
+    'ReportFile', 'exports/lateral_g_report.md')
+```
 
 ## generate_vehicle.py
 

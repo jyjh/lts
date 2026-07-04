@@ -130,6 +130,7 @@ fprintf('Brake mode: %s\n', char(brakeMode));
 printReplayRanges(profile);
 validatePressureBrakeMode(profile, vehicle, brakeMode);
 warnOnSteeringScale(profile, vehicle, 120);
+warnOnLateralAccelConsistency(profile, vehicle);
 warnOnBrakeScale(profile);
 
 if nargin >= 2 && ~isempty(track)
@@ -281,6 +282,28 @@ if medianKin > 0.8 && ratio > 2.5
         ['Steering input implies %.2f g median lateral demand, %.1fx the logged reference. ' ...
          'Check the steer_rad source scale or steering ratio.'], ...
         medianKin, ratio);
+end
+end
+
+function warnOnLateralAccelConsistency(profile, vehicle)
+if ~profile.hasLatAccel() || isempty(profile.yawRate) || ...
+        ~any(isfinite(profile.yawRate))
+    return;
+end
+
+wheelbase = 1.5;
+if isprop(vehicle, 'wheelbase') && isfinite(vehicle.wheelbase) && vehicle.wheelbase > 0
+    wheelbase = vehicle.wheelbase;
+end
+
+report = LateralGDiagnostics.assessSignals( ...
+    profile.time, profile.latAccelG, profile.speed, profile.yawRate, ...
+    profile.steer, wheelbase);
+
+fprintf('Raw lateral accel peak: %.2f g | yaw-rate-derived peak: %.2f g | steer-demand peak: %.2f g\n', ...
+    report.rawPeakAbsG, report.yawPeakAbsG, report.steerPeakAbsG);
+for i = 1:numel(report.messages)
+    warning('run_correlation:LateralAccelKinematicMismatch', '%s', char(report.messages(i)));
 end
 end
 

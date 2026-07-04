@@ -165,6 +165,25 @@ verifyTrue(testCase, contains(header, 'G Sensor Front Axle Acceleration Lateral'
 verifyTrue(testCase, contains(header, 'G Sensor Rear Axle Acceleration Lateral'));
 end
 
+function testMotecExportIncludesTireDiagnostics(testCase)
+stateLog.time = [0; 0.001];
+stateLog.s = [0; 0.01];
+stateLog.speed = [10; 10];
+stateLog.speedKmh = stateLog.speed * 3.6;
+stateLog.slipAngle_FL = [0.01; 0.02];
+stateLog.peakMu_FL = [1.5; 1.4];
+stateLog.tireUtilization_FL = [0.8; 0.9];
+
+csvFile = [tempname '.csv'];
+cleanup = onCleanup(@() deleteIfExists(csvFile)); %#ok<NASGU>
+TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
+header = firstCsvLine(csvFile);
+
+verifyTrue(testCase, contains(header, 'Slip Angle FL (deg)'));
+verifyTrue(testCase, contains(header, 'Peak MU FL (ratio)'));
+verifyTrue(testCase, contains(header, 'Tire Utilization FL (%)'));
+end
+
 function initializeWheelSpeeds(tire, speed)
 corners = {tire.FL, tire.FR, tire.RL, tire.RR};
 for i = 1:numel(corners)
