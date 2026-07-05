@@ -158,7 +158,10 @@ csvFile = [tempname '.csv'];
 cleanup = onCleanup(@() deleteIfExists(csvFile)); %#ok<NASGU>
 lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, csvFile);
 header = firstCsvLine(csvFile);
+headers = strsplit(header, ',');
 
+verifyTrue(testCase, any(strcmp(headers, 'Simulation Vehicle Speed Value (km/h)')));
+verifyFalse(testCase, any(strcmp(headers, 'Vehicle Speed Value (km/h)')));
 verifyTrue(testCase, contains(header, 'Front Axle Lat Accel Raw'));
 verifyTrue(testCase, contains(header, 'Rear Axle Lat Accel Raw'));
 verifyTrue(testCase, contains(header, 'G Sensor Front Axle Acceleration Lateral'));

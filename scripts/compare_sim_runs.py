@@ -237,7 +237,12 @@ def read_telemetry_csv(path: Path, label: Optional[str] = None) -> TelemetryRun:
 
         distance_idx = find_column(headers, ["Distance", "s", "Ref S", "Control Distance"])
         time_idx = find_column(headers, ["Time", "Control Time"])
-        speed_idx = find_column(headers, ["Vehicle Speed Value", "Speed Kmh", "speedKmh"])
+        speed_idx = find_column(headers, [
+            "Simulation Vehicle Speed Value",
+            "Vehicle Speed Value",
+            "Speed Kmh",
+            "speedKmh",
+        ])
         speed_mps_idx = find_column(headers, ["Speed mps", "Speed", "VX"])
         ax_idx = find_column(headers, ["Long Accel Raw", "ax", "Target Long Accel"])
         ax_g_idx = find_column(headers, ["G Sensor Front Acceleration Longitudinal"])

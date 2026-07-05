@@ -150,13 +150,13 @@ function cfg = R25()
     %  Pacejka Magic Formula (MF 6.1) via MFeval; tirFile lives in +Tire/.
     %  ====================================================================
     % NOTE: CSV r14 lists '16.0x7.5-10 R20 Hoosier'. The default tirFile below is for an
-    % 18x7.5-10 Hoosier; if the size differs, supply the matching
-    % .tir file and update wheelRadius accordingly.
+    % 18x7.5-10 Hoosier until a matching 16x7.5-10 .tir is available, but
+    % wheelRadius follows the 16.0 in tire diameter from the spec sheet.
     cfg.tire = struct( ...
         'tirFile', '43105_18x7.5_10_R25B_7.tir', ... % [verify vs CSV r14 tire size]
         'wheelInertia', 0.5, ...         % [not in spec sheet] [kg*m^2]
         'relaxationLength', 0.30, ...    % [not in spec sheet] [m]
-        'wheelRadius', 0.241935, ...     % TODO: CSV r14 size -> derive rolling radius
+        'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
         'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]
         'bearingDragCoeff', 0);          % [not in spec sheet]
 end

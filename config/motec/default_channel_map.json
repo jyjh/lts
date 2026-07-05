@@ -46,8 +46,12 @@
       "gps_lat_deg": "GPS latitude in degrees.",
       "gps_lon_deg": "GPS longitude in degrees.",
       "gps_course_rad": "GPS true course or heading in radians.",
-      "lat_accel_g": "Lateral acceleration in g.",
-      "long_accel_g": "Longitudinal acceleration in g."
+      "front_lat_accel_g": "Front lateral acceleration sensor in g.",
+      "rear_lat_accel_g": "Rear lateral acceleration sensor in g.",
+      "lat_accel_g": "Legacy lateral acceleration in g, usually the front or CG lateral sensor.",
+      "front_long_accel_g": "Front longitudinal acceleration sensor in g.",
+      "rear_long_accel_g": "Rear longitudinal acceleration sensor in g.",
+      "long_accel_g": "Legacy longitudinal acceleration in g, usually the front or CG longitudinal sensor."
     }
   },
   "sample_frequency_hz": 1000,
@@ -256,13 +260,83 @@
         "deg": 0.017453292519943295
       }
     },
+    "front_lat_accel_g": {
+      "names": [
+        "G Sensor.Front.Acceleration.Late",
+        "G Sensor Front Acceleration Late",
+        "G Sensor G Front Lateral",
+        "G Sensor Front Axle Acceleration Lateral",
+        "Front Axle Lat Accel Raw"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    },
+    "rear_lat_accel_g": {
+      "names": [
+        "G Sensor.Rear.Acceleration.Later",
+        "G Sensor Rear Acceleration Later",
+        "G Sensor G Rear Lateral",
+        "G Sensor Rear Axle Acceleration Lateral",
+        "Rear Axle Lat Accel Raw"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    },
     "lat_accel_g": {
       "names": [
         "G Sensor.Front.Acceleration.Late",
         "G Sensor Front Acceleration Late",
+        "G Sensor G Front Lateral",
         "Lat Accel Raw",
         "Lateral Acceleration",
         "Lateral G"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    },
+    "front_long_accel_g": {
+      "names": [
+        "G Sensor.Front.Acceleration.Long G",
+        "G Sensor Front Acceleration Long G",
+        "G Sensor Front Acceleration Long",
+        "G Sensor G Front Longitudinal",
+        "Front Long Accel Raw"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "g": 1.0,
+        "G": 1.0,
+        "m/s/s": 0.10197162129779283,
+        "m/s^2": 0.10197162129779283
+      }
+    },
+    "rear_long_accel_g": {
+      "names": [
+        "G Sensor.Rear.Acceleration.Long G",
+        "G Sensor Rear Acceleration Long G",
+        "G Sensor Rear Acceleration Long",
+        "G Sensor Rear Acceleration Longi",
+        "G Sensor G Rear Longitudinal",
+        "Rear Long Accel Raw"
       ],
       "required": false,
       "default": null,
@@ -277,6 +351,8 @@
       "names": [
         "G Sensor.Front.Acceleration.Long G",
         "G Sensor Front Acceleration Long G",
+        "G Sensor Front Acceleration Long",
+        "G Sensor G Front Longitudinal",
         "Long Accel Raw",
         "Longitudinal Acceleration",
         "Longitudinal G"

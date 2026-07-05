@@ -37,7 +37,11 @@ REPLAY_COLUMNS = [
     "gps_lat_deg",
     "gps_lon_deg",
     "gps_course_rad",
+    "front_lat_accel_g",
+    "rear_lat_accel_g",
     "lat_accel_g",
+    "front_long_accel_g",
+    "rear_long_accel_g",
     "long_accel_g",
 ]
 

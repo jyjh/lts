@@ -22,7 +22,8 @@ classdef CorrelationStateInitializer
             brake = profile.brake(1);
             steer = profile.steer(1);
 
-            [vx, vy, speed] = lts.correlation.CorrelationStateInitializer.initialVelocity(profile, speed);
+            [vx, vy, speed] = lts.correlation.CorrelationStateInitializer.initialVelocity( ...
+                profile, speed, vehicleManager, logical(parser.Results.UseLoggedYawRate));
 
             yaw = 0;
             if profile.hasYaw()
@@ -64,7 +65,7 @@ classdef CorrelationStateInitializer
     end
 
     methods (Static, Access = private)
-        function [vx, vy, speed] = initialVelocity(profile, speed)
+        function [vx, vy, speed] = initialVelocity(profile, speed, vehicleManager, useLoggedYawRate)
             speed = max(0, speed);
             if profile.hasVelocity()
                 vx = profile.vx(1);
@@ -80,8 +81,42 @@ classdef CorrelationStateInitializer
                 return;
             end
 
+            if useLoggedYawRate && ~isempty(profile.yawRate) && ...
+                    isfinite(profile.yawRate(1))
+                rearArm = lts.correlation.CorrelationStateInitializer.rearAxleArm(vehicleManager);
+                vyEstimate = profile.yawRate(1) * rearArm;
+                maxVy = 0.30 * max(speed, eps);
+                vyEstimate = max(-maxVy, min(maxVy, vyEstimate));
+                if isfinite(vyEstimate) && abs(vyEstimate) > eps
+                    vy = vyEstimate;
+                    vx = sqrt(max(speed^2 - vy^2, 0));
+                    return;
+                end
+            end
+
             vx = speed;
             vy = 0;
+        end
+
+        function rearArm = rearAxleArm(vehicleManager)
+            rearArm = NaN;
+            if nargin < 1 || isempty(vehicleManager)
+                return;
+            end
+
+            if isobject(vehicleManager) && ...
+                    isprop(vehicleManager, 'wheelbase') && ...
+                    isprop(vehicleManager, 'staticFrontWeight')
+                rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
+            elseif isstruct(vehicleManager) && ...
+                    isfield(vehicleManager, 'wheelbase') && ...
+                    isfield(vehicleManager, 'staticFrontWeight')
+                rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
+            end
+
+            if ~isfinite(rearArm) || rearArm <= 0
+                rearArm = 0;
+            end
         end
 
         function seedWheelSpeeds(profile, vehicleManager, vehicleSpeed)

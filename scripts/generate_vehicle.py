@@ -71,6 +71,19 @@ def parse_num(text):
         return None
 
 
+def parse_tire_diameter_in(text):
+    """Return the nominal tire diameter in inches from strings like 16.0x7.5-10."""
+    if text is None:
+        return None
+    m = re.search(r"(\d+(?:\.\d+)?)\s*x", str(text), re.IGNORECASE)
+    if not m:
+        return None
+    try:
+        return float(m.group(1))
+    except ValueError:
+        return None
+
+
 def find_row(rows, phrase, exact=False):
     """First row whose column A contains `phrase` (case-insensitive).
 
@@ -885,15 +898,24 @@ def build_matlab(name, s):
     A("    %  TIRE")
     A("    %  Pacejka Magic Formula (MF 6.1) via MFeval; tirFile lives in +Tire/.")
     A("    %  ====================================================================")
+    tire_radius = None
     if s.tire_text:
+        tire_diameter_in = parse_tire_diameter_in(s.tire_text)
+        if tire_diameter_in is not None and tire_diameter_in > 0:
+            tire_radius = tire_diameter_in * 0.0254 / 2.0
         A(f"    % NOTE: CSV r14 lists '{s.tire_text.strip()}'. The default tirFile below is for an")
-        A("    % 18x7.5-10 Hoosier; if the size differs, supply the matching")
-        A("    % .tir file and update wheelRadius accordingly.")
+        A("    % 18x7.5-10 Hoosier until a matching .tir is available, but")
+        A("    % wheelRadius follows the nominal tire diameter from the spec sheet.")
+    if tire_radius is None:
+        tire_radius = 0.241935
+        tire_radius_comment = "TODO: CSV r14 size -> derive rolling radius"
+    else:
+        tire_radius_comment = f"[CSV r14: {tire_diameter_in:g} in tire diameter / 2]"
     A("    cfg.tire = struct( ...")
     A("        'tirFile', '43105_18x7.5_10_R25B_7.tir', ... % [verify vs CSV r14 tire size]")
     A("        'wheelInertia', 0.5, ...         % [not in spec sheet] [kg*m^2]")
     A("        'relaxationLength', 0.30, ...    % [not in spec sheet] [m]")
-    A("        'wheelRadius', 0.241935, ...     % TODO: CSV r14 size -> derive rolling radius")
+    A(f"        'wheelRadius', {fmt(tire_radius)}, ...       % {tire_radius_comment}")
     A("        'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]")
     A("        'bearingDragCoeff', 0);          % [not in spec sheet]")
     A("end")

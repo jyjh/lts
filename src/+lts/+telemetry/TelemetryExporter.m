@@ -207,9 +207,9 @@ classdef TelemetryExporter
             tableData = lts.telemetry.TelemetryExporter.addFakeGpsChannels(tableData, stateLog, nSamples);
 
             if isfield(stateLog, 'speedKmh')
-                tableData = lts.telemetry.TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Vehicle Speed Value', 'km/h', nSamples);
+                tableData = lts.telemetry.TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Simulation Vehicle Speed Value', 'km/h', nSamples);
             elseif isfield(stateLog, 'speed')
-                tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, 'speed', 'Vehicle Speed Value', ...
+                tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, 'speed', 'Simulation Vehicle Speed Value', ...
                     stateLog.speed(:) * 3.6, 'km/h', nSamples);
             end
 
@@ -509,6 +509,10 @@ classdef TelemetryExporter
                 'replayThrottle', 'replayBrake', ...
                 'replayBrakePressureFrontBar', 'replayBrakePressureRearBar', ...
                 'replaySteer', 'replaySpeed', ...
+                'replayLatAccelG', 'replayFrontLatAccelG', ...
+                'replayRearLatAccelG', 'replayLongAccelG', ...
+                'replayFrontLongAccelG', 'replayRearLongAccelG', ...
+                'replayYawRate', ...
                 'targetSpeed', 'axRef', 'speedError', ...
                 'targetLateralError', 'lineCurvature', ...
                 'curvature', 'heading', 'bodySlipAngle', 'controlS', 'controlTime', ...
@@ -566,7 +570,7 @@ classdef TelemetryExporter
                 case 'speed'
                     name = 'Speed mps'; unit = 'm/s';
                 case 'speedKmh'
-                    name = 'Vehicle Speed Value'; unit = 'km/h';
+                    name = 'Simulation Vehicle Speed Value'; unit = 'km/h';
                 case 'gpsLatitude'
                     name = 'GPS Latitude'; unit = 'deg';
                 case 'gpsLongitude'
@@ -605,6 +609,20 @@ classdef TelemetryExporter
                     name = 'Replay Steer Input Raw'; unit = 'rad';
                 case 'replaySpeed'
                     name = 'Replay Speed Input'; unit = 'm/s';
+                case 'replayLatAccelG'
+                    name = 'Replay Lateral Acceleration'; unit = 'G';
+                case 'replayFrontLatAccelG'
+                    name = 'Replay Front Lateral Acceleration'; unit = 'G';
+                case 'replayRearLatAccelG'
+                    name = 'Replay Rear Lateral Acceleration'; unit = 'G';
+                case 'replayLongAccelG'
+                    name = 'Replay Longitudinal Acceleration'; unit = 'G';
+                case 'replayFrontLongAccelG'
+                    name = 'Replay Front Longitudinal Acceleration'; unit = 'G';
+                case 'replayRearLongAccelG'
+                    name = 'Replay Rear Longitudinal Acceleration'; unit = 'G';
+                case 'replayYawRate'
+                    name = 'Replay Yaw Rate'; unit = 'rad/s';
                 case 'targetSpeed'
                     name = 'Target Speed'; unit = 'm/s';
                 case 'axRef'

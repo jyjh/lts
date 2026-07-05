@@ -169,7 +169,9 @@ class ExtractMotecLapTest(unittest.TestCase):
                 FakeChannel("Body Slip", "deg", 10, [1.0, 2.0]),
                 FakeChannel("G Sensor.Front.Yaw Rate", "deg/s", 10, [10.0, 20.0]),
                 FakeChannel("G Sensor.Front.Acceleration.Late", "G", 10, [0.1, 0.2]),
-                FakeChannel("G Sensor.Front.Acceleration.Long G", "G", 10, [-0.1, 0.3]),
+                FakeChannel("G Sensor.Rear.Acceleration.Later", "m/s/s", 10, [4.903325, 9.80665]),
+                FakeChannel("G Sensor G Front Longitudinal", "m/s/s", 10, [-0.980665, 2.941995]),
+                FakeChannel("G Sensor G Rear Longitudinal", "m/s/s", 10, [-1.96133, 3.92266]),
             ]
         )
         channel_map = extract_motec_lap.load_channel_map(
@@ -206,18 +208,46 @@ class ExtractMotecLapTest(unittest.TestCase):
             "lat_accel_g",
             channel_map["channels"]["lat_accel_g"],
         )
+        front_lat_accel = extract_motec_lap.extract_raw_signal(
+            data,
+            "front_lat_accel_g",
+            channel_map["channels"]["front_lat_accel_g"],
+        )
+        rear_lat_accel = extract_motec_lap.extract_raw_signal(
+            data,
+            "rear_lat_accel_g",
+            channel_map["channels"]["rear_lat_accel_g"],
+        )
         long_accel = extract_motec_lap.extract_raw_signal(
             data,
             "long_accel_g",
             channel_map["channels"]["long_accel_g"],
         )
+        front_long_accel = extract_motec_lap.extract_raw_signal(
+            data,
+            "front_long_accel_g",
+            channel_map["channels"]["front_long_accel_g"],
+        )
+        rear_long_accel = extract_motec_lap.extract_raw_signal(
+            data,
+            "rear_long_accel_g",
+            channel_map["channels"]["rear_long_accel_g"],
+        )
 
+        self.assertIn("front_lat_accel_g", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("rear_lat_accel_g", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("front_long_accel_g", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("rear_long_accel_g", extract_motec_lap.REPLAY_COLUMNS)
         np.testing.assert_allclose(course["values"], [0.0, np.pi / 2.0])
         np.testing.assert_allclose(yaw_rate["values"], np.deg2rad([10.0, 20.0]))
         np.testing.assert_allclose(vx["values"], [10.0, 20.0])
         np.testing.assert_allclose(vy["values"], [0.5, 0.6])
         np.testing.assert_allclose(body_slip["values"], np.deg2rad([1.0, 2.0]))
         np.testing.assert_allclose(lat_accel["values"], [0.1, 0.2])
+        np.testing.assert_allclose(front_lat_accel["values"], [0.1, 0.2])
+        np.testing.assert_allclose(rear_lat_accel["values"], [0.5, 1.0])
+        np.testing.assert_allclose(front_long_accel["values"], [-0.1, 0.3])
+        np.testing.assert_allclose(rear_long_accel["values"], [-0.2, 0.4])
         np.testing.assert_allclose(long_accel["values"], [-0.1, 0.3])
 
 
