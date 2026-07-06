@@ -32,6 +32,20 @@ classdef PowertrainState < handle
         
         % Motor torque command/output [Nm]
         motorTorque = 0
+
+        % Requested motor torque before any simulator-side replay limiting [Nm]
+        requestedMotorTorque = 0
+
+        % Signed motor torque bound implied by measured DC pack power [Nm]
+        motorTorquePowerLimitNm = NaN
+
+        % True when measured pack power reduced the requested motor torque
+        motorTorquePowerLimitActive = false
+
+        % Measured tractive pack voltage/current/power used for direct replay
+        packVoltageV = NaN
+        packCurrentA = NaN
+        packPowerW = NaN
         
         % Wheel torque after gear ratio and efficiency [Nm]
         wheelTorque = 0
@@ -97,6 +111,12 @@ classdef PowertrainState < handle
             end
             obj.throttle = max(0, min(1, throttle));
             obj.motorTorque = motorTorque;
+            obj.requestedMotorTorque = motorTorque;
+            obj.motorTorquePowerLimitNm = NaN;
+            obj.motorTorquePowerLimitActive = false;
+            obj.packVoltageV = NaN;
+            obj.packCurrentA = NaN;
+            obj.packPowerW = NaN;
             obj.wheelTorque = wheelTorque;
             obj.driveForce = driveForce;
             obj.drivetrainEfficiency = drivetrainEfficiency;
@@ -113,6 +133,12 @@ classdef PowertrainState < handle
             obj.rpmLimitActive = false;
             obj.throttle = 0;
             obj.motorTorque = 0;
+            obj.requestedMotorTorque = 0;
+            obj.motorTorquePowerLimitNm = NaN;
+            obj.motorTorquePowerLimitActive = false;
+            obj.packVoltageV = NaN;
+            obj.packCurrentA = NaN;
+            obj.packPowerW = NaN;
             obj.wheelTorque = 0;
             obj.driveForce = 0;
             obj.gearRatio = 0;

@@ -206,11 +206,12 @@ classdef TelemetryExporter
             tableData = lts.telemetry.TelemetryExporter.addRawChannel(tableData, stateLog, 's', 'Distance', 'm', nSamples);
             tableData = lts.telemetry.TelemetryExporter.addFakeGpsChannels(tableData, stateLog, nSamples);
 
-            if isfield(stateLog, 'speedKmh')
-                tableData = lts.telemetry.TelemetryExporter.addRawChannel(tableData, stateLog, 'speedKmh', 'Simulation Vehicle Speed Value', 'km/h', nSamples);
-            elseif isfield(stateLog, 'speed')
-                tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, 'speed', 'Simulation Vehicle Speed Value', ...
-                    stateLog.speed(:) * 3.6, 'km/h', nSamples);
+            [simVehicleSpeedKmh, speedSourceField] = ...
+                lts.telemetry.TelemetryExporter.simulationVehicleSpeedValueKmh(stateLog, nSamples);
+            if ~isempty(simVehicleSpeedKmh)
+                tableData = lts.telemetry.TelemetryExporter.addComputedChannel( ...
+                    tableData, speedSourceField, 'Simulation Vehicle Speed Value', ...
+                    simVehicleSpeedKmh, 'km/h', nSamples);
             end
 
             if isfield(stateLog, 'speed')
@@ -312,6 +313,19 @@ classdef TelemetryExporter
                 if isfield(stateLog, field)
                     tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, field, degChannels{i, 2}, ...
                         stateLog.(field)(:) * (180 / pi), 'deg', nSamples);
+                end
+            end
+
+            degPerSecChannels = { ...
+                'rollRate', 'Roll Rate'; ...
+                'frontRollRate', 'Roll Rate Front'; ...
+                'rearRollRate', 'Roll Rate Rear'; ...
+                'twistRate', 'Chassis Twist Rate'};
+            for i = 1:size(degPerSecChannels, 1)
+                field = degPerSecChannels{i, 1};
+                if isfield(stateLog, field)
+                    tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, field, degPerSecChannels{i, 2}, ...
+                        stateLog.(field)(:) * (180 / pi), 'deg/s', nSamples);
                 end
             end
 
@@ -473,6 +487,47 @@ classdef TelemetryExporter
             end
         end
 
+        function [speedKmh, sourceField] = simulationVehicleSpeedValueKmh(stateLog, nSamples)
+            speedKmh = [];
+            sourceField = '';
+
+            if isfield(stateLog, 'tireSpeed_FL')
+                values = double(stateLog.tireSpeed_FL(:));
+                if numel(values) == nSamples
+                    speedKmh = values * 3.6;
+                    sourceField = 'speedKmh';
+                    return;
+                end
+            end
+
+            radius = lts.telemetry.TelemetryExporter.tireRadiusForCorner(stateLog, 'FL', nSamples);
+            if isfield(stateLog, 'omega_FL') && ~isempty(radius)
+                values = double(stateLog.omega_FL(:));
+                if numel(values) == nSamples
+                    speedKmh = values .* radius * 3.6;
+                    sourceField = 'speedKmh';
+                    return;
+                end
+            end
+
+            if isfield(stateLog, 'speedKmh')
+                values = double(stateLog.speedKmh(:));
+                if numel(values) == nSamples
+                    speedKmh = values;
+                    sourceField = 'speedKmh';
+                    return;
+                end
+            end
+
+            if isfield(stateLog, 'speed')
+                values = double(stateLog.speed(:));
+                if numel(values) == nSamples
+                    speedKmh = values * 3.6;
+                    sourceField = 'speed';
+                end
+            end
+        end
+
         function tableData = addRawChannel(tableData, stateLog, field, channelName, unit, nSamples)
             values = stateLog.(field)(:);
             tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, field, channelName, values, unit, nSamples);
@@ -508,6 +563,9 @@ classdef TelemetryExporter
                 'brakePressureMode', 'brakePressureFrontBar', 'brakePressureRearBar', ...
                 'replayThrottle', 'replayBrake', ...
                 'replayBrakePressureFrontBar', 'replayBrakePressureRearBar', ...
+                'replayRegenTorqueNm', 'replayMotorTorqueCommandNm', ...
+                'replayMotorRpm', 'replayPackVoltageV', ...
+                'replayPackCurrentA', 'replayPackPowerW', ...
                 'replaySteer', 'replaySpeed', ...
                 'replayLatAccelG', 'replayFrontLatAccelG', ...
                 'replayRearLatAccelG', 'replayLongAccelG', ...
@@ -522,9 +580,13 @@ classdef TelemetryExporter
                 'brakeGrip_RL', 'brakeGrip_RR', 'driveTorqueTotal', ...
                 'driveTorque_RL', 'driveTorque_RR', 'brakeTorque_FL', ...
                 'brakeTorque_FR', 'brakeTorque_RL', 'brakeTorque_RR', ...
-                'motorRPM', 'motorTorque', 'wheelTorque', 'drivenWheelRPM', ...
+                'motorRPM', 'motorTorque', 'motorTorqueRequested', ...
+                'motorTorquePowerLimitNm', 'motorTorquePowerLimitActive', ...
+                'wheelTorque', 'packVoltageV', 'packCurrentA', 'packPowerW', ...
+                'drivenWheelRPM', ...
                 'rpmLimitActive', 'pitchAngle', 'rollAngle', 'rideHeight', ...
-                'frontRollAngle', 'rearRollAngle', 'twistAngle', ...
+                'rollRate', 'frontRollAngle', 'rearRollAngle', 'twistAngle', ...
+                'frontRollRate', 'rearRollRate', 'twistRate', ...
                 'Fz_FL', 'Fz_FR', 'Fz_RL', 'Fz_RR', ...
                 'suspensionForce_FL', 'suspensionForce_FR', 'suspensionForce_RL', 'suspensionForce_RR', ...
                 'antiRollBarForce_FL', 'antiRollBarForce_FR', 'antiRollBarForce_RL', 'antiRollBarForce_RR', ...
@@ -603,6 +665,18 @@ classdef TelemetryExporter
                     name = 'Replay Brake Pressure Front'; unit = 'bar';
                 case 'replayBrakePressureRearBar'
                     name = 'Replay Brake Pressure Rear'; unit = 'bar';
+                case 'replayRegenTorqueNm'
+                    name = 'Replay Regen Torque'; unit = 'Nm';
+                case 'replayMotorTorqueCommandNm'
+                    name = 'Replay Motor Torque Command'; unit = 'Nm';
+                case 'replayMotorRpm'
+                    name = 'Replay Motor RPM'; unit = 'rpm';
+                case 'replayPackVoltageV'
+                    name = 'Replay Pack Voltage'; unit = 'V';
+                case 'replayPackCurrentA'
+                    name = 'Replay Pack Current'; unit = 'A';
+                case 'replayPackPowerW'
+                    name = 'Replay Pack Power'; unit = 'W';
                 case 'steer'
                     name = 'Steer Raw'; unit = 'rad';
                 case 'replaySteer'
@@ -641,6 +715,18 @@ classdef TelemetryExporter
                     name = 'Engine RPM'; unit = 'rpm';
                 case 'motorTorque'
                     name = 'Cascadia Cascadia Calculated Torque'; unit = 'Nm';
+                case 'motorTorqueRequested'
+                    name = 'Requested Motor Torque Command'; unit = 'Nm';
+                case 'motorTorquePowerLimitNm'
+                    name = 'Pack Power Motor Torque Limit'; unit = 'Nm';
+                case 'motorTorquePowerLimitActive'
+                    name = 'Pack Power Torque Limit Active'; unit = 'bool';
+                case 'packVoltageV'
+                    name = 'Pack Voltage'; unit = 'V';
+                case 'packCurrentA'
+                    name = 'Pack Current'; unit = 'A';
+                case 'packPowerW'
+                    name = 'Pack Power'; unit = 'W';
                 case 'F_brake'
                     name = 'Brake Total Force'; unit = 'N';
                 case 'drivenWheelRPM'
@@ -692,9 +778,15 @@ classdef TelemetryExporter
                 unit = 'm/s';
             elseif startsWith(field, 'camber_') || startsWith(field, 'toe_') || ...
                     startsWith(field, 'wheelSteer_') || startsWith(field, 'slipAngle_') || ...
-                    strcmp(field, 'pitchAngle') || ...
+                    strcmp(field, 'pitchAngle') || strcmp(field, 'rollAngle') || ...
+                    strcmp(field, 'frontRollAngle') || strcmp(field, 'rearRollAngle') || ...
+                    strcmp(field, 'twistAngle') || ...
                     strcmp(field, 'bodySlipAngle')
                 unit = 'rad';
+            elseif strcmp(field, 'rollRate') || strcmp(field, 'frontRollRate') || ...
+                    strcmp(field, 'rearRollRate') || strcmp(field, 'twistRate') || ...
+                    strcmp(field, 'yawRate')
+                unit = 'rad/s';
             elseif startsWith(field, 'slipRatio_') || startsWith(field, 'peakMu_') || ...
                     startsWith(field, 'tireUtilization_')
                 unit = 'ratio';

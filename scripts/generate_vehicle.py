@@ -157,6 +157,73 @@ def axle_pair(row):
     return front, rear
 
 
+def axle_pair_columns(row, front_index=2, rear_index=5):
+    """(front, rear) numeric values from fixed front/rear value columns.
+
+    Some rows contain extra numeric cells between the front and rear values
+    (for example damping speed columns), so "first two numbers" would read the
+    front value and front speed. For those rows the template's front value is
+    column C and rear value is column F.
+    """
+    if not row:
+        return None, None
+    front = parse_num(row[front_index]) if len(row) > front_index else None
+    rear = parse_num(row[rear_index]) if len(row) > rear_index else None
+    return front, rear
+
+
+def corrected_wheel_rate(wheel_rate_n_per_mm, roll_rate_nm_per_deg, track_width_m):
+    """Return wheel rate [N/mm], correcting obvious decimal-place CSV slips.
+
+    Some exported spec sheets report wheel rate as 5.25 N/mm while the same
+    sheet's roll-rate row and track width imply 52.5 N/mm. When the roll-rate
+    implication is about 10x the raw wheel-rate cell, prefer the implied value
+    and return a provenance note.
+    """
+    if wheel_rate_n_per_mm is None:
+        return None, None
+    if roll_rate_nm_per_deg is None or track_width_m is None or track_width_m <= 0:
+        return wheel_rate_n_per_mm, None
+
+    implied_n_per_mm = (
+        roll_rate_nm_per_deg * (180.0 / math.pi) * 2.0 /
+        (track_width_m ** 2) / 1000.0
+    )
+    ratio = implied_n_per_mm / max(wheel_rate_n_per_mm, sys.float_info.epsilon)
+    if 8.0 <= ratio <= 12.0:
+        note = (f"CSV r21 shows {wheel_rate_n_per_mm:g} N/mm, but CSV r22 "
+                f"roll rate {roll_rate_nm_per_deg:g} N*m/deg at "
+                f"{track_width_m * 1000:g} mm track implies "
+                f"{implied_n_per_mm:.3g} N/mm; using corrected wheel rate")
+        return implied_n_per_mm, note
+
+    return wheel_rate_n_per_mm, None
+
+
+def camber_curve_from_spec(static_deg, ride_camber_deg_per_m, rebound_m, jounce_m):
+    """Three-point camber curve [deg] using positive travel as bump.
+
+    The sheet reports rate as a positive magnitude. In the simulator, positive
+    camber is top-outward, so bump camber gain is represented as a negative
+    slope: camber = static - rate * wheelTravel.
+    """
+    if (static_deg is None or ride_camber_deg_per_m is None or
+            rebound_m is None or jounce_m is None):
+        return None
+    return [
+        static_deg + ride_camber_deg_per_m * rebound_m,
+        static_deg,
+        static_deg - ride_camber_deg_per_m * jounce_m,
+    ]
+
+
+def constant_curve(value):
+    """Three-point constant curve helper for MATLAB table output."""
+    if value is None:
+        return None
+    return [value, value, value]
+
+
 # ---------------------------------------------------------------------------
 # Spec extraction
 # ---------------------------------------------------------------------------
@@ -193,6 +260,10 @@ class Spec:
 def extract(rows, driver_mass):
     """Pull all usable values out of the CSV into a Spec."""
     s = Spec(rows, driver_mass)
+    # The spec sheet lists unsprung components as descriptions rather than a
+    # clean per-corner mass. Keep the current R25/R26 estimate as the fallback
+    # so derived suspension values remain consistent with the active configs.
+    s.unsprungMass = 9.3
 
     # ======================================================================
     # TIER A -- direct mappings (real values, with unit conversion)
@@ -250,15 +321,28 @@ def extract(rows, driver_mass):
     r = find_row(rows, "wheel rate")
     if r:
         wf, wr = axle_pair(r)
+        roll_row = find_row(rows, "roll rate")
+        rlf, rlr = axle_pair(roll_row) if roll_row else (None, None)
+        track_width = getattr(s, "trackWidth", None)
         if wf is not None:
+            wf_raw = wf
+            wf, wheel_note = corrected_wheel_rate(wf, rlf, track_width)
             s.springFront = wf * 1000.0          # N/mm -> N/m
-            s.add_direct("suspension.front.springRate", s.springFront,
-                         f"CSV r21: {wf:g} N/mm wheel rate (x1000; =springRate "
-                         f"when motionRatio=1, else divide by MR^2)")
+            if wheel_note:
+                source = wheel_note
+            else:
+                source = (f"CSV r21: {wf_raw:g} N/mm wheel rate (x1000; =springRate "
+                          f"when motionRatio=1, else divide by MR^2)")
+            s.add_direct("suspension.front.springRate", s.springFront, source)
         if wr is not None:
+            wr_raw = wr
+            wr, wheel_note = corrected_wheel_rate(wr, rlr, track_width)
             s.springRear = wr * 1000.0
-            s.add_direct("suspension.rear.springRate", s.springRear,
-                         f"CSV r21: {wr:g} N/mm wheel rate (x1000)")
+            if wheel_note:
+                source = wheel_note
+            else:
+                source = f"CSV r21: {wr_raw:g} N/mm wheel rate (x1000)"
+            s.add_direct("suspension.rear.springRate", s.springRear, source)
 
     # --- Motion ratio (r26) ---
     r = find_row(rows, "motion ratio")
@@ -268,6 +352,117 @@ def extract(rows, driver_mass):
         if m is not None:
             s.motionRatio = m
             s.add_direct("suspension.motionRatio", m, "CSV r26")
+
+    # --- Design travel and bump stop free length (r20) ---
+    r = find_row(rows, "suspension design travel")
+    if r:
+        jf = parse_num(r[3]) if len(r) > 3 else None
+        rf = parse_num(r[4]) if len(r) > 4 else None
+        jr = parse_num(r[6]) if len(r) > 6 else None
+        rr = parse_num(r[7]) if len(r) > 7 else None
+        if jf is not None and rf is not None:
+            s.frontTravelGrid = [-rf / 1000.0, 0.0, jf / 1000.0]
+        if jr is not None and rr is not None:
+            s.rearTravelGrid = [-rr / 1000.0, 0.0, jr / 1000.0]
+        jounce_values = [v for v in (jf, jr) if v is not None]
+        if jounce_values:
+            s.bumpStopLength = min(jounce_values) / 1000.0
+            s.add_direct(
+                "suspension.bumpStopLength", s.bumpStopLength,
+                f"CSV r20: jounce travel F {jf if jf is not None else '?'} mm / "
+                f"R {jr if jr is not None else '?'} mm")
+        if hasattr(s, "frontTravelGrid") or hasattr(s, "rearTravelGrid"):
+            s.add_direct(
+                "suspension.geometry.*.travelGrid",
+                "spec",
+                f"CSV r20: F travel {rf if rf is not None else '?'} mm rebound / "
+                f"{jf if jf is not None else '?'} mm jounce; "
+                f"R travel {rr if rr is not None else '?'} mm rebound / "
+                f"{jr if jr is not None else '?'} mm jounce")
+
+    # --- Damping coefficients from % critical (r24/r25) ---
+    r24 = find_row(rows, "jounce damping")
+    r25 = find_row(rows, "rebound damping")
+    jf_pct, jr_pct = axle_pair_columns(r24)
+    rf_pct, rr_pct = axle_pair_columns(r25)
+    total_mass = getattr(s, "totalMass", None)
+    front_weight = getattr(s, "staticFrontWeight", None)
+    kf = getattr(s, "springFront", None)
+    kr = getattr(s, "springRear", None)
+    unsprung = getattr(s, "unsprungMass", 9.3)
+    if total_mass is not None and front_weight is not None:
+        total_sprung = max(total_mass - 4 * unsprung, 1.0)
+        front_sprung = max(total_sprung * front_weight / 2.0, 1.0)
+        rear_sprung = max(total_sprung * (1.0 - front_weight) / 2.0, 1.0)
+        if kf is not None:
+            ccrit_f = 2.0 * math.sqrt(kf * front_sprung)
+            if jf_pct is not None:
+                s.frontDampingCoeff = jf_pct / 100.0 * ccrit_f
+                s.add_direct(
+                    "suspension.front.dampingCoeff", s.frontDampingCoeff,
+                    f"CSV r24: {jf_pct:g}% critical jounce damping; "
+                    f"Ccrit={ccrit_f:.0f} N*s/m using {unsprung:g} kg/corner unsprung")
+            if rf_pct is not None:
+                s.frontReboundCoeff = rf_pct / 100.0 * ccrit_f
+                s.add_direct(
+                    "suspension.front.reboundCoeff", s.frontReboundCoeff,
+                    f"CSV r25: {rf_pct:g}% critical rebound damping; "
+                    f"Ccrit={ccrit_f:.0f} N*s/m using {unsprung:g} kg/corner unsprung")
+        if kr is not None:
+            ccrit_r = 2.0 * math.sqrt(kr * rear_sprung)
+            if jr_pct is not None:
+                s.rearDampingCoeff = jr_pct / 100.0 * ccrit_r
+                s.add_direct(
+                    "suspension.rear.dampingCoeff", s.rearDampingCoeff,
+                    f"CSV r24: {jr_pct:g}% critical jounce damping; "
+                    f"Ccrit={ccrit_r:.0f} N*s/m using {unsprung:g} kg/corner unsprung")
+            if rr_pct is not None:
+                s.rearReboundCoeff = rr_pct / 100.0 * ccrit_r
+                s.add_direct(
+                    "suspension.rear.reboundCoeff", s.rearReboundCoeff,
+                    f"CSV r25: {rr_pct:g}% critical rebound damping; "
+                    f"Ccrit={ccrit_r:.0f} N*s/m using {unsprung:g} kg/corner unsprung")
+
+    # --- Camber and toe curves from static values and ride camber (r27/r29/r30) ---
+    r27 = find_row(rows, "ride camber")
+    r29 = find_row(rows, "static toe")
+    r30 = find_row(rows, "static camber", exact=True)
+    cf, cr = axle_pair(r27) if r27 else (None, None)
+    tf, tr = axle_pair(r29) if r29 else (None, None)
+    sf, sr = axle_pair(r30) if r30 else (None, None)
+    front_rebound = abs(getattr(s, "frontTravelGrid", [-0.0254, 0, 0.0254])[0])
+    front_jounce = getattr(s, "frontTravelGrid", [-0.0254, 0, 0.0254])[2]
+    rear_rebound = abs(getattr(s, "rearTravelGrid", [-0.0254, 0, 0.0254])[0])
+    rear_jounce = getattr(s, "rearTravelGrid", [-0.0254, 0, 0.0254])[2]
+    s.frontCamberCurveDeg = camber_curve_from_spec(sf, cf, front_rebound, front_jounce)
+    s.rearCamberCurveDeg = camber_curve_from_spec(sr, cr, rear_rebound, rear_jounce)
+    if s.frontCamberCurveDeg is not None or s.rearCamberCurveDeg is not None:
+        s.add_direct(
+            "suspension.geometry.*.camberCurve",
+            "spec",
+            f"CSV r27/r30: static camber F {sf if sf is not None else '?'} deg / "
+            f"R {sr if sr is not None else '?'} deg; ride camber "
+            f"F {cf if cf is not None else '?'} deg/m / "
+            f"R {cr if cr is not None else '?'} deg/m")
+    if tf is not None:
+        s.frontToeCurveDeg = constant_curve(-tf / 2.0)
+    if tr is not None:
+        s.rearToeCurveDeg = constant_curve(-tr / 2.0)
+    if hasattr(s, "frontToeCurveDeg") or hasattr(s, "rearToeCurveDeg"):
+        s.add_direct(
+            "suspension.geometry.*.toeCurve",
+            "spec",
+            f"CSV r29: static toe F {tf if tf is not None else '?'} deg / "
+            f"R {tr if tr is not None else '?'} deg; interpreted as total axle "
+            "toe, split equally per wheel with simulator outward-positive sign")
+
+    if hasattr(s, "motionRatio"):
+        s.frontMotionRatioCurve = constant_curve(s.motionRatio)
+        s.rearMotionRatioCurve = constant_curve(s.motionRatio)
+        s.add_direct(
+            "suspension.geometry.*.motionRatioCurve",
+            "spec",
+            f"CSV r26: {s.motionRatio:g}:1 linear")
 
     # --- Roll center height (r33) ---
     r = find_row(rows, "roll center height")
@@ -401,80 +596,24 @@ def extract(rows, driver_mass):
             "for ~1g but brakeForceCoefficient is tyre-limited capacity. "
             "baseline 0.70 left as-is.")
 
-    # Damping coefficients from %critical (r24/25). Needs sprung corner mass.
-    r24 = find_row(rows, "jounce damping")
-    r25 = find_row(rows, "rebound damping")
-    pct = parse_num(r24[2]) if r24 else None
-    if pct is None and r25:
-        pct = parse_num(r25[2])
-    if pct is not None:
-        k = getattr(s, "springFront", 45000)
-        m_sprung = (getattr(s, "totalMass", 256) - 4 * 25) / 4.0
-        c_crit = 2 * math.sqrt(k * max(m_sprung, 1.0))
-        c_est = pct / 100.0 * c_crit
-        s.add_todo(
-            "suspension.front.dampingCoeff / reboundCoeff", "3000 / 4500",
-            f"CSV r24/r25: {pct:g}% critical damping (multi-speed curve; "
-            f"front). Single-value estimate C = {pct/100:.2f}*2*sqrt(k*m_sprung) "
-            f"= {c_est:.0f} N*s/m (uses guessed unsprungMass 25 kg/corner). "
-            f"Same % shown for rebound (r25) -- likely a data-entry repeat.")
-
-    # bumpStopLength from jounce travel (r20).
-    r20 = find_row(rows, "suspension design travel")
-    if r20:
-        jf = parse_num(r20[3]) if len(r20) > 3 else None
-        jr = parse_num(r20[6]) if len(r20) > 6 else None
-        if jf is not None:
-            s.add_todo(
-                "suspension.bumpStopLength", 0.025,
-                f"CSV r20: jounce travel F {jf:g} mm / R "
-                f"{jr if jr is not None else '?'} mm -> bumpStopLength ~ "
-                f"{jf/1000:.3f} m (front). Verify against installed stop.")
-
     # ARB stiffness & chassis rollStiffness from roll rate (r22).
     r22 = find_row(rows, "roll rate")
     if r22:
         rlf, rlr = axle_pair(r22)
-        s.add_todo(
-            "suspension.frontArb/rearArb.stiffness, chassis.rollStiffness",
-            "1800/1100, 55000",
+        s.add_direct(
+            "suspension.frontArb/rearArb.enabled", "false",
             f"CSV r22: roll rate F {rlf if rlf else '?'}/R {rlr if rlr else '?'} "
-            f"N*m/deg (chassis-to-wheel). Per-element ARB.stiffness and "
-            f"chassis.rollStiffness must be derived via geometry/MR; left at "
-            f"baseline.")
-
-    # camberCurve from ride camber (r27) + static camber (r30).
-    r27 = find_row(rows, "ride camber")
-    r30 = find_row(rows, "static camber", exact=True)
-    if r27:
-        cf, cr = axle_pair(r27)
-        sf = parse_num(r30[2]) if r30 else None
-        s.add_todo(
-            "suspension.geometry.front/rear.camberCurve",
-            "[0.5 0 -1.5]*pi/180 / [0.25 0 -0.8]*pi/180",
-            f"CSV r27: ride camber F {cf if cf else '?'}/R {cr if cr else '?'} "
-            f"deg/m; r30: static camber F {sf if sf else '?'}/R ... deg. "
-            f"Build the 3-pt curve: middle = static camber, slope from ride "
-            f"camber (mind the sign convention: + = top-outward).")
-
-    # toeCurve middle from static toe (r29).
-    r29 = find_row(rows, "static sum toe")
-    if r29:
-        tf, tr = axle_pair(r29)
-        s.add_todo(
-            "suspension.geometry.front/rear.toeCurve",
-            "[-0.05 0 0.05]*pi/180 / [0.05 0 -0.05]*pi/180",
-            f"CSV r29: static toe F {tf if tf else 0}/R {tr if tr else 0} deg "
-            f"(0 = neutral). Sets the curve midpoint; ends stay at baseline.")
+            "N*m/deg is already matched by the corrected wheel rates; no "
+            "separate installed ARB rate is specified, so ARBs are disabled.")
 
     # unsprungMass -- component masses are listed (r47-53) but summing them is
     # error-prone (material descriptions, not clean masses).
     if find_row_text(rows, "upright assembly") or find_row_text(rows, "hub bearings"):
         s.add_todo(
-            "unsprungMass", 25,
+            "unsprungMass", s.unsprungMass,
             "CSV r47-53 list upright/hub/bearing/axle/brake components as text "
-            "(no clean per-corner mass). Sum them manually if needed; baseline "
-            "25 kg/corner left as-is.")
+            "(no clean per-corner mass). Sum them manually if needed; current "
+            f"R25/R26 estimate {s.unsprungMass:g} kg/corner left as-is.")
 
     # ======================================================================
     # Aero whole-car totals (r131/132) -> single whole-car aero component
@@ -572,10 +711,9 @@ def extract(rows, driver_mass):
         ("aero.pitchSensitivityClA", 0),
         ("suspension.bumpStopRate", 200000),
         ("suspension.tireSpringRate", 200000),
-        ("suspension.geometry.*.travelGrid / motionRatioCurve", "baseline"),
         ("suspension.geometry.rear steering-axis geometry", "0"),
-        ("suspension.{front,rear}Arb.motionRatio / leverArm / enabled",
-         "0.95 / 0.26 / true"),
+        ("suspension.{front,rear}Arb.stiffness / motionRatio / leverArm",
+         "0 / 1 / 1 (disabled; no installed ARB rate in spec)"),
         ("suspension.rollStiffnessOverride", "NaN"),
         ("suspension.coupleChassisRollToLoadTransfer", "false"),
         ("chassis.{heave,pitch,roll}Stiffness/Damping", "baseline"),
@@ -621,6 +759,11 @@ def fmt_rad_as_deg_expr(rad):
         return "0"
     deg = rad * 180.0 / math.pi
     return f"{fmt(deg)} * pi / 180"
+
+
+def fmt_matlab_vector(values):
+    """Format a Python numeric list as a MATLAB row vector."""
+    return "[" + " ".join(fmt(v) for v in values) + "]"
 
 
 def src_comment(spec, path, default_fmt):
@@ -702,8 +845,8 @@ def build_matlab(name, s):
           "(1 - cfg.brakeBiasFront) / brakePressureRearAt1gBar);")
     line("cfg.maxSpeed", 80,
          src_comment(s, "maxSpeed", "80") + " [m/s] (~288 km/h)")
-    line("cfg.unsprungMass", 25,
-         src_comment(s, "unsprungMass", "25") + " [kg/corner]")
+    line("cfg.unsprungMass", g("unsprungMass", 9.3),
+         src_comment(s, "unsprungMass", "9.3") + " [kg/corner]")
     A("")
 
     # ---- aerodynamics --------------------------------------------------
@@ -773,33 +916,45 @@ def build_matlab(name, s):
     A("    cfg.suspension.front = struct( ...")
     A(f"        'springRate', {fmt(g('springFront', 43780))}, ...         % "
       f"{src_comment(s, 'suspension.front.springRate', '45000')} [N/m]")
-    A("        'dampingCoeff', 3000, ...        % "
-      + src_comment(s, "suspension.front.dampingCoeff / reboundCoeff", "3000")
-      + " [N*s/m]")
-    A("        'reboundCoeff', 4500);           % [N*s/m]  (see damping TODO above)")
+    A(f"        'dampingCoeff', {fmt(g('frontDampingCoeff', 3000))}, ...        % "
+      f"{src_comment(s, 'suspension.front.dampingCoeff', '3000')} [N*s/m]")
+    A(f"        'reboundCoeff', {fmt(g('frontReboundCoeff', 4500))});           % "
+      f"{src_comment(s, 'suspension.front.reboundCoeff', '4500')} [N*s/m]")
     A("")
     A("    cfg.suspension.rear = struct( ...")
     A(f"        'springRate', {fmt(g('springRear', 39400))}, ...         % "
       f"{src_comment(s, 'suspension.rear.springRate', '42000')} [N/m]")
-    A("        'dampingCoeff', 2800, ...        % [N*s/m]  (see damping TODO above)")
-    A("        'reboundCoeff', 4200);           % [N*s/m]")
+    A(f"        'dampingCoeff', {fmt(g('rearDampingCoeff', 2800))}, ...        % "
+      f"{src_comment(s, 'suspension.rear.dampingCoeff', '2800')} [N*s/m]")
+    A(f"        'reboundCoeff', {fmt(g('rearReboundCoeff', 4200))});           % "
+      f"{src_comment(s, 'suspension.rear.reboundCoeff', '4200')} [N*s/m]")
     A("")
     A("    cfg.suspension.motionRatio    = %s;     %% %s"
       % (fmt(g("motionRatio", 1)),
          src_comment(s, "suspension.motionRatio", "0.95")))
-    A("    cfg.suspension.bumpStopLength = 0.025;    % "
-      + src_comment(s, "suspension.bumpStopLength", "0.025"))
+    A(f"    cfg.suspension.bumpStopLength = {fmt(g('bumpStopLength', 0.025))};    % "
+      f"{src_comment(s, 'suspension.bumpStopLength', '0.025')}")
     A("    cfg.suspension.bumpStopRate   = 200000;   % [not in spec sheet] [N/m]")
     A("    cfg.suspension.tireSpringRate = 200000;   % [not in spec sheet] [N/m]")
     A("")
     A("    % Suspension geometry: per-axle lookup tables indexed by wheel travel [m].")
+    front_travel = g("frontTravelGrid", [-0.05, 0, 0.05])
+    rear_travel = g("rearTravelGrid", [-0.05, 0, 0.05])
+    front_camber = g("frontCamberCurveDeg", [0.5, 0, -1.5])
+    rear_camber = g("rearCamberCurveDeg", [0.25, 0, -0.8])
+    front_toe = g("frontToeCurveDeg", [-0.05, 0, 0.05])
+    rear_toe = g("rearToeCurveDeg", [0.05, 0, -0.05])
+    front_mr_curve = g("frontMotionRatioCurve", [0.93, 0.95, 0.97])
+    rear_mr_curve = g("rearMotionRatioCurve", [0.94, 0.95, 0.96])
     A("    cfg.suspension.geometry.front = struct( ...")
-    A("        'travelGrid',       [-0.05 0 0.05], ...")
-    A("        'camberCurve',      [0.5 0 -1.5] * pi / 180, ...   % "
-      + src_comment(s, "suspension.geometry.front/rear.camberCurve", "baseline"))
-    A("        'toeCurve',         [-0.05 0 0.05] * pi / 180, ... % "
-      + src_comment(s, "suspension.geometry.front/rear.toeCurve", "baseline"))
-    A("        'motionRatioCurve', [0.93 0.95 0.97], ...")
+    A(f"        'travelGrid',       {fmt_matlab_vector(front_travel)}, ...       % "
+      f"{src_comment(s, 'suspension.geometry.*.travelGrid', 'baseline')}")
+    A(f"        'camberCurve',      {fmt_matlab_vector(front_camber)} * pi / 180, ...   % "
+      f"{src_comment(s, 'suspension.geometry.*.camberCurve', 'baseline')}")
+    A(f"        'toeCurve',         {fmt_matlab_vector(front_toe)} * pi / 180, ... % "
+      f"{src_comment(s, 'suspension.geometry.*.toeCurve', 'baseline')}")
+    A(f"        'motionRatioCurve', {fmt_matlab_vector(front_mr_curve)}, ...       % "
+      f"{src_comment(s, 'suspension.geometry.*.motionRatioCurve', 'baseline')}")
     A(f"        'rollCenterHeight', {fmt(g('rchFront', 0.030))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.front.rollCenterHeight', '0.030')}")
     A(f"        'casterAngle',      {fmt_rad_as_deg_expr(g('frontCasterAngle', 7.0 * math.pi / 180.0))}, ...            % "
@@ -813,10 +968,10 @@ def build_matlab(name, s):
     A(f"        'kingpinOffset',    {fmt(g('frontKingpinOffset', g('frontScrubRadius', 0.018)))});                        % "
       f"{src_comment(s, 'suspension.geometry.front.kingpinOffset', '0.018')} [m]")
     A("    cfg.suspension.geometry.rear = struct( ...")
-    A("        'travelGrid',       [-0.05 0 0.05], ...")
-    A("        'camberCurve',      [0.25 0 -0.8] * pi / 180, ...")
-    A("        'toeCurve',         [0.05 0 -0.05] * pi / 180, ...")
-    A("        'motionRatioCurve', [0.94 0.95 0.96], ...")
+    A(f"        'travelGrid',       {fmt_matlab_vector(rear_travel)}, ...")
+    A(f"        'camberCurve',      {fmt_matlab_vector(rear_camber)} * pi / 180, ...")
+    A(f"        'toeCurve',         {fmt_matlab_vector(rear_toe)} * pi / 180, ...")
+    A(f"        'motionRatioCurve', {fmt_matlab_vector(rear_mr_curve)}, ...")
     A(f"        'rollCenterHeight', {fmt(g('rchRear', 0.045))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.rear.rollCenterHeight', '0.045')}")
     A("        'casterAngle',      0, ...")
@@ -831,17 +986,18 @@ def build_matlab(name, s):
     A("        'maxWheelSteerAngle', 0.6, ...                      % [not in spec sheet] [rad] (~34 deg)")
     A("        'rearSteerRatio',     0.0);")
     A("")
-    A("    % Anti-roll bars (baseline -- roll-rate TODO above).")
+    A("    % Anti-roll bars: disabled unless the sheet provides an installed bar rate.")
     A("    cfg.suspension.frontArb = struct( ...")
-    A("        'stiffness', 1800, ...           % [N/m] at bar end")
-    A("        'motionRatio', 0.95, ...         % [not in spec sheet]")
-    A("        'leverArm', 0.26, ...            % [not in spec sheet] [m]")
-    A("        'enabled', true);")
+    A("        'stiffness', 0, ...              % [not in spec sheet]")
+    A("        'motionRatio', 1, ...            % [not in spec sheet]")
+    A("        'leverArm', 1, ...               % [not in spec sheet] [m]")
+    A("        'enabled', false);               % "
+      + src_comment(s, "suspension.frontArb/rearArb.enabled", "false"))
     A("    cfg.suspension.rearArb = struct( ...")
-    A("        'stiffness', 1100, ...           % [N/m] at bar end")
-    A("        'motionRatio', 0.95, ...")
-    A("        'leverArm', 0.26, ...")
-    A("        'enabled', true);")
+    A("        'stiffness', 0, ...              % [not in spec sheet]")
+    A("        'motionRatio', 1, ...")
+    A("        'leverArm', 1, ...")
+    A("        'enabled', false);")
     A("")
     A("    cfg.suspension.rollStiffnessOverride = NaN;             % [not in spec sheet] derive from springs+ARBs")
     A("    cfg.suspension.coupleChassisRollToLoadTransfer = false; % [not in spec sheet]")

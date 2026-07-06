@@ -93,6 +93,35 @@ Optional `wheel_speed_fl_mps`, `wheel_speed_fr_mps`, `wheel_speed_rl_mps`, and
 `wheel_speed_rr_mps` columns seed the initial per-corner tire angular velocity;
 missing wheel-speed sensors fall back to the median of the valid corners at the
 first sample.
+For R25 logs, the extractor also carries `regen_torque_nm` from
+`Throttle Regen Negative Torque Command` / `Throttle Regen Negative Torque C`
+and `motor_torque_command_nm` from `BAMOCAR Channels Calculated Cmd`, plus
+`motor_rpm` from `BAMOCAR Channels RPM` and `pack_voltage_v` / `pack_current_a`
+from the BMS. These raw torque channels are stored with unsigned 16-bit
+conventions even though the physical signals are signed; the channel map wraps
+`65536` back to zero, decodes signed storage before scaling, and
+`regen_torque_nm` is exported on the negative-torque side for correlation. Pack
+current is treated as positive for discharge/motoring power and negative for
+charging/regen power.
+By default replay still drives the simulated powertrain from logged throttle.
+Pass `'PowertrainMode', 'motor_torque_command'` to bypass the throttle map and
+EMRAX torque envelope. In that mode, `motor_torque_command_nm` is treated as a
+signed motor-side request, not guaranteed delivered shaft torque. When
+`pack_voltage_v` and `pack_current_a` are present, the simulator caps the applied
+motor torque so requested motor mechanical power cannot exceed measured DC pack
+power before reflecting the capped torque through final-drive ratio and
+drivetrain efficiency. Motoring torque uses `powertrain.efficiency`; negative
+direct-mode regen uses `powertrain.regenEfficiency` when present, falling back
+to `powertrain.efficiency`. The cap uses logged `motor_rpm` when available, then
+logged replay speed, and only falls back to simulated speed when no measured
+speed source exists. Positive commands are drive torque; negative commands are
+sent through the driveline as regen/decel torque only when the logged pack power
+is negative. Regen uses the inverse drivetrain-loss direction, so wheel-side
+braking power is larger in magnitude than the power recovered at the pack by
+the configured regen efficiency. If `Calculated Cmd` has already crossed back
+positive while the pack is still charging, the decoded `regen_torque_nm`
+request is used as the negative torque request instead; the pack-power cap
+still limits the applied value.
 
 Edit `trackType` in `src/+lts/+app/run_simulation.m` to switch between:
 
@@ -142,7 +171,7 @@ unchanged — so a re-export silently overwrites the previous output.
 ## Current Model
 
 - Whole-car aero system: `lts.components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
-- Transient chassis platform: `lts.components.Chassis.SimpleChassis` tracks heave, pitch, and roll for chassis-driven corner loads.
+- Transient chassis platform: `lts.components.Chassis.SimpleChassis` tracks heave, pitch, and separate front/rear roll DOFs coupled by chassis torsional rigidity for chassis-driven corner loads. Telemetry includes front/rear roll angles and roll rates.
 - Four-corner transient suspension: `lts.components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
 - Table-based suspension and steering geometry: `lts.components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
 - EMRAX 228 powertrain: `lts.components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.

@@ -101,6 +101,59 @@ class ExtractMotecLapTest(unittest.TestCase):
         np.testing.assert_allclose(front["values"], [0.0, 2.5, 5.0])
         np.testing.assert_allclose(rear["values"], [0.0, 3.0, 6.0])
 
+    def test_regen_and_motor_torque_decode_unsigned_storage(self):
+        data = FakeData(
+            [
+                FakeChannel("Throttle Regen Negative Torque C", "", 10, [0, 25085, 53378]),
+                FakeChannel("BAMOCAR Channels Calculated Cmd", "", 10, [0, 12158, 53378, 65535, 65536]),
+                FakeChannel("BAMOCAR Channels RPM", "rpm", 10, [0, 1200, 1800, 2000, 2200]),
+                FakeChannel("BMS Channels Pack Voltage", "V", 10, [320, 318, 315, 312, 310]),
+                FakeChannel("BMS Channels Pack Current", "A", 10, [0, 50, -20, -30, 0]),
+            ]
+        )
+        channel_map = extract_motec_lap.load_channel_map(
+            REPO_ROOT / "config" / "motec" / "default_channel_map.json"
+        )
+
+        regen = extract_motec_lap.extract_raw_signal(
+            data,
+            "regen_torque_nm",
+            channel_map["channels"]["regen_torque_nm"],
+        )
+        motor = extract_motec_lap.extract_raw_signal(
+            data,
+            "motor_torque_command_nm",
+            channel_map["channels"]["motor_torque_command_nm"],
+        )
+        motor_rpm = extract_motec_lap.extract_raw_signal(
+            data,
+            "motor_rpm",
+            channel_map["channels"]["motor_rpm"],
+        )
+        voltage = extract_motec_lap.extract_raw_signal(
+            data,
+            "pack_voltage_v",
+            channel_map["channels"]["pack_voltage_v"],
+        )
+        current = extract_motec_lap.extract_raw_signal(
+            data,
+            "pack_current_a",
+            channel_map["channels"]["pack_current_a"],
+        )
+
+        self.assertIn("regen_torque_nm", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("motor_torque_command_nm", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("motor_rpm", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("pack_voltage_v", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("pack_current_a", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertEqual(regen["transform_applied"], "unsigned_negative_torque")
+        self.assertEqual(motor["transform_applied"], "uint16_to_int16")
+        np.testing.assert_allclose(regen["values"], [0.0, -250.85, -121.58])
+        np.testing.assert_allclose(motor["values"], [0.0, 121.58, -121.58, -0.01, 0.0])
+        np.testing.assert_allclose(motor_rpm["values"], [0, 1200, 1800, 2000, 2200])
+        np.testing.assert_allclose(voltage["values"], [320, 318, 315, 312, 310])
+        np.testing.assert_allclose(current["values"], [0, 50, -20, -30, 0])
+
     def test_brake_ratio_peak_scales_combined_pressure_trace(self):
         spec = {
             "required": True,

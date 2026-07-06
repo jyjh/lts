@@ -80,6 +80,79 @@
         "psi": 0.0689475729
       }
     },
+    "regen_torque_nm": {
+      "names": [
+        "Throttle Regen Negative Torque Command",
+        "Throttle Regen Negative Torque C"
+      ],
+      "required": false,
+      "default": null,
+      "transform": "unsigned_negative_torque",
+      "scale": 0.01,
+      "source_unit_scale": {
+        "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_torque_command_nm": {
+      "names": [
+        "BAMOCAR Channels Calculated Cmd",
+        "BAMOCAR Calculated Cmd",
+        "Calculated Cmd",
+        "Motor Torque Command"
+      ],
+      "required": false,
+      "default": null,
+      "transform": "uint16_to_int16",
+      "scale": 0.01,
+      "source_unit_scale": {
+        "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_rpm": {
+      "names": [
+        "BAMOCAR Channels RPM",
+        "BAMOCAR RPM",
+        "Motor RPM",
+        "Inverter Motor RPM"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rpm": 1.0,
+        "RPM": 1.0,
+        "": 1.0
+      }
+    },
+    "pack_voltage_v": {
+      "names": [
+        "BMS Channels Pack Voltage",
+        "Battery Pack Voltage",
+        "HV Pack Voltage",
+        "Pack Voltage"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "V": 1.0,
+        "v": 1.0
+      }
+    },
+    "pack_current_a": {
+      "names": [
+        "BMS Channels Pack Current",
+        "Battery Pack Current",
+        "HV Pack Current",
+        "Pack Current"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "A": 1.0,
+        "a": 1.0
+      }
+    },
     "steer_rad": {
       "required": true,
       "default": 0.0,

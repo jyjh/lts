@@ -51,6 +51,7 @@ classdef Simulator < handle
         enforcePedalExclusivity = true
         applySteeringSlew = true
         brakeMode = "ratio"
+        powertrainMode = "throttle"
         stopOnOffTrack = true
         stopAtTrackEnd = true
         stopTime = inf
@@ -157,18 +158,8 @@ classdef Simulator < handle
             % for a spool). Falls back to the raw mean if no differential.
             carrierOmega0 = 0.5 * (vm.tire.RL.angularVelocity + vm.tire.RR.angularVelocity);
             vm.powertrain.updateStateFromDrivenWheels(carrierOmega0);
-            totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
-
-            % Off-throttle motoring/regen drag on the driven axle (opt-in via
-            % motoringDragTorque / regenEnabled on the powertrain; 0 when off,
-            % so baseline behavior is unchanged). This is signed driveline
-            % torque, so ramp-plate LSDs can use their decel ramps. Hydraulic
-            % brake torque remains outside the differential model.
-            totalCoastdownTorque = 0;
-            if ismethod(vm.powertrain, 'computeCoastdownTorque')
-                totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
-                    state.speed, throttle);
-            end
+            [totalDriveTorque, totalCoastdownTorque] = ...
+                obj.computePowertrainTorques(state, input, throttle);
 
             % --- WHEEL TORQUE SETUP ---
             % RWD assumption: drive torque only on rear wheels.
@@ -305,33 +296,14 @@ classdef Simulator < handle
                  corners.RL.normalForce + corners.RR.normalForce);
 
             % --- INTEGRATE STATE ---
-            vx0 = state.vx;
-            vy0 = state.vy;
-            yaw0 = state.yaw;
-
-            % Midpoint yaw for a consistent body<->world rotation over the
-            % step: both the body->world accel projection and the world->body
-            % velocity reprojection use the same (midpoint) yaw, so the step
-            % is not biased by an old-vs-new yaw asymmetry.
-            yawRateNew = state.yawRate + dynamics.yawAccel * obj.dt;
-            yawNew = yaw0 + yawRateNew * obj.dt;
-            yawMid = yaw0 + 0.5 * yawRateNew * obj.dt;
-
-            cy0 = cos(yaw0); sy0 = sin(yaw0);
-            cyMid = cos(yawMid); syMid = sin(yawMid);
-
-            vxWorld0 = vx0 * cy0 - vy0 * sy0;
-            vyWorld0 = vx0 * sy0 + vy0 * cy0;
-            axWorld = dynamics.ax * cyMid - dynamics.ay * syMid;
-            ayWorld = dynamics.ax * syMid + dynamics.ay * cyMid;
-
-            vxWorld = vxWorld0 + axWorld * obj.dt;
-            vyWorld = vyWorld0 + ayWorld * obj.dt;
-
-            vxNew = vxWorld * cyMid + vyWorld * syMid;
-            vyNew = -vxWorld * syMid + vyWorld * cyMid;
-            xNew = state.x + 0.5 * (vxWorld0 + vxWorld) * obj.dt;
-            yNew = state.y + 0.5 * (vyWorld0 + vyWorld) * obj.dt;
+            kinematics = obj.integratePlanarKinematics( ...
+                state, dynamics, obj.dt);
+            yawRateNew = kinematics.yawRate;
+            yawNew = kinematics.yaw;
+            vxNew = kinematics.vx;
+            vyNew = kinematics.vy;
+            xNew = kinematics.x;
+            yNew = kinematics.y;
 
             if obj.isFreeReference(ref)
                 % Free reference mode is used by correlation replay: progress
@@ -397,13 +369,25 @@ classdef Simulator < handle
             forces.brakeTorque_RR = T_brake_rear;
             forces.motorRPM = 0;
             forces.motorTorque = 0;
+            forces.motorTorqueRequested = 0;
+            forces.motorTorquePowerLimitNm = NaN;
+            forces.motorTorquePowerLimitActive = false;
             forces.wheelTorque = 0;
+            forces.packVoltageV = NaN;
+            forces.packCurrentA = NaN;
+            forces.packPowerW = NaN;
             forces.drivenWheelRPM = 0;
             forces.rpmLimitActive = false;
             if ~isempty(vm.powertrain.state)
                 forces.motorRPM = vm.powertrain.state.motorRPM;
                 forces.motorTorque = vm.powertrain.state.motorTorque;
+                forces.motorTorqueRequested = vm.powertrain.state.requestedMotorTorque;
+                forces.motorTorquePowerLimitNm = vm.powertrain.state.motorTorquePowerLimitNm;
+                forces.motorTorquePowerLimitActive = vm.powertrain.state.motorTorquePowerLimitActive;
                 forces.wheelTorque = vm.powertrain.state.wheelTorque;
+                forces.packVoltageV = vm.powertrain.state.packVoltageV;
+                forces.packCurrentA = vm.powertrain.state.packCurrentA;
+                forces.packPowerW = vm.powertrain.state.packPowerW;
                 forces.drivenWheelRPM = vm.powertrain.state.drivenWheelRPM;
                 forces.rpmLimitActive = vm.powertrain.state.rpmLimitActive;
             end
@@ -590,14 +574,24 @@ classdef Simulator < handle
                 'brakeTorque_RR', zeros(maxSteps, 1), ...
                 'motorRPM',    zeros(maxSteps, 1), ...
                 'motorTorque', zeros(maxSteps, 1), ...
+                'motorTorqueRequested', zeros(maxSteps, 1), ...
+                'motorTorquePowerLimitNm', NaN(maxSteps, 1), ...
+                'motorTorquePowerLimitActive', false(maxSteps, 1), ...
                 'wheelTorque', zeros(maxSteps, 1), ...
+                'packVoltageV', NaN(maxSteps, 1), ...
+                'packCurrentA', NaN(maxSteps, 1), ...
+                'packPowerW', NaN(maxSteps, 1), ...
                 'drivenWheelRPM', zeros(maxSteps, 1), ...
                 'rpmLimitActive', false(maxSteps, 1), ...
                 'pitchAngle',  zeros(maxSteps, 1), ...
                 'rollAngle',   zeros(maxSteps, 1), ...
+                'rollRate',    zeros(maxSteps, 1), ...
                 'frontRollAngle', zeros(maxSteps, 1), ...
                 'rearRollAngle',  zeros(maxSteps, 1), ...
+                'frontRollRate',  zeros(maxSteps, 1), ...
+                'rearRollRate',   zeros(maxSteps, 1), ...
                 'twistAngle',     zeros(maxSteps, 1), ...
+                'twistRate',      zeros(maxSteps, 1), ...
                 'rideHeight',  zeros(maxSteps, 1), ...
                 'Fz_FL',       zeros(maxSteps, 1), ...
                 'Fz_FR',       zeros(maxSteps, 1), ...
@@ -828,14 +822,24 @@ classdef Simulator < handle
                     stateLog.brakeTorque_RR(step) = forces.brakeTorque_RR;
                     stateLog.motorRPM(step)    = forces.motorRPM;
                     stateLog.motorTorque(step) = forces.motorTorque;
+                    stateLog.motorTorqueRequested(step) = forces.motorTorqueRequested;
+                    stateLog.motorTorquePowerLimitNm(step) = forces.motorTorquePowerLimitNm;
+                    stateLog.motorTorquePowerLimitActive(step) = forces.motorTorquePowerLimitActive;
                     stateLog.wheelTorque(step) = forces.wheelTorque;
+                    stateLog.packVoltageV(step) = forces.packVoltageV;
+                    stateLog.packCurrentA(step) = forces.packCurrentA;
+                    stateLog.packPowerW(step) = forces.packPowerW;
                     stateLog.drivenWheelRPM(step) = forces.drivenWheelRPM;
                     stateLog.rpmLimitActive(step) = forces.rpmLimitActive;
                     stateLog.pitchAngle(step)  = newState.pitchAngle;
                     stateLog.rollAngle(step)   = newState.rollAngle;
+                    stateLog.rollRate(step)    = newState.rollRate;
                     stateLog.frontRollAngle(step) = newState.frontRollAngle;
                     stateLog.rearRollAngle(step)  = newState.rearRollAngle;
+                    stateLog.frontRollRate(step)  = newState.frontRollRate;
+                    stateLog.rearRollRate(step)   = newState.rearRollRate;
                     stateLog.twistAngle(step)     = newState.twistAngle;
+                    stateLog.twistRate(step)      = newState.twistRate;
                     stateLog.rideHeight(step)  = newState.rideHeight;
                     stateLog.aeroFz_front(step) = forces.aeroFz_front;
                     stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
@@ -1008,6 +1012,7 @@ classdef Simulator < handle
             parser.addParameter('AllowPedalOverlap', true, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('ApplySteeringSlew', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('BrakeMode', 'ratio', @(x) ischar(x) || isstring(x));
+            parser.addParameter('PowertrainMode', 'throttle', @(x) ischar(x) || isstring(x));
             parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
@@ -1026,6 +1031,7 @@ classdef Simulator < handle
             previousPedalPolicy = obj.enforcePedalExclusivity;
             previousSteerPolicy = obj.applySteeringSlew;
             previousBrakeMode = obj.brakeMode;
+            previousPowertrainMode = obj.powertrainMode;
             previousOffTrackPolicy = obj.stopOnOffTrack;
             previousTrackEndPolicy = obj.stopAtTrackEnd;
             previousStopTime = obj.stopTime;
@@ -1035,7 +1041,7 @@ classdef Simulator < handle
                 previousDriver, previousMethod, previousPedalPolicy, ...
                 previousSteerPolicy, previousBrakeMode, previousOffTrackPolicy, ...
                 previousTrackEndPolicy, previousStopTime, ...
-                previousReferenceMode, previousFreeSurfaceMu));
+                previousReferenceMode, previousFreeSurfaceMu, previousPowertrainMode));
 
             obj.driverModel = lts.correlation.TelemetryReplayDriver(profile, ...
                 'ReplayDomain', parser.Results.ReplayDomain);
@@ -1043,6 +1049,13 @@ classdef Simulator < handle
             obj.enforcePedalExclusivity = ~logical(parser.Results.AllowPedalOverlap);
             obj.applySteeringSlew = logical(parser.Results.ApplySteeringSlew);
             obj.brakeMode = obj.validateBrakeMode(parser.Results.BrakeMode);
+            obj.powertrainMode = obj.validatePowertrainMode(parser.Results.PowertrainMode);
+            if obj.powertrainMode == "motor_torque_command" && ...
+                    ~profile.hasMotorTorqueCommand()
+                error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
+                    ['PowertrainMode "motor_torque_command" requires ' ...
+                    'motor_torque_command_nm in the replay profile.']);
+            end
             obj.stopOnOffTrack = logical(parser.Results.StopOnOffTrack);
             obj.stopAtTrackEnd = logical(parser.Results.StopAtTrackEnd);
             obj.referenceMode = lower(string(parser.Results.ReferenceMode));
@@ -1084,6 +1097,26 @@ classdef Simulator < handle
                 stateLog.replayBrakePressureRearBar = localInterpProfileChannel( ...
                     profile.time, profile.brakePressureRearBar, queryTime);
             end
+            if profile.hasRegenTorque()
+                stateLog.replayRegenTorqueNm = localInterpProfileChannel( ...
+                    profile.time, profile.regenTorqueNm, queryTime);
+            end
+            if profile.hasMotorTorqueCommand()
+                stateLog.replayMotorTorqueCommandNm = localInterpProfileChannel( ...
+                    profile.time, profile.motorTorqueCommandNm, queryTime);
+            end
+            if profile.hasMotorRpm()
+                stateLog.replayMotorRpm = localInterpProfileChannel( ...
+                    profile.time, profile.motorRpm, queryTime);
+            end
+            if profile.hasPackPower()
+                stateLog.replayPackVoltageV = localInterpProfileChannel( ...
+                    profile.time, profile.packVoltageV, queryTime);
+                stateLog.replayPackCurrentA = localInterpProfileChannel( ...
+                    profile.time, profile.packCurrentA, queryTime);
+                stateLog.replayPackPowerW = ...
+                    stateLog.replayPackVoltageV .* stateLog.replayPackCurrentA;
+            end
             stateLog.replaySteer = localInterpProfileChannel( ...
                 profile.time, profile.steer, queryTime);
             stateLog.replaySpeed = localInterpProfileChannel( ...
@@ -1110,7 +1143,7 @@ classdef Simulator < handle
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
                 steerPolicy, brakeMode, offTrackPolicy, trackEndPolicy, stopTime, ...
-                referenceMode, freeSurfaceMu)
+                referenceMode, freeSurfaceMu, powertrainMode)
             obj.driverModel = driverModel;
             obj.cachedDriverInputMethod = inputMethod;
             obj.enforcePedalExclusivity = pedalPolicy;
@@ -1124,6 +1157,9 @@ classdef Simulator < handle
             end
             if nargin >= 11
                 obj.freeSurfaceMu = freeSurfaceMu;
+            end
+            if nargin >= 12
+                obj.powertrainMode = powertrainMode;
             end
         end
 
@@ -1169,8 +1205,207 @@ classdef Simulator < handle
                 input, totalNormalLoad, obj.vehicleManager, obj.brakeMode);
         end
 
+        function [totalDriveTorque, totalCoastdownTorque] = computePowertrainTorques(obj, state, input, throttle)
+            vm = obj.vehicleManager;
+            mode = obj.validatePowertrainMode(obj.powertrainMode);
+
+            switch mode
+                case "throttle"
+                    totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
+
+                    % Off-throttle motoring/regen drag on the driven axle
+                    % (opt-in via the powertrain component; 0 when off). This
+                    % is signed driveline torque so ramp-plate LSDs can use
+                    % their decel ramps. Hydraulic brake torque is separate.
+                    totalCoastdownTorque = 0;
+                    if ismethod(vm.powertrain, 'computeCoastdownTorque')
+                        totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
+                            state.speed, throttle);
+                    end
+
+                case "motor_torque_command"
+                    motorTorqueCommandNm = localGetField(input, ...
+                        'motorTorqueCommandNm', NaN);
+                    if ~isfinite(motorTorqueCommandNm)
+                        error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
+                            ['PowertrainMode "motor_torque_command" requires a finite ' ...
+                            'motorTorqueCommandNm input from the replay profile.']);
+                    end
+
+                    motorTorqueRequestNm = obj.selectDirectMotorTorqueRequest( ...
+                        motorTorqueCommandNm, input);
+                    wheelTorque = obj.applyMotorTorqueCommand( ...
+                        motorTorqueRequestNm, throttle, input);
+                    totalDriveTorque = max(0, wheelTorque);
+                    totalCoastdownTorque = min(0, wheelTorque);
+
+                otherwise
+                    error('lts_simulation_Simulator:InvalidPowertrainMode', ...
+                        'PowertrainMode must be "throttle" or "motor_torque_command".');
+            end
+        end
+
+        function wheelTorque = applyMotorTorqueCommand(obj, motorTorqueCommandNm, throttle, input)
+            if nargin < 4 || isempty(input)
+                input = struct();
+            end
+
+            vm = obj.vehicleManager;
+            ratio = vm.powertrain.getTotalGearRatio();
+            efficiency = vm.powertrain.getDrivetrainEfficiency();
+            regenEfficiency = obj.regenDrivetrainEfficiency();
+            [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
+                packCurrentA, packPowerW, powerLimitActive] = ...
+                obj.limitMotorTorqueCommandByPackPower(motorTorqueCommandNm, input);
+            if appliedMotorTorqueNm >= 0
+                wheelTorque = appliedMotorTorqueNm * ratio * efficiency;
+                stateEfficiency = efficiency;
+            else
+                % Reverse the loss direction for regen: wheel braking power
+                % must exceed the mechanical/electrical power reaching the
+                % motor/pack, not shrink below it as motoring torque does.
+                wheelTorque = appliedMotorTorqueNm * ratio / max(regenEfficiency, eps);
+                stateEfficiency = regenEfficiency;
+            end
+
+            driveForce = 0;
+            if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
+                driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
+            end
+
+            if ~isempty(vm.powertrain.state)
+                vm.powertrain.state.updateOutputs( ...
+                    throttle, appliedMotorTorqueNm, wheelTorque, driveForce, ...
+                    stateEfficiency, false);
+                vm.powertrain.state.requestedMotorTorque = motorTorqueCommandNm;
+                vm.powertrain.state.motorTorquePowerLimitNm = powerLimitNm;
+                vm.powertrain.state.motorTorquePowerLimitActive = powerLimitActive;
+                vm.powertrain.state.packVoltageV = packVoltageV;
+                vm.powertrain.state.packCurrentA = packCurrentA;
+                vm.powertrain.state.packPowerW = packPowerW;
+            end
+        end
+
+        function efficiency = regenDrivetrainEfficiency(obj)
+            vm = obj.vehicleManager;
+            efficiency = vm.powertrain.getDrivetrainEfficiency();
+            if ismethod(vm.powertrain, 'getRegenDrivetrainEfficiency')
+                efficiency = vm.powertrain.getRegenDrivetrainEfficiency();
+            elseif isprop(vm.powertrain, 'regenEfficiency') && ...
+                    isfinite(vm.powertrain.regenEfficiency)
+                efficiency = vm.powertrain.regenEfficiency;
+            end
+            efficiency = max(0, min(1, efficiency));
+        end
+
+        function motorTorqueRequestNm = selectDirectMotorTorqueRequest(~, motorTorqueCommandNm, input)
+            motorTorqueRequestNm = motorTorqueCommandNm;
+            if motorTorqueCommandNm < 0
+                return;
+            end
+
+            regenTorqueNm = localGetField(input, 'regenTorqueNm', NaN);
+            if ~isfinite(regenTorqueNm) || regenTorqueNm >= 0
+                return;
+            end
+
+            packVoltageV = localGetField(input, 'packVoltageV', NaN);
+            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
+                return;
+            end
+
+            % The throttle-regen channel is a candidate/request and can be
+            % nonzero during motoring. Let it override Calculated Cmd only
+            % when the logged pack power confirms actual charging.
+            if packVoltageV * packCurrentA < -100
+                motorTorqueRequestNm = regenTorqueNm;
+            end
+        end
+
+        function [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
+                packCurrentA, packPowerW, powerLimitActive] = ...
+                limitMotorTorqueCommandByPackPower(obj, requestedMotorTorqueNm, input)
+            appliedMotorTorqueNm = requestedMotorTorqueNm;
+            powerLimitNm = NaN;
+            packVoltageV = localGetField(input, 'packVoltageV', NaN);
+            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            packPowerW = NaN;
+            powerLimitActive = false;
+
+            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
+                return;
+            end
+
+            packPowerW = packVoltageV * packCurrentA;
+            if ~isfinite(packPowerW) || requestedMotorTorqueNm == 0
+                return;
+            end
+
+            motorOmega = obj.motorAngularVelocityForPowerLimit(input);
+            if ~isfinite(motorOmega)
+                return;
+            end
+            motorOmega = max(abs(motorOmega), 1.0);
+
+            if requestedMotorTorqueNm > 0
+                powerLimitNm = max(0, packPowerW) / motorOmega;
+                appliedMotorTorqueNm = min(requestedMotorTorqueNm, powerLimitNm);
+            else
+                powerLimitNm = min(0, packPowerW) / motorOmega;
+                appliedMotorTorqueNm = max(requestedMotorTorqueNm, powerLimitNm);
+            end
+
+            toleranceNm = max(1e-9, 1e-6 * abs(requestedMotorTorqueNm));
+            powerLimitActive = abs(appliedMotorTorqueNm - requestedMotorTorqueNm) > toleranceNm;
+        end
+
+        function motorOmega = motorAngularVelocityForPowerLimit(obj, input)
+            motorOmega = NaN;
+            loggedMotorRpm = localGetField(input, 'motorRpm', NaN);
+            if isfinite(loggedMotorRpm)
+                motorOmega = loggedMotorRpm * 2 * pi / 60;
+                return;
+            end
+
+            vm = obj.vehicleManager;
+            replaySpeed = localGetField(input, 'targetSpeed', NaN);
+            if isfinite(replaySpeed) && replaySpeed > 0 && ...
+                    ~isempty(vm) && ~isempty(vm.powertrain)
+                ratio = vm.powertrain.getTotalGearRatio();
+                wheelRadius = NaN;
+                if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
+                    wheelRadius = vm.tire.RL.wheelRadius;
+                elseif isprop(vm.powertrain, 'wheelRadius')
+                    wheelRadius = vm.powertrain.wheelRadius;
+                end
+                if isfinite(ratio) && ratio > 0 && isfinite(wheelRadius) && wheelRadius > 0
+                    motorOmega = replaySpeed / wheelRadius * ratio;
+                    return;
+                end
+            end
+
+            if isempty(vm) || isempty(vm.powertrain) || isempty(vm.powertrain.state)
+                return;
+            end
+            motorOmega = vm.powertrain.state.motorAngularVelocity;
+        end
+
         function mode = validateBrakeMode(~, mode)
             mode = lts.simulation.BrakeForcePolicy.validateMode(mode);
+        end
+
+        function mode = validatePowertrainMode(~, mode)
+            mode = lower(string(mode));
+            mode = strrep(mode, "-", "_");
+            if mode == "motor_torque" || mode == "motor_command" || ...
+                    mode == "calculated_cmd" || mode == "calculated_command"
+                mode = "motor_torque_command";
+            end
+            if mode ~= "throttle" && mode ~= "motor_torque_command"
+                error('lts_simulation_Simulator:InvalidPowertrainMode', ...
+                    'PowertrainMode must be "throttle" or "motor_torque_command".');
+            end
         end
 
         function state = initializePlanarState(obj, state, trackData, referenceMode, surfaceMu)
@@ -1345,14 +1580,24 @@ classdef Simulator < handle
                 'brakeTorque_RR', zeros(maxSteps, 1), ...
                 'motorRPM',    zeros(maxSteps, 1), ...
                 'motorTorque', zeros(maxSteps, 1), ...
+                'motorTorqueRequested', zeros(maxSteps, 1), ...
+                'motorTorquePowerLimitNm', NaN(maxSteps, 1), ...
+                'motorTorquePowerLimitActive', false(maxSteps, 1), ...
                 'wheelTorque', zeros(maxSteps, 1), ...
+                'packVoltageV', NaN(maxSteps, 1), ...
+                'packCurrentA', NaN(maxSteps, 1), ...
+                'packPowerW', NaN(maxSteps, 1), ...
                 'drivenWheelRPM', zeros(maxSteps, 1), ...
                 'rpmLimitActive', false(maxSteps, 1), ...
                 'pitchAngle',  zeros(maxSteps, 1), ...
                 'rollAngle',   zeros(maxSteps, 1), ...
+                'rollRate',    zeros(maxSteps, 1), ...
                 'frontRollAngle', zeros(maxSteps, 1), ...
                 'rearRollAngle',  zeros(maxSteps, 1), ...
+                'frontRollRate',  zeros(maxSteps, 1), ...
+                'rearRollRate',   zeros(maxSteps, 1), ...
                 'twistAngle',     zeros(maxSteps, 1), ...
+                'twistRate',      zeros(maxSteps, 1), ...
                 'rideHeight',  zeros(maxSteps, 1), ...
                 'aeroFz_front', zeros(maxSteps, 1), ...
                 'aeroFz_rear',  zeros(maxSteps, 1) ...
@@ -1681,6 +1926,42 @@ classdef Simulator < handle
             end
             dynamics.frontAxleAy = dynamics.ay + dynamics.yawAccel * obj.cachedFrontArm;
             dynamics.rearAxleAy  = dynamics.ay - dynamics.yawAccel * obj.cachedRearArm;
+        end
+
+        function kinematics = integratePlanarKinematics(~, state, dynamics, dt)
+            % INTEGRATEPLANARKINEMATICS Advance body velocity through world space.
+            %   Body-frame vx/vy are first projected into world coordinates,
+            %   force-derived body accelerations are applied at midpoint yaw,
+            %   then the updated velocity is expressed in the new body frame.
+            %   Reprojecting at the new yaw is essential: a steady circular
+            %   trajectory should not create artificial sideslip or kinetic energy.
+            vx0 = state.vx;
+            vy0 = state.vy;
+            yaw0 = state.yaw;
+            yawRate0 = state.yawRate;
+
+            yawRateNew = yawRate0 + dynamics.yawAccel * dt;
+            yawNew = yaw0 + yawRate0 * dt + 0.5 * dynamics.yawAccel * dt^2;
+            yawMid = yaw0 + 0.5 * yawRate0 * dt + 0.125 * dynamics.yawAccel * dt^2;
+
+            cy0 = cos(yaw0); sy0 = sin(yaw0);
+            cyMid = cos(yawMid); syMid = sin(yawMid);
+            cyNew = cos(yawNew); syNew = sin(yawNew);
+
+            vxWorld0 = vx0 * cy0 - vy0 * sy0;
+            vyWorld0 = vx0 * sy0 + vy0 * cy0;
+            axWorld = dynamics.ax * cyMid - dynamics.ay * syMid;
+            ayWorld = dynamics.ax * syMid + dynamics.ay * cyMid;
+
+            vxWorld = vxWorld0 + axWorld * dt;
+            vyWorld = vyWorld0 + ayWorld * dt;
+
+            kinematics.vx = vxWorld * cyNew + vyWorld * syNew;
+            kinematics.vy = -vxWorld * syNew + vyWorld * cyNew;
+            kinematics.yawRate = yawRateNew;
+            kinematics.yaw = yawNew;
+            kinematics.x = state.x + 0.5 * (vxWorld0 + vxWorld) * dt;
+            kinematics.y = state.y + 0.5 * (vyWorld0 + vyWorld) * dt;
         end
 
         function moments = computeAeroPitchMoments(obj, aeroForces)

@@ -10,6 +10,19 @@ classdef CorrelationAppSupport
             end
         end
 
+        function mode = validatePowertrainMode(mode)
+            mode = lower(string(mode));
+            mode = strrep(mode, "-", "_");
+            if mode == "motor_torque" || mode == "motor_command" || ...
+                    mode == "calculated_cmd" || mode == "calculated_command"
+                mode = "motor_torque_command";
+            end
+            if mode ~= "throttle" && mode ~= "motor_torque_command"
+                error('run_correlation:InvalidPowertrainMode', ...
+                    'PowertrainMode must be "throttle" or "motor_torque_command".');
+            end
+        end
+
         function extractMoTeCLap(opts, replayCsv, manifestFile, repoRoot)
             script = fullfile(repoRoot, 'scripts', 'extract_motec_lap.py');
             args = { ...
@@ -153,14 +166,20 @@ classdef CorrelationAppSupport
             end
         end
 
-        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode)
+        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode)
+            if nargin < 7 || isempty(powertrainMode)
+                powertrainMode = "throttle";
+            end
+            powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
             fprintf('\n=== Correlation Preflight ===\n');
             lts.correlation.CorrelationAppSupport.printExtractionSummary(manifestFile);
             fprintf('Reference mode: free-space replay\n');
             fprintf('Surface mu: %.3f\n', surfaceMu);
             fprintf('Brake mode: %s\n', char(brakeMode));
+            fprintf('Powertrain mode: %s\n', char(powertrainMode));
             lts.correlation.CorrelationAppSupport.printReplayRanges(profile);
             lts.correlation.CorrelationAppSupport.validatePressureBrakeMode(profile, vehicle, brakeMode);
+            lts.correlation.CorrelationAppSupport.validatePowertrainCommandMode(profile, powertrainMode);
             lts.correlation.CorrelationAppSupport.warnOnSteeringScale(profile, vehicle, 120);
             lts.correlation.CorrelationAppSupport.warnOnLateralAccelConsistency(profile, vehicle);
             lts.correlation.CorrelationAppSupport.warnOnBrakeScale(profile);
@@ -197,7 +216,11 @@ classdef CorrelationAppSupport
                 return;
             end
 
-            names = {'throttle_ratio', 'brake_ratio', 'steer_rad', 'yaw_rad', ...
+            names = {'throttle_ratio', 'brake_ratio', ...
+                'brake_pressure_front_bar', 'brake_pressure_rear_bar', ...
+                'regen_torque_nm', 'motor_torque_command_nm', ...
+                'motor_rpm', 'pack_voltage_v', 'pack_current_a', ...
+                'steer_rad', 'speed_mps', 'distance_m', 'yaw_rad', ...
                 'yaw_rate_radps', 'vx_mps', 'vy_mps', 'body_slip_rad'};
             for i = 1:numel(names)
                 name = names{i};
@@ -239,6 +262,33 @@ classdef CorrelationAppSupport
                     lts.util.minFinite(profile.brakePressureRearBar), ...
                     lts.util.maxFinite(profile.brakePressureRearBar));
             end
+            if profile.hasRegenTorque()
+                fprintf('Regen torque range: %.3f to %.3f Nm\n', ...
+                    lts.util.minFinite(profile.regenTorqueNm), ...
+                    lts.util.maxFinite(profile.regenTorqueNm));
+            end
+            if profile.hasMotorTorqueCommand()
+                fprintf('Motor torque command range: %.3f to %.3f Nm\n', ...
+                    lts.util.minFinite(profile.motorTorqueCommandNm), ...
+                    lts.util.maxFinite(profile.motorTorqueCommandNm));
+            end
+            if profile.hasMotorRpm()
+                fprintf('Motor RPM range: %.3f to %.3f rpm\n', ...
+                    lts.util.minFinite(profile.motorRpm), ...
+                    lts.util.maxFinite(profile.motorRpm));
+            end
+            if profile.hasPackPower()
+                packPowerKw = profile.packVoltageV .* profile.packCurrentA / 1000;
+                fprintf('Pack voltage range: %.3f to %.3f V\n', ...
+                    lts.util.minFinite(profile.packVoltageV), ...
+                    lts.util.maxFinite(profile.packVoltageV));
+                fprintf('Pack current range: %.3f to %.3f A\n', ...
+                    lts.util.minFinite(profile.packCurrentA), ...
+                    lts.util.maxFinite(profile.packCurrentA));
+                fprintf('Pack power range: %.3f to %.3f kW\n', ...
+                    lts.util.minFinite(packPowerKw), ...
+                    lts.util.maxFinite(packPowerKw));
+            end
         end
 
         function validatePressureBrakeMode(profile, vehicle, brakeMode)
@@ -259,6 +309,29 @@ classdef CorrelationAppSupport
                 error('run_correlation:MissingBrakePressureCalibration', ...
                     ['BrakeMode "pressure" requires vehicle brakePressure.frontForcePerBar ' ...
                     'and brakePressure.rearForcePerBar calibration.']);
+            end
+        end
+
+        function validatePowertrainCommandMode(profile, powertrainMode)
+            powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
+            if powertrainMode ~= "motor_torque_command"
+                return;
+            end
+
+            if ~profile.hasMotorTorqueCommand()
+                error('run_correlation:MissingMotorTorqueCommandChannel', ...
+                    ['PowertrainMode "motor_torque_command" requires ' ...
+                    'motor_torque_command_nm in the replay CSV. Re-extract the log ' ...
+                    'with the R25 channel map so BAMOCAR Channels Calculated Cmd ' ...
+                    'is decoded and carried through.']);
+            end
+
+            if ~profile.hasPackPower()
+                warning('run_correlation:MissingPackPowerChannels', ...
+                    ['PowertrainMode "motor_torque_command" is missing ' ...
+                    'pack_voltage_v and/or pack_current_a, so the replay cannot ' ...
+                    'limit the calculated command against measured DC pack power. ' ...
+                    'Re-extract with the R25 channel map for accurate speed correlation.']);
             end
         end
 

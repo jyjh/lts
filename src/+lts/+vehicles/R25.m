@@ -60,26 +60,26 @@ function cfg = R25()
     %  ====================================================================
 
     cfg.suspension.front = struct( ...
-        'springRate', 5250, ...         %   [CSV r21: 5.25 N/mm wheel rate (x1000; =springRate when motionRatio=1, else divide by MR^2)] [N/m]
-        'dampingCoeff', 3000, ...        %   TODO derivable: CSV r24/r25: 400% critical damping (multi-speed curve; front). Single-value estimate C = 4.00*2*sqrt(k*m_sprung) = 3712 N*s/m (uses guessed unsprungMass 25 kg/corner). Same % shown for rebound (r25) -- likely a data-entry repeat. [N*s/m]
-        'reboundCoeff', 4500);           % [N*s/m]  (see damping TODO above)
+        'springRate', 52537.9, ...      %   [CSV r21 shows 5.25 N/mm, but CSV r22 roll rate 671.26 N*m/deg at 1210 mm track implies 52.5 N/mm; using corrected wheel rate] [N/m]
+        'dampingCoeff', 13938.1, ...     %   [CSV r24: 400% critical jounce damping at corrected wheel rate and sprung corner mass] [N*s/m]
+        'reboundCoeff', 2787.6);         %   [CSV r25: 80% critical rebound damping at corrected wheel rate and sprung corner mass] [N*s/m]
 
     cfg.suspension.rear = struct( ...
-        'springRate', 5250, ...         %   [CSV r21: 5.25 N/mm wheel rate (x1000)] [N/m]
-        'dampingCoeff', 2800, ...        % [N*s/m]  (see damping TODO above)
-        'reboundCoeff', 4200);           % [N*s/m]
+        'springRate', 52537.9, ...      %   [CSV r21 shows 5.25 N/mm, but CSV r22 roll rate 671.26 N*m/deg at 1210 mm track implies 52.5 N/mm; using corrected wheel rate] [N/m]
+        'dampingCoeff', 10256.8, ...     %   [CSV r24: 300% critical jounce damping at corrected wheel rate and sprung corner mass] [N*s/m]
+        'reboundCoeff', 3077.1);         %   [CSV r25: 90% critical rebound damping at corrected wheel rate and sprung corner mass] [N*s/m]
 
     cfg.suspension.motionRatio    = 1;     %   [CSV r26]
-    cfg.suspension.bumpStopLength = 0.025;    %   TODO derivable: CSV r20: jounce travel F 25.4 mm / R 25.4 mm -> bumpStopLength ~ 0.025 m (front). Verify against installed stop.
+    cfg.suspension.bumpStopLength = 0.0254;   %   [CSV r20: 25.4 mm jounce travel]
     cfg.suspension.bumpStopRate   = 200000;   % [not in spec sheet] [N/m]
     cfg.suspension.tireSpringRate = 200000;   % [not in spec sheet] [N/m]
 
     % Suspension geometry: per-axle lookup tables indexed by wheel travel [m].
     cfg.suspension.geometry.front = struct( ...
-        'travelGrid',       [-0.05 0 0.05], ...
-        'camberCurve',      [0.5 0 -1.5] * pi / 180, ...   %   TODO derivable: CSV r27: ride camber F 49.9/R 66.8 deg/m; r30: static camber F -0.7/R ... deg. Build the 3-pt curve: middle = static camber, slope from ride camber (mind the sign convention: + = top-outward).
-        'toeCurve',         [-0.05 0 0.05] * pi / 180, ... %   [not in spec sheet -- baseline default baseline]
-        'motionRatioCurve', [0.93 0.95 0.97], ...
+        'travelGrid',       [-0.0254 0 0.0254], ...
+        'camberCurve',      [0.56746 -0.7 -1.96746] * pi / 180, ... %   [CSV r27/r30: -0.7 deg static, -49.9 deg/m bump camber gain]
+        'toeCurve',         [0.75 0.75 0.75] * pi / 180, ...        %   [CSV r29: -1.5 deg total front toe-out -> +0.75 deg per wheel in simulator sign convention]
+        'motionRatioCurve', [1 1 1], ...                            %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.034977, ...                     %   [CSV r33: 34.977 mm]
         'casterAngle',      4 * pi / 180, ...                 %   [CSV r35: 4 deg]
         'mechanicalTrail',  0.0143, ...                       %   [CSV r35: 14.3 mm] [m]
@@ -87,10 +87,10 @@ function cfg = R25()
         'kingpinInclination', 10.7 * pi / 180, ...            %   [CSV r36: 10.7 deg]
         'kingpinOffset',    0.05933);                         %   [CSV r36: 59.33 mm] [m]
     cfg.suspension.geometry.rear = struct( ...
-        'travelGrid',       [-0.05 0 0.05], ...
-        'camberCurve',      [0.25 0 -0.8] * pi / 180, ...
-        'toeCurve',         [0.05 0 -0.05] * pi / 180, ...
-        'motionRatioCurve', [0.94 0.95 0.96], ...
+        'travelGrid',       [-0.0254 0 0.0254], ...
+        'camberCurve',      [1.09672 -0.6 -2.29672] * pi / 180, ... %   [CSV r27/r30: -0.6 deg static, -66.8 deg/m bump camber gain]
+        'toeCurve',         [0 0 0] * pi / 180, ...                  %   [CSV r29: 0 deg rear toe]
+        'motionRatioCurve', [1 1 1], ...                             %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.050496, ...                     %   [CSV r33: 50.496 mm]
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
@@ -103,17 +103,18 @@ function cfg = R25()
         'maxWheelSteerAngle', 0.6, ...                      % [not in spec sheet] [rad] (~34 deg)
         'rearSteerRatio',     0.0);
 
-    % Anti-roll bars (baseline -- roll-rate TODO above).
+    % Anti-roll bars: no installed ARB rate is specified in the sheet, and
+    % CSV r22 roll rate is already matched by the corrected wheel rates.
     cfg.suspension.frontArb = struct( ...
-        'stiffness', 1800, ...           % [N/m] at bar end
-        'motionRatio', 0.95, ...         % [not in spec sheet]
-        'leverArm', 0.26, ...            % [not in spec sheet] [m]
-        'enabled', true);
+        'stiffness', 0, ...              % [not in spec sheet]
+        'motionRatio', 1, ...            % [not in spec sheet]
+        'leverArm', 1, ...               % [not in spec sheet] [m]
+        'enabled', false);
     cfg.suspension.rearArb = struct( ...
-        'stiffness', 1100, ...           % [N/m] at bar end
-        'motionRatio', 0.95, ...
-        'leverArm', 0.26, ...
-        'enabled', true);
+        'stiffness', 0, ...              % [not in spec sheet]
+        'motionRatio', 1, ...
+        'leverArm', 1, ...
+        'enabled', false);
 
     cfg.suspension.rollStiffnessOverride = NaN;             % [not in spec sheet] derive from springs+ARBs
     cfg.suspension.coupleChassisRollToLoadTransfer = false; % [not in spec sheet]
@@ -126,7 +127,7 @@ function cfg = R25()
         'heaveDamping', 12000, ...       % [not in spec sheet] [N*s/m]
         'pitchStiffness', 90000, ...     % [not in spec sheet] [N*m/rad]
         'pitchDamping', 6000, ...        % [not in spec sheet]
-        'rollStiffness', 55000, ...      %   TODO derivable: CSV r22: roll rate F 671.26/R 671.26 N*m/deg (chassis-to-wheel). Per-element ARB.stiffness and chassis.rollStiffness must be derived via geometry/MR; left at baseline. [N*m/rad]
+        'rollStiffness', 55000, ...      % [not in spec sheet] fallback only; suspension roll rate derives from springs with ARBs disabled [N*m/rad]
         'rollDamping', 5000, ...         % [not in spec sheet] [N*m*s/rad]
         'torsionalRigidity', 178307, ... %   [CSV r78: 3112.04 N*m/deg (Physical Test) x 180/pi] [N*m/rad]
         'torsionalDamping', 2000);       % [not in spec sheet] [N*m*s/rad]

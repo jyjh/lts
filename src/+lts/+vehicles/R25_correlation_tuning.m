@@ -16,11 +16,15 @@ function cfg = R25_correlation_tuning(cfg)
     cfg.tire.wheelRadius = 0.2032;
     cfg.powertrain.finalDriveRatio = 3.36;
     cfg.powertrain.efficiency = 0.78;
+    % Keep the motoring correlation scalar separate from regen. Direct
+    % torque-command regen is capped by logged pack power, so only final-drive
+    % style losses should be reflected from the pack back to the tire patch.
+    cfg.powertrain.regenEfficiency = 0.92;
 
     % The first pressure-brake pulse in lap5/raw under-decelerates with the
     % spec-sheet pressure calibration. Keep this in the correlation overlay
     % until the line-pressure sensor scaling / hydraulic model is verified.
-    brakePressureGain = 2.9;
+    brakePressureGain = 1.5;
     cfg.brakePressure.frontForcePerBar = ...
         cfg.brakePressure.frontForcePerBar * brakePressureGain;
     cfg.brakePressure.rearForcePerBar = ...
@@ -28,14 +32,14 @@ function cfg = R25_correlation_tuning(cfg)
 
     % Below the first few percent of pedal the real car behaves more like
     % coast than drive; keep this below the logger's low-pedal cruise range.
-    cfg.powertrain.throttleDeadband = 0.07;
+    % cfg.powertrain.throttleDeadband = 0.07;
 
     % BAMOCAR D3 torque mode is better represented as a shaped motor
     % current/torque request than as raw pedal * full-throttle force. This
     % first-pass correlation curve is post-deadband: it softens low/mid pedal
     % while preserving the EMRAX full-throttle envelope at 100% pedal.
     cfg.powertrain.throttleMapInput = [0.00 0.20 0.35 0.60 0.80 1.00];
-    cfg.powertrain.throttleMapOutput = [0.00 0.15 0.35 0.60 0.70 0.90];
+    cfg.powertrain.throttleMapOutput = [0.00 0.20 0.35 0.60 0.80 0.90];
     % cfg.powertrain.motoringDragTorque = 22;
     % cfg.powertrain.motoringDragThrottleThreshold = 0.2;
 

@@ -1,6 +1,9 @@
 classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
     properties
         state = lts.components.Powertrain.PowertrainState()
+        totalRatio = 1
+        efficiency = 1
+        regenEfficiency = NaN
     end
 
     methods
@@ -14,11 +17,11 @@ classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
         end
 
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
-            obj.state.updateFromDrivenWheels(drivenWheelAngularVelocity, 1);
+            obj.state.updateFromDrivenWheels(drivenWheelAngularVelocity, obj.totalRatio);
         end
 
         function updateStateFromVehicleSpeed(obj, vehicleSpeed)
-            obj.state.updateFromVehicleSpeed(vehicleSpeed, 1, 1);
+            obj.state.updateFromVehicleSpeed(vehicleSpeed, 1, obj.totalRatio);
         end
 
         function maxOmega = getMaxDrivenWheelAngularVelocity(~)
@@ -29,12 +32,12 @@ classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
             maxTorque = 0;
         end
 
-        function totalRatio = getTotalGearRatio(~)
-            totalRatio = 1;
+        function totalRatio = getTotalGearRatio(obj)
+            totalRatio = obj.totalRatio;
         end
 
-        function efficiency = getDrivetrainEfficiency(~)
-            efficiency = 1;
+        function efficiency = getDrivetrainEfficiency(obj)
+            efficiency = obj.efficiency;
         end
     end
 end

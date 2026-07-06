@@ -89,6 +89,18 @@ python -m pip install cantools numpy
    Passing `'BrakeMode', 'pressure'` to `lts.app.run_correlation` uses the front and rear
    pressure columns directly with the vehicle brake-pressure calibration instead
    of the peak-normalized `brake_ratio`.
+   For R25 inverter channels, `regen_torque_nm` is extracted from
+   `Throttle Regen Negative Torque Command` / `Throttle Regen Negative Torque C`
+   and `motor_torque_command_nm` from `BAMOCAR Channels Calculated Cmd`. The
+   R25 map also carries `motor_rpm` from `BAMOCAR Channels RPM` and
+   `pack_voltage_v` / `pack_current_a` from the BMS so direct-command replay can
+   be checked against measured DC pack power. The raw torque values use unsigned
+   16-bit storage for signed torque concepts; the extractor wraps `65536` back
+   to zero, decodes values above 32767 by
+   subtracting 65536 before scaling, and exports the throttle-regen channel as
+   negative Nm because it represents the regen-side torque candidate/command.
+   Pack current is treated as positive for discharge/motoring power and negative
+   for charging/regen power.
 4. `lts.correlation.CorrelationReplayProfile` validates the normalized CSV and synthesizes
    distance from speed when the log has no lap-distance channel. Initial-state
    import seeds per-corner tire angular velocity from logged wheel speeds when
@@ -100,6 +112,26 @@ python -m pip install cantools numpy
    mismatches before the simulator runs.
 6. `lts.correlation.TelemetryReplayDriver` feeds those measured controls into `lts.simulation.Simulator.step`
    by distance or by time.
+   Replays default to `PowertrainMode = "throttle"`, which uses logged throttle
+   through the simulated powertrain model. For inverter-command correlation,
+   pass `'PowertrainMode', 'motor_torque_command'`; this requires
+   `motor_torque_command_nm`, bypasses the throttle map and motor torque
+   envelope, and treats the signed channel as a motor-side request. When
+   `pack_voltage_v` and `pack_current_a` are present, the simulator caps the
+   applied motor torque so requested motor mechanical power cannot exceed the
+   logged DC pack power before reflecting the capped torque through drivetrain
+   efficiency and final-drive ratio before the differential split. Motoring
+   torque uses `powertrain.efficiency`; negative direct-mode regen uses
+   `powertrain.regenEfficiency` when present, falling back to
+   `powertrain.efficiency`. The cap uses logged `motor_rpm` when available,
+   then logged replay speed, and only falls back to simulated speed when no
+   measured speed source exists. Negative regen torque uses the inverse
+   drivetrain-loss direction, so wheel-side braking power is larger in magnitude
+   than recovered pack power by the configured regen efficiency. If
+   `Calculated Cmd` has already crossed back positive while measured pack power
+   is still charging, the decoded `regen_torque_nm` request supplies the
+   negative direct-mode request and the pack-power cap still limits the applied
+   value.
 7. `lts.telemetry.TelemetryExporter.exportToMoTeCLog` writes the simulated replay as a new
    `.csv` and `.ld` for direct comparison in MoTeC i2.
 

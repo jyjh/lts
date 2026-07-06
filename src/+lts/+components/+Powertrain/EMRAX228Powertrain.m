@@ -21,7 +21,8 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         totalGearRatio = 3        % Final drive ratio [-]
         mapGearRatio = NaN        % Final drive ratio embedded in the MAT map [-]
         wheelRadius = 0.228        % Effective tire radius [m]
-        drivetrainEfficiency = 0.92  % Additional drivetrain efficiency [0-1]
+        drivetrainEfficiency = 0.92  % Motoring drivetrain efficiency [0-1]
+        regenEfficiency = NaN        % Optional direct-mode regen drivetrain efficiency [0-1]
         motorRotorInertia = 0.07    % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to wheels
         % --- Coastdown / regen (off-throttle motoring) ---
         % Both default OFF to preserve baseline behavior. When regenEnabled is
@@ -344,6 +345,14 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         
         function eff = getDrivetrainEfficiency(obj)
             eff = obj.drivetrainEfficiency;
+        end
+
+        function eff = getRegenDrivetrainEfficiency(obj)
+            eff = obj.regenEfficiency;
+            if ~isfinite(eff)
+                eff = obj.drivetrainEfficiency;
+            end
+            eff = max(0, min(1, eff));
         end
     end
     

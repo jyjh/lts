@@ -52,13 +52,17 @@ classdef VehicleState
 
         % Roll angle [rad] (positive = right side down, e.g. in a left turn)
         rollAngle   = 0
+        rollRate    = 0
 
-        % Front/rear chassis roll angles [rad] and the chassis twist
-        % (front - rear). Equal when the tub is torsionally rigid; they
-        % differ under asymmetric load with finite torsional rigidity.
+        % Front/rear chassis roll angles [rad], rates [rad/s], and chassis
+        % twist (front - rear). Equal when the tub is torsionally rigid;
+        % they differ under asymmetric load with finite torsional rigidity.
         frontRollAngle = 0
         rearRollAngle  = 0
+        frontRollRate  = 0
+        rearRollRate   = 0
         twistAngle     = 0
+        twistRate      = 0
 
         % Ride height deviation from nominal [m] (positive = higher, e.g. over a crest)
         rideHeight  = 0
@@ -150,9 +154,13 @@ classdef VehicleState
             % Compute pitch angle from current dynamics
             obj.pitchAngle = obj.computePitch();
             obj.rollAngle = obj.computeRoll();
+            obj.rollRate = obj.computeRollRate();
             obj.frontRollAngle = obj.computeFrontRoll();
             obj.rearRollAngle  = obj.computeRearRoll();
+            obj.frontRollRate = obj.computeFrontRollRate();
+            obj.rearRollRate  = obj.computeRearRollRate();
             obj.twistAngle     = obj.computeTwist();
+            obj.twistRate      = obj.computeTwistRate();
             obj.rideHeight = obj.computeRideHeight();
 
             % Yaw rate from speed and curvature (bicycle model)
@@ -203,9 +211,13 @@ classdef VehicleState
 
             obj.pitchAngle = obj.computePitch();
             obj.rollAngle = obj.computeRoll();
+            obj.rollRate = obj.computeRollRate();
             obj.frontRollAngle = obj.computeFrontRoll();
             obj.rearRollAngle  = obj.computeRearRoll();
+            obj.frontRollRate = obj.computeFrontRollRate();
+            obj.rearRollRate  = obj.computeRearRollRate();
             obj.twistAngle     = obj.computeTwist();
+            obj.twistRate      = obj.computeTwistRate();
             obj.rideHeight = obj.computeRideHeight();
             obj.time = obj.time + dt;
         end
@@ -244,6 +256,17 @@ classdef VehicleState
             rollAngle = obj.vehicleManager.chassis.getRollAngle();
         end
 
+        function rollRate = computeRollRate(obj)
+            % COMPUTEROLLRATE Average chassis roll rate [rad/s].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getRollRate')
+                rollRate = 0;
+                return;
+            end
+            rollRate = obj.vehicleManager.chassis.getRollRate();
+        end
+
         function rollAngle = computeFrontRoll(obj)
             % COMPUTEFRONTROLL Front-end chassis roll angle [rad].
             if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
@@ -266,6 +289,28 @@ classdef VehicleState
             rollAngle = obj.vehicleManager.chassis.getRearRollAngle();
         end
 
+        function rollRate = computeFrontRollRate(obj)
+            % COMPUTEFRONTROLLRATE Front-end chassis roll rate [rad/s].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getFrontRollRate')
+                rollRate = obj.computeRollRate();
+                return;
+            end
+            rollRate = obj.vehicleManager.chassis.getFrontRollRate();
+        end
+
+        function rollRate = computeRearRollRate(obj)
+            % COMPUTEREARROLLRATE Rear-end chassis roll rate [rad/s].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getRearRollRate')
+                rollRate = obj.computeRollRate();
+                return;
+            end
+            rollRate = obj.vehicleManager.chassis.getRearRollRate();
+        end
+
         function twist = computeTwist(obj)
             % COMPUTETWIST Chassis torsional twist [rad] = front - rear roll.
             if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
@@ -275,6 +320,17 @@ classdef VehicleState
                 return;
             end
             twist = obj.vehicleManager.chassis.getTwistAngle();
+        end
+
+        function twistRate = computeTwistRate(obj)
+            % COMPUTETWISTRATE Chassis torsional twist rate [rad/s].
+            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
+                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
+                    ~ismethod(obj.vehicleManager.chassis, 'getTwistRate')
+                twistRate = obj.frontRollRate - obj.rearRollRate;
+                return;
+            end
+            twistRate = obj.vehicleManager.chassis.getTwistRate();
         end
 
         function rideHeight = computeRideHeight(obj)
@@ -319,9 +375,13 @@ classdef VehicleState
         log.yawAccel  = obj.yawAccel;
         log.pitchAngle = obj.pitchAngle;
         log.rollAngle  = obj.rollAngle;
+        log.rollRate   = obj.rollRate;
         log.frontRollAngle = obj.frontRollAngle;
         log.rearRollAngle  = obj.rearRollAngle;
+        log.frontRollRate  = obj.frontRollRate;
+        log.rearRollRate   = obj.rearRollRate;
         log.twistAngle     = obj.twistAngle;
+        log.twistRate      = obj.twistRate;
         log.rideHeight = obj.rideHeight;
             log.throttle  = obj.throttle;
             log.brake     = obj.brake;

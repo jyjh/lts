@@ -16,7 +16,12 @@
       "label": "Human-readable source identifier written to the extraction manifest so matched calibration paths are auditable.",
       "scale": "Additional multiplier applied together with source_unit_scale. Useful for steering-ratio calibration or sign inversion.",
       "offset": "Optional additive offset applied after scaling. Supported by the extractor even when omitted from this default map.",
+      "transform": "Optional raw-value transform applied before unit scaling. Supported values are documented in _documentation.transforms.",
       "derive": "Fallback derivation rule used when no direct channel source matches."
+    },
+    "transforms": {
+      "uint16_to_int16": "Decode a channel that should be signed int16 but was stored/exported as unsigned. Unsigned values are first wrapped into the 0..65535 range, so 65536 becomes 0, then values above 32767 are converted by subtracting 65536 before scaling.",
+      "unsigned_negative_torque": "Decode the uint16 signed storage quirk, then express the result as negative torque. This is used for Throttle Regen Negative Torque Command because the logger stores the regen-side magnitude/candidate as an unsigned positive value even though correlation wants regen in signed Nm."
     },
     "derive_fields": {
       "method": "Derivation algorithm name. The supported method in this workflow is 'brake_pressure'.",
@@ -37,6 +42,11 @@
       "brake_ratio": "Driver brake command as a normalized ratio. Can be read directly or derived from front and rear pressure channels.",
       "brake_pressure_front_bar": "Front brake line pressure in bar, carried through for pressure-based correlation braking.",
       "brake_pressure_rear_bar": "Rear brake line pressure in bar, carried through for pressure-based correlation braking.",
+      "regen_torque_nm": "Logged throttle regen negative torque command in signed Nm. The raw channel is decoded from unsigned storage and exported negative by convention; it is a regen candidate/command trace and can be nonzero while throttle is active.",
+      "motor_torque_command_nm": "Logged BAMOCAR calculated torque command in signed Nm. The raw channel is decoded from unsigned int16 storage so negative commanded torque appears below zero.",
+      "motor_rpm": "Logged BAMOCAR motor speed in rpm, used to limit direct calculated-command replay against measured pack power without feeding back simulated speed error.",
+      "pack_voltage_v": "Logged tractive battery pack voltage in volts, used to sanity-limit direct calculated-command replay against measured DC pack power.",
+      "pack_current_a": "Logged tractive battery pack current in amps. Positive current is treated as pack discharge/motoring power and negative current as charging/regen power.",
       "steer_rad": "Road-wheel steering angle in radians. Use source-specific scale for steering sensor ratio and sign conventions.",
       "speed_mps": "Vehicle speed in meters per second.",
       "yaw_rad": "Vehicle yaw or heading angle in radians.",
@@ -133,6 +143,79 @@
         "Pa": 0.00001,
         "MPa": 10.0,
         "psi": 0.0689475729
+      }
+    },
+    "regen_torque_nm": {
+      "names": [
+        "Throttle Regen Negative Torque Command",
+        "Throttle Regen Negative Torque C"
+      ],
+      "required": false,
+      "default": null,
+      "transform": "unsigned_negative_torque",
+      "scale": 0.01,
+      "source_unit_scale": {
+        "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_torque_command_nm": {
+      "names": [
+        "BAMOCAR Channels Calculated Cmd",
+        "BAMOCAR Calculated Cmd",
+        "Calculated Cmd",
+        "Motor Torque Command"
+      ],
+      "required": false,
+      "default": null,
+      "transform": "uint16_to_int16",
+      "scale": 0.01,
+      "source_unit_scale": {
+        "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_rpm": {
+      "names": [
+        "BAMOCAR Channels RPM",
+        "BAMOCAR RPM",
+        "Motor RPM",
+        "Inverter Motor RPM"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "rpm": 1.0,
+        "RPM": 1.0,
+        "": 1.0
+      }
+    },
+    "pack_voltage_v": {
+      "names": [
+        "BMS Channels Pack Voltage",
+        "Battery Pack Voltage",
+        "HV Pack Voltage",
+        "Pack Voltage"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "V": 1.0,
+        "v": 1.0
+      }
+    },
+    "pack_current_a": {
+      "names": [
+        "BMS Channels Pack Current",
+        "Battery Pack Current",
+        "HV Pack Current",
+        "Pack Current"
+      ],
+      "required": false,
+      "default": null,
+      "source_unit_scale": {
+        "A": 1.0,
+        "a": 1.0
       }
     },
     "steer_rad": {

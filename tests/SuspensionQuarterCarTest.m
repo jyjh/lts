@@ -213,6 +213,10 @@ end
 
 function testStaticBumpStopContributesToRollStiffness(testCase)
 config = lts.vehicles.R25();
+% This is a bump-stop mechanics test, not an R25 static setup assertion. The
+% spec-matched R25 wheel rate should not sit on its 25.4 mm stops at rest, so
+% force immediate engagement here.
+config.suspension.bumpStopLength = 0;
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;

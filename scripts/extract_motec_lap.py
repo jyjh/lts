@@ -21,6 +21,11 @@ REPLAY_COLUMNS = [
     "brake_ratio",
     "brake_pressure_front_bar",
     "brake_pressure_rear_bar",
+    "regen_torque_nm",
+    "motor_torque_command_nm",
+    "motor_rpm",
+    "pack_voltage_v",
+    "pack_current_a",
     "steer_rad",
     "speed_mps",
     "wheel_speed_fl_mps",
@@ -170,6 +175,7 @@ def extract_direct_signal(data, output_name: str, spec: dict, required: bool):
         return None
 
     values = np.asarray(channel.data, dtype=float)
+    values, transform = apply_transform(values, matched_spec)
     scale = unit_scale(matched_spec, getattr(channel, "unit", ""))
     offset = float(matched_spec.get("offset", 0.0))
     values = values * scale + offset
@@ -185,12 +191,37 @@ def extract_direct_signal(data, output_name: str, spec: dict, required: bool):
         "sample_count": int(channel.data_len),
         "scale_applied": scale,
         "offset_applied": offset,
+        "transform_applied": transform,
         "source_label": matched_spec.get("label", ""),
         "time": channel_time(channel),
         "values": values,
     }
     signal.update(signal_stats(values))
     return signal
+
+
+def apply_transform(values: np.ndarray, spec: dict) -> tuple[np.ndarray, str]:
+    transform = str(spec.get("transform", "")).strip()
+    if not transform:
+        return values, ""
+
+    if transform == "uint16_to_int16":
+        return uint16_to_int16(values), transform
+
+    if transform == "unsigned_negative_torque":
+        decoded = uint16_to_int16(values)
+        return np.where(decoded < 0.0, decoded, -np.abs(decoded)), transform
+
+    raise ValueError(f"Unsupported transform: {transform}")
+
+
+def uint16_to_int16(values: np.ndarray) -> np.ndarray:
+    decoded = np.asarray(values, dtype=float).copy()
+    finite_unsigned = np.isfinite(decoded) & (decoded >= 0.0) & (decoded <= 65536.0)
+    decoded[finite_unsigned] = np.mod(decoded[finite_unsigned], 65536.0)
+    finite_wrapped = np.isfinite(decoded) & (decoded > 32767.0) & (decoded <= 65535.0)
+    decoded[finite_wrapped] = decoded[finite_wrapped] - 65536.0
+    return decoded
 
 
 def derive_raw_signal(data, output_name: str, spec: dict, derive_spec: dict):
@@ -320,6 +351,7 @@ def signal_manifest(signal: dict) -> dict:
         "sample_count": signal["sample_count"],
         "scale_applied": signal["scale_applied"],
         "offset_applied": signal["offset_applied"],
+        "transform_applied": signal.get("transform_applied", ""),
         "source_label": signal.get("source_label", ""),
         "min_value": signal.get("min_value"),
         "max_value": signal.get("max_value"),

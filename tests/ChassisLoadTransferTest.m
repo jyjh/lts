@@ -50,6 +50,27 @@ verifyGreaterThan(testCase, chassis.state.frontRollAccel, 0);
 verifyLessThan(testCase, chassis.state.rearRollAccel, 0);
 end
 
+function testLinkedSuspensionLetsFrontAndRearRollRatesSeparate(testCase)
+[~, suspension, chassis] = createVehicleWithChassis();
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+[KwF, KwR] = suspension.getAxleRollStiffness();
+verifyGreaterThan(testCase, abs(KwF - KwR), 1e-6);
+
+chassis.torsionalRigidity = 5000;
+chassis.torsionalDamping = 250;
+for idx = 1:100
+    chassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+end
+
+verifyGreaterThan(testCase, abs(chassis.getFrontRollRate() - ...
+    chassis.getRearRollRate()), 1e-7);
+verifyGreaterThan(testCase, abs(chassis.getTwistRate()), 1e-7);
+verifyGreaterThan(testCase, abs(chassis.getFrontRollAngle() - ...
+    chassis.getRearRollAngle()), 1e-8);
+end
+
 function testZeroYawAccelerationMatchesScalarLateralRoll(testCase)
 [~, ~, scalarChassis] = createVehicleWithChassis();
 [~, ~, explicitChassis] = createVehicleWithChassis();
@@ -90,6 +111,84 @@ expectedSprungMass = config.totalMass - 4 * config.unsprungMass;
 verifyEqual(testCase, vehicle.chassis.sprungMass, expectedSprungMass, 'AbsTol', 1e-12);
 verifyFalse(testCase, isempty(vehicle.chassis.suspension));
 verifyFalse(testCase, isempty(vehicle.suspension.chassis));
+end
+
+function testR25WheelRateMatchesSpecSheetRollRate(testCase)
+config = lts.vehicles.R25();
+expectedRollRateNmPerDeg = 671.26;
+expectedWheelRate = expectedRollRateNmPerDeg * 180 / pi * ...
+    2 / config.trackWidth^2;
+
+verifyEqual(testCase, config.suspension.front.springRate, expectedWheelRate, 'AbsTol', 0.1);
+verifyEqual(testCase, config.suspension.rear.springRate, expectedWheelRate, 'AbsTol', 0.1);
+
+frontSpringRollRate = config.suspension.front.springRate * ...
+    config.suspension.motionRatio^2 * config.trackWidth^2 / 2 * pi / 180;
+rearSpringRollRate = config.suspension.rear.springRate * ...
+    config.suspension.motionRatio^2 * config.trackWidth^2 / 2 * pi / 180;
+
+verifyEqual(testCase, frontSpringRollRate, expectedRollRateNmPerDeg, 'AbsTol', 1.0);
+verifyEqual(testCase, rearSpringRollRate, expectedRollRateNmPerDeg, 'AbsTol', 1.0);
+
+frontBar = lts.components.Suspension.AntiRollBar( ...
+    config.suspension.frontArb.stiffness, ...
+    config.suspension.frontArb.motionRatio, ...
+    config.suspension.frontArb.leverArm, ...
+    config.suspension.frontArb.enabled);
+rearBar = lts.components.Suspension.AntiRollBar( ...
+    config.suspension.rearArb.stiffness, ...
+    config.suspension.rearArb.motionRatio, ...
+    config.suspension.rearArb.leverArm, ...
+    config.suspension.rearArb.enabled);
+
+verifyFalse(testCase, config.suspension.frontArb.enabled);
+verifyFalse(testCase, config.suspension.rearArb.enabled);
+verifyEqual(testCase, frontBar.getWheelRateStiffness(), 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, rearBar.getWheelRateStiffness(), 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, frontSpringRollRate + frontBar.getWheelRateStiffness() * ...
+    config.trackWidth^2 / 2 * pi / 180, expectedRollRateNmPerDeg, 'AbsTol', 1.0);
+verifyEqual(testCase, rearSpringRollRate + rearBar.getWheelRateStiffness() * ...
+    config.trackWidth^2 / 2 * pi / 180, expectedRollRateNmPerDeg, 'AbsTol', 1.0);
+end
+
+function testR25DampingMatchesSpecSheetPercentCritical(testCase)
+config = lts.vehicles.R25();
+sprungMass = config.totalMass - 4 * config.unsprungMass;
+frontSprungCornerMass = sprungMass * config.staticFrontWeight / 2;
+rearSprungCornerMass = sprungMass * (1 - config.staticFrontWeight) / 2;
+frontCritical = 2 * sqrt(config.suspension.front.springRate * frontSprungCornerMass);
+rearCritical = 2 * sqrt(config.suspension.rear.springRate * rearSprungCornerMass);
+
+verifyEqual(testCase, config.suspension.front.dampingCoeff, 4.00 * frontCritical, 'AbsTol', 0.2);
+verifyEqual(testCase, config.suspension.rear.dampingCoeff, 3.00 * rearCritical, 'AbsTol', 0.2);
+verifyEqual(testCase, config.suspension.front.reboundCoeff, 0.80 * frontCritical, 'AbsTol', 0.2);
+verifyEqual(testCase, config.suspension.rear.reboundCoeff, 0.90 * rearCritical, 'AbsTol', 0.2);
+end
+
+function testR25SuspensionGeometryMatchesSpecSheetStatics(testCase)
+config = lts.vehicles.R25();
+front = config.suspension.geometry.front;
+rear = config.suspension.geometry.rear;
+
+verifyEqual(testCase, config.suspension.bumpStopLength, 0.0254, 'AbsTol', 1e-12);
+verifyEqual(testCase, front.travelGrid, [-0.0254 0 0.0254], 'AbsTol', 1e-12);
+verifyEqual(testCase, rear.travelGrid, [-0.0254 0 0.0254], 'AbsTol', 1e-12);
+verifyEqual(testCase, front.motionRatioCurve, [1 1 1], 'AbsTol', 1e-12);
+verifyEqual(testCase, rear.motionRatioCurve, [1 1 1], 'AbsTol', 1e-12);
+
+frontCamberDeg = front.camberCurve * 180 / pi;
+rearCamberDeg = rear.camberCurve * 180 / pi;
+frontCamberSlope = (frontCamberDeg(3) - frontCamberDeg(1)) / ...
+    (front.travelGrid(3) - front.travelGrid(1));
+rearCamberSlope = (rearCamberDeg(3) - rearCamberDeg(1)) / ...
+    (rear.travelGrid(3) - rear.travelGrid(1));
+
+verifyEqual(testCase, frontCamberDeg(2), -0.7, 'AbsTol', 1e-6);
+verifyEqual(testCase, rearCamberDeg(2), -0.6, 'AbsTol', 1e-6);
+verifyEqual(testCase, frontCamberSlope, -49.9, 'AbsTol', 1e-6);
+verifyEqual(testCase, rearCamberSlope, -66.8, 'AbsTol', 1e-6);
+verifyEqual(testCase, front.toeCurve * 180 / pi, [0.75 0.75 0.75], 'AbsTol', 1e-12);
+verifyEqual(testCase, rear.toeCurve * 180 / pi, [0 0 0], 'AbsTol', 1e-12);
 end
 
 function testTwistUsesSeparateFrontAndRearRollForCornerKinematics(testCase)
@@ -183,6 +282,10 @@ geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
 suspension = createSuspension(vehicle, config.suspension, unsprungMass, geometry);
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
+chassis = chassis.setSuspension(suspension);
+suspension.chassis = chassis;
+vehicle.chassis = chassis;
+vehicle.suspension = suspension;
 end
 
 function suspension = createSuspension(vehicle, suspCfg, unsprungMass, geometry)
