@@ -21,14 +21,10 @@ function cfg = R25_correlation_tuning(cfg)
     % style losses should be reflected from the pack back to the tire patch.
     cfg.powertrain.regenEfficiency = 0.92;
 
-    % The first pressure-brake pulse in lap5/raw under-decelerates with the
-    % spec-sheet pressure calibration. Keep this in the correlation overlay
-    % until the line-pressure sensor scaling / hydraulic model is verified.
-    brakePressureGain = 1.5;
-    cfg.brakePressure.frontForcePerBar = ...
-        cfg.brakePressure.frontForcePerBar * brakePressureGain;
-    cfg.brakePressure.rearForcePerBar = ...
-        cfg.brakePressure.rearForcePerBar * brakePressureGain;
+    % Keep the pressure-brake calibration at the spec-sheet 1 g force table.
+    % The previous 1.5x correlation gain compensated for the old planar
+    % integration energy error and now over-brakes the 28-30 s stop, which
+    % carries a speed deficit into the later high-lateral sector.
 
     % Below the first few percent of pedal the real car behaves more like
     % coast than drive; keep this below the logger's low-pedal cruise range.

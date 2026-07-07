@@ -178,7 +178,7 @@ verifyEqual(testCase, forces.coastdownTorqueTotal, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
-function testMotorTorqueCommandPowerCapPrefersLoggedMotorRpm(testCase)
+function testMotorTorqueCommandPowerCapUsesSimulatedMotorSpeedBeforeLoggedRpm(testCase)
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -207,7 +207,7 @@ input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
 
 [~, forces] = simulator.step(state, input, ref);
 
-motorOmega = 6000 * 2 * pi / 60;
+motorOmega = speed / tire.RL.wheelRadius * powertrain.totalRatio;
 expectedMotorTorque = 1500 / motorOmega;
 expectedWheelTorque = expectedMotorTorque * powertrain.totalRatio * powertrain.efficiency;
 verifyEqual(testCase, forces.motorTorque, expectedMotorTorque, 'AbsTol', 1e-12);
