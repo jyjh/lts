@@ -177,9 +177,81 @@
       ]
     },
     "speed_mps": {
-      "names": ["Speed mps", "Vehicle Speed Value", "Vehicle Speed", "GPS Speed"],
+      "names": ["GPS Speed", "Speed mps", "Vehicle Speed", "Vehicle Speed Value"],
       "required": true,
       "default": 0.0,
+      "prefer_derive": true,
+      "derive": {
+        "method": "wheel_speed_median",
+        "minimum_channels": 2,
+        "min_valid_speed_mps": 0.5,
+        "stuck_zero_speed_mps": 0.25,
+        "sources": {
+          "fl": {
+            "names": [
+              "Wheel Speed Front Left Sensor Linear",
+              "Wheel Speed Front Left",
+              "Front Left Wheel Speed",
+              "Wheel Speed FL",
+              "FL Wheel Speed",
+              "Speed FL"
+            ],
+            "source_unit_scale": {
+              "m/s": 1.0,
+              "km/h": 0.2777777777777778
+            }
+          },
+          "fr": {
+            "names": [
+              "Wheel Speed Front Right Sensor Linear",
+              "Wheel Speed Front Right",
+              "Front Right Wheel Speed",
+              "Wheel Speed FR",
+              "FR Wheel Speed",
+              "Speed FR"
+            ],
+            "source_unit_scale": {
+              "m/s": 1.0,
+              "km/h": 0.2777777777777778
+            }
+          },
+          "rl": {
+            "names": [
+              "Wheel Speed Rear Left Sensor Linear",
+              "Wheel Speed Rear Left",
+              "Rear Left Wheel Speed",
+              "Wheel Speed RL",
+              "RL Wheel Speed",
+              "Speed RL"
+            ],
+            "source_unit_scale": {
+              "m/s": 1.0,
+              "km/h": 0.2777777777777778
+            }
+          },
+          "rr": {
+            "names": [
+              "Wheel Speed Rear Right Sensor Linear",
+              "Wheel Speed Rear Right",
+              "Rear Right Wheel Speed",
+              "Wheel Speed RR",
+              "RR Wheel Speed",
+              "Speed RR"
+            ],
+            "source_unit_scale": {
+              "m/s": 1.0,
+              "km/h": 0.2777777777777778
+            }
+          }
+        },
+        "fallback": {
+          "names": ["GPS Speed", "Speed mps", "Vehicle Speed", "Vehicle Speed Value"],
+          "source_unit_scale": {
+            "m/s": 1.0,
+            "km/h": 0.2777777777777778
+          }
+        }
+      },
       "source_unit_scale": {
         "m/s": 1.0,
         "km/h": 0.2777777777777778

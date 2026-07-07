@@ -144,11 +144,16 @@ def channel_time(channel) -> np.ndarray:
 
 
 def extract_raw_signal(data, output_name: str, spec: dict):
+    derive_spec = spec.get("derive")
+    if bool(spec.get("prefer_derive", False)) and derive_spec:
+        signal = derive_raw_signal(data, output_name, spec, derive_spec)
+        if signal is not None:
+            return signal
+
     signal = extract_direct_signal(data, output_name, spec, required=False)
     if signal is not None:
         return signal
 
-    derive_spec = spec.get("derive")
     if derive_spec:
         return derive_raw_signal(data, output_name, spec, derive_spec)
 
@@ -228,8 +233,134 @@ def derive_raw_signal(data, output_name: str, spec: dict, derive_spec: dict):
     method = derive_spec.get("method", "")
     if method == "brake_pressure":
         return derive_brake_ratio_from_pressure(data, output_name, spec, derive_spec)
+    if method == "wheel_speed_median":
+        return derive_speed_from_wheel_speed_median(data, output_name, spec, derive_spec)
 
     raise ValueError(f"Unsupported derive method for {output_name}: {method}")
+
+
+def derive_speed_from_wheel_speed_median(data, output_name: str, spec: dict, derive_spec: dict):
+    source_specs = derive_spec.get("sources", {})
+    if not source_specs:
+        return None
+
+    components = {}
+    for name, source_spec in source_specs.items():
+        signal = extract_direct_signal(
+            data,
+            f"{output_name}.{name}",
+            source_spec,
+            required=False,
+        )
+        if signal is not None:
+            components[name] = signal
+
+    minimum_channels = int(derive_spec.get("minimum_channels", 2))
+    if len(components) < minimum_channels:
+        return None
+
+    freq = max(max(signal["frequency_hz"] for signal in components.values()), 1.0)
+    duration = min(float(signal["time"][-1]) for signal in components.values())
+    if duration <= 0:
+        return None
+
+    sample_count = max(2, int(math.floor(duration * freq)) + 1)
+    time = np.arange(sample_count, dtype=float) / freq
+    time = time[time <= duration + 1e-12]
+
+    names = list(components.keys())
+    matrix = np.column_stack([
+        resample_signal(components[name], time, np.nan)
+        for name in names
+    ])
+    valid_matrix, rejected = reject_failed_wheel_speed_channels(matrix, derive_spec, names)
+    valid_count = np.sum(np.isfinite(valid_matrix), axis=1)
+
+    values = np.full(len(time), np.nan)
+    enough = valid_count >= minimum_channels
+    if np.any(enough):
+        values[enough] = np.nanmedian(valid_matrix[enough, :], axis=1)
+
+    fallback_spec = derive_spec.get("fallback")
+    fallback = None
+    if fallback_spec:
+        fallback = extract_direct_signal(
+            data,
+            f"{output_name}.fallback",
+            fallback_spec,
+            required=False,
+        )
+    if fallback is not None:
+        fallback_values = resample_signal(fallback, time, np.nan)
+        values[~np.isfinite(values)] = fallback_values[~np.isfinite(values)]
+
+    if not np.any(np.isfinite(values)):
+        return None
+
+    if "clamp" in spec:
+        lo, hi = spec["clamp"]
+        values = np.clip(values, float(lo), float(hi))
+
+    signal = {
+        "name": "median valid wheel speed",
+        "unit": "m/s",
+        "frequency_hz": float(freq),
+        "sample_count": int(len(time)),
+        "scale_applied": 1.0,
+        "offset_applied": 0.0,
+        "source": "derived",
+        "derive_method": "wheel_speed_median",
+        "minimum_channels": minimum_channels,
+        "rejected_components": rejected,
+        "components": {
+            name: signal_manifest(signal)
+            for name, signal in components.items()
+        },
+        "time": time,
+        "values": values,
+    }
+    if fallback is not None:
+        signal["fallback"] = signal_manifest(fallback)
+    signal.update(signal_stats(values))
+    return signal
+
+
+def reject_failed_wheel_speed_channels(
+    values: np.ndarray,
+    derive_spec: dict,
+    names: list[str] | None = None,
+) -> tuple[np.ndarray, list[str]]:
+    values = np.asarray(values, dtype=float).copy()
+    min_valid_speed = float(derive_spec.get("min_valid_speed_mps", 0.5))
+    stuck_zero_speed = float(derive_spec.get("stuck_zero_speed_mps", 0.25))
+    if names is None:
+        names = list(derive_spec.get("sources", {}).keys())
+    rejected = []
+
+    moving_sample = row_nanmax(values) > min_valid_speed
+    for idx in range(values.shape[1]):
+        channel = values[:, idx]
+        moving_values = channel[moving_sample & np.isfinite(channel)]
+        if moving_values.size == 0:
+            continue
+        if np.nanmax(np.abs(moving_values)) <= stuck_zero_speed:
+            values[:, idx] = np.nan
+            if idx < len(names):
+                rejected.append(names[idx])
+
+    moving_with_other = row_nanmax(values) > min_valid_speed
+    failed_sample = moving_with_other[:, None] & np.isfinite(values) & (
+        np.abs(values) <= stuck_zero_speed
+    )
+    values[failed_sample] = np.nan
+    return values, rejected
+
+
+def row_nanmax(values: np.ndarray) -> np.ndarray:
+    finite = np.isfinite(values)
+    if not np.any(finite):
+        return np.full(values.shape[0], np.nan)
+    return np.max(np.where(finite, values, -np.inf), axis=1)
 
 
 def derive_brake_ratio_from_pressure(data, output_name: str, spec: dict, derive_spec: dict):

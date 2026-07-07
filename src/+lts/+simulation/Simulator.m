@@ -1363,13 +1363,6 @@ classdef Simulator < handle
         function motorOmega = motorAngularVelocityForPowerLimit(obj, input)
             motorOmega = NaN;
             vm = obj.vehicleManager;
-            if ~isempty(vm) && ~isempty(vm.powertrain) && ~isempty(vm.powertrain.state)
-                motorOmega = vm.powertrain.state.motorAngularVelocity;
-                if isfinite(motorOmega)
-                    return;
-                end
-            end
-
             loggedMotorRpm = localGetField(input, 'motorRpm', NaN);
             if isfinite(loggedMotorRpm)
                 motorOmega = loggedMotorRpm * 2 * pi / 60;
@@ -1388,6 +1381,13 @@ classdef Simulator < handle
                 end
                 if isfinite(ratio) && ratio > 0 && isfinite(wheelRadius) && wheelRadius > 0
                     motorOmega = replaySpeed / wheelRadius * ratio;
+                    return;
+                end
+            end
+
+            if ~isempty(vm) && ~isempty(vm.powertrain) && ~isempty(vm.powertrain.state)
+                motorOmega = vm.powertrain.state.motorAngularVelocity;
+                if isfinite(motorOmega)
                     return;
                 end
             end

@@ -44,13 +44,13 @@ $--------------------------------------------------scaling coefficients
 [SCALING_COEFFICIENTS]
 LFZO                         = 1                 
 LCX                          = 1                 
-LMUX                         = 0.7                 
+LMUX                         = 0.5                 
 LEX                          = 1                 
 LKX                          = 1                 
 LHX                          = 1                 
 LVX                          = 1                 
 LCY                          = 1                 
-LMUY                         = 0.7                 
+LMUY                         = 0.5                 
 LEY                          = 1                 
 LKY                          = 1                 
 LHY                          = 1                 
