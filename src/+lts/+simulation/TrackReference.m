@@ -138,86 +138,18 @@ classdef TrackReference
             searchStart = max(1, min(previousIdx - backWindow, nSegments));
             searchEnd = min(nSegments, max(previousIdx + forwardWindow, searchStart));
 
-            bestDist2 = inf;
-            bestIdx = searchStart;
-            bestT = 0;
-            bestPoint = trackData.points(bestIdx, :);
-
-            queryPoint = [x, y];
-            for segIdx = searchStart:searchEnd
-                p0 = trackData.points(segIdx, :);
-                if hasSegmentCache
-                    v = trackData.segmentVectors(segIdx, :);
-                    invLen2 = trackData.segmentInvLen2(segIdx);
-                else
-                    p1 = trackData.points(segIdx + 1, :);
-                    v = p1 - p0;
-                    len2 = dot(v, v);
-                    if len2 > eps
-                        invLen2 = 1 / len2;
-                    else
-                        invLen2 = 0;
-                    end
-                end
-                if invLen2 <= 0
-                    t = 0;
-                    projectedPoint = p0;
-                else
-                    t = dot(queryPoint - p0, v) * invLen2;
-                    t = max(0, min(1, t));
-                    projectedPoint = p0 + t * v;
-                end
-
-                dist2 = sum((queryPoint - projectedPoint).^2);
-                if dist2 < bestDist2
-                    bestDist2 = dist2;
-                    bestIdx = segIdx;
-                    bestT = t;
-                    bestPoint = projectedPoint;
-                end
-            end
+            [bestDist2, bestIdx, bestT, bestPoint] = ...
+                lts.simulation.TrackReference.nearestSegmentProjection( ...
+                    x, y, trackData, searchStart, searchEnd, hasSegmentCache);
 
             localHitBoundary = (bestIdx == searchStart && searchStart > 1) || ...
                 (bestIdx == searchEnd && searchEnd < nSegments);
             fallbackDistance = max(2 * trackData.trackHalfWidth, 5);
             if (localHitBoundary || bestDist2 > fallbackDistance^2) && ...
                     (searchStart > 1 || searchEnd < nSegments)
-                bestDist2 = inf;
-                bestIdx = 1;
-                bestT = 0;
-                bestPoint = trackData.points(1, :);
-                for segIdx = 1:nSegments
-                    p0 = trackData.points(segIdx, :);
-                    if hasSegmentCache
-                        v = trackData.segmentVectors(segIdx, :);
-                        invLen2 = trackData.segmentInvLen2(segIdx);
-                    else
-                        p1 = trackData.points(segIdx + 1, :);
-                        v = p1 - p0;
-                        len2 = dot(v, v);
-                        if len2 > eps
-                            invLen2 = 1 / len2;
-                        else
-                            invLen2 = 0;
-                        end
-                    end
-                    if invLen2 <= 0
-                        t = 0;
-                        projectedPoint = p0;
-                    else
-                        t = dot(queryPoint - p0, v) * invLen2;
-                        t = max(0, min(1, t));
-                        projectedPoint = p0 + t * v;
-                    end
-
-                    dist2 = sum((queryPoint - projectedPoint).^2);
-                    if dist2 < bestDist2
-                        bestDist2 = dist2;
-                        bestIdx = segIdx;
-                        bestT = t;
-                        bestPoint = projectedPoint;
-                    end
-                end
+                [bestDist2, bestIdx, bestT, bestPoint] = ...
+                    lts.simulation.TrackReference.nearestSegmentProjection( ...
+                        x, y, trackData, 1, nSegments, hasSegmentCache);
             end
 
             if hasSegmentCache
@@ -286,6 +218,38 @@ classdef TrackReference
             trackData.segmentVectors = segmentVectors;
             trackData.segmentLengths = segmentLengths;
             trackData.segmentInvLen2 = segmentInvLen2;
+        end
+
+        function [bestDist2, bestIdx, bestT, bestPoint] = nearestSegmentProjection( ...
+                x, y, trackData, searchStart, searchEnd, hasSegmentCache)
+            idxRange = searchStart:searchEnd;
+            p0 = trackData.points(idxRange, :);
+            if hasSegmentCache
+                v = trackData.segmentVectors(idxRange, :);
+                invLen2 = trackData.segmentInvLen2(idxRange);
+            else
+                p1 = trackData.points(idxRange + 1, :);
+                v = p1 - p0;
+                len2 = sum(v.^2, 2);
+                invLen2 = zeros(size(len2));
+                validLen = len2 > eps;
+                invLen2(validLen) = 1 ./ len2(validLen);
+            end
+
+            qx = x - p0(:, 1);
+            qy = y - p0(:, 2);
+            t = (qx .* v(:, 1) + qy .* v(:, 2)) .* invLen2(:);
+            t(invLen2(:) <= 0) = 0;
+            t = max(0, min(1, t));
+
+            projX = p0(:, 1) + t .* v(:, 1);
+            projY = p0(:, 2) + t .* v(:, 2);
+            dist2 = (x - projX).^2 + (y - projY).^2;
+
+            [bestDist2, relIdx] = min(dist2);
+            bestIdx = idxRange(relIdx);
+            bestT = t(relIdx);
+            bestPoint = [projX(relIdx), projY(relIdx)];
         end
     end
 end

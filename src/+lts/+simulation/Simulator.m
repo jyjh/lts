@@ -76,6 +76,8 @@ classdef Simulator < handle
         cachedDriverInputMethod   % 'computeInput' | 'computeInputs' | '' (cached)
         cachedFrontArm = NaN       % CG-to-front-axle moment arm [m] (run invariant)
         cachedRearArm = NaN        % CG-to-rear-axle moment arm [m] (run invariant)
+        cachedRollingResistanceCoeff = NaN
+        cachedPowertrainHasCoastdown
     end
     
     methods
@@ -288,10 +290,7 @@ classdef Simulator < handle
             % per-wheel torque model (sum of Crr*Fz over the four corners).
             % This is already reflected in the tire Fx above, not applied again.
             corners = vm.tire;
-            rollingResistanceCoeff = 0;
-            if isprop(vm.tire, 'rollingResistanceCoeff')
-                rollingResistanceCoeff = vm.tire.rollingResistanceCoeff;
-            end
+            rollingResistanceCoeff = obj.getRollingResistanceCoeff();
             F_rollResist = rollingResistanceCoeff * ...
                 (corners.FL.normalForce + corners.FR.normalForce + ...
                  corners.RL.normalForce + corners.RR.normalForce);
@@ -1228,7 +1227,11 @@ classdef Simulator < handle
                     % is signed driveline torque so ramp-plate LSDs can use
                     % their decel ramps. Hydraulic brake torque is separate.
                     totalCoastdownTorque = 0;
-                    if ismethod(vm.powertrain, 'computeCoastdownTorque')
+                    if isempty(obj.cachedPowertrainHasCoastdown)
+                        obj.cachedPowertrainHasCoastdown = ...
+                            ismethod(vm.powertrain, 'computeCoastdownTorque');
+                    end
+                    if obj.cachedPowertrainHasCoastdown
                         totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
                             state.speed, throttle);
                     end
@@ -1693,6 +1696,10 @@ classdef Simulator < handle
         end
 
         function input = normalizeDriverInput(obj, input, state)
+            if isstruct(input) && isfield(input, 'normalized') && ...
+                    logical(input.normalized)
+                return;
+            end
             if ~isfield(input, 'throttle') || isempty(input.throttle)
                 input.throttle = 0;
             end
@@ -1734,6 +1741,7 @@ classdef Simulator < handle
                     input.steer = previousSteer + delta;
                 end
             end
+            input.normalized = true;
         end
 
         function maxSteer = getMaxSteeringAngle(obj)
@@ -2019,6 +2027,9 @@ classdef Simulator < handle
             end
             if obj.cachedSuspensionHasKinematics
                 kin = vm.suspension.getCornerKinematics();
+                if isa(vm.suspension, 'lts.components.Suspension.SuspensionManager')
+                    return;
+                end
             else
                 kin = struct();
                 kin.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steer);
@@ -2067,11 +2078,33 @@ classdef Simulator < handle
 
         function surfaceMu = getStateSurfaceMu(~, state)
             surfaceMu = 1.2;
-            hasMu = (isobject(state) && isprop(state, 'mu')) || ...
-                (isstruct(state) && isfield(state, 'mu'));
-            if hasMu && ~isempty(state.mu) && isfinite(state.mu)
+            if isa(state, 'lts.simulation.VehicleState')
+                surfaceMu = state.mu;
+                if isempty(surfaceMu) || ~isfinite(surfaceMu)
+                    surfaceMu = 1.2;
+                end
+                return;
+            end
+            if isstruct(state) && isfield(state, 'mu') && ...
+                    ~isempty(state.mu) && isfinite(state.mu)
                 surfaceMu = state.mu;
             end
+        end
+
+        function coeff = getRollingResistanceCoeff(obj)
+            if isfinite(obj.cachedRollingResistanceCoeff)
+                coeff = obj.cachedRollingResistanceCoeff;
+                return;
+            end
+            coeff = 0;
+            tire = obj.vehicleManager.tire;
+            if ~isempty(tire) && isprop(tire, 'rollingResistanceCoeff')
+                coeff = tire.rollingResistanceCoeff;
+            end
+            if isempty(coeff) || ~isfinite(coeff)
+                coeff = 0;
+            end
+            obj.cachedRollingResistanceCoeff = coeff;
         end
 
         function [x, y] = getWheelPosition(obj, corner)

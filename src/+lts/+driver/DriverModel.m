@@ -334,13 +334,21 @@ classdef DriverModel < handle
 
         function maxRearSlip = getMaxRearDriveSlip(obj)
             maxRearSlip = NaN;
-            tire = obj.getVehicleManagerValue('tire', []);
+            tire = [];
+            if ~isempty(obj.vehicleManager)
+                tire = obj.vehicleManager.tire;
+            end
             if isempty(tire)
                 return;
             end
 
-            slipRL = obj.getCornerSlipRatio(tire, 'RL');
-            slipRR = obj.getCornerSlipRatio(tire, 'RR');
+            if isa(tire, 'lts.components.Tire.PacejkaTire')
+                slipRL = tire.RL.slipRatio;
+                slipRR = tire.RR.slipRatio;
+            else
+                slipRL = obj.getCornerSlipRatio(tire, 'RL');
+                slipRR = obj.getCornerSlipRatio(tire, 'RR');
+            end
             rearSlip = [slipRL, slipRR];
             rearSlip = rearSlip(isfinite(rearSlip));
             if isempty(rearSlip)
@@ -955,11 +963,16 @@ classdef DriverModel < handle
 
         function crr = getRollingResistanceCoeff(obj)
             crr = 0.015;
-            tire = obj.getVehicleManagerValue('tire', []);
+            tire = [];
+            if ~isempty(obj.vehicleManager)
+                tire = obj.vehicleManager.tire;
+            end
             if isempty(tire)
                 return;
             end
-            if isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
+            if isa(tire, 'lts.components.Tire.PacejkaTire')
+                crr = tire.rollingResistanceCoeff;
+            elseif isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
                 crr = tire.rollingResistanceCoeff;
             elseif isobject(tire) && isprop(tire, 'rollingResistanceCoeff')
                 crr = tire.rollingResistanceCoeff;

@@ -4,7 +4,6 @@
 from __future__ import annotations
 
 import argparse
-import csv
 import json
 import math
 import re
@@ -78,9 +77,14 @@ def load_channel_map(path: Path) -> dict:
 
 
 def channel_lookup(data) -> dict:
+    cached = getattr(data, "_lts_channel_lookup", None)
+    if cached is not None:
+        return cached
+
     lookup = {}
     for channel in data.channs:
         lookup.setdefault(normalize_name(channel.name), channel)
+    setattr(data, "_lts_channel_lookup", lookup)
     return lookup
 
 
@@ -707,12 +711,10 @@ def public_laps_to_ldparser(laps: str | None) -> str | None:
 
 def write_csv(path: Path, table: dict[str, np.ndarray]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
+    matrix = np.column_stack([table[column] for column in REPLAY_COLUMNS])
     with path.open("w", encoding="utf-8", newline="") as handle:
-        writer = csv.writer(handle)
-        writer.writerow(REPLAY_COLUMNS)
-        row_count = len(table["time_s"])
-        for idx in range(row_count):
-            writer.writerow([format_value(table[column][idx]) for column in REPLAY_COLUMNS])
+        handle.write(",".join(REPLAY_COLUMNS) + "\n")
+        np.savetxt(handle, matrix, delimiter=",", fmt="%.12g")
 
 
 def format_value(value: float) -> str:

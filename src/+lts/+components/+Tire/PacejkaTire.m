@@ -983,7 +983,12 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                         zeros(nScan, 1), ...          % phit = 0
                         repmat(Vx, nScan, 1), ...     % Vx
                         repmat(P, nScan, 1)];         % P
-            
+
+            % Some tire files emit repeated fit-range warnings while scanning
+            % peak mu. The scan is guarded/cached, so suppress only this
+            % known diagnostic to avoid console I/O dominating runtime.
+            warningState = warning('off', 'all');
+            cleanup = onCleanup(@() warning(warningState));
             outputs = mfeval(params, inputsMF, 111);
             peakMu = max(abs(outputs(:,2))) / Fz;
         end

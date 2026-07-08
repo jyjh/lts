@@ -232,14 +232,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             ay = state.ay;
             frontAxleAy = ay;
             rearAxleAy = ay;
-            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             end
-            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.rearAxleAy)
                 rearAxleAy = state.rearAxleAy;
             elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
@@ -367,14 +367,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             ay = state.ay;
             frontAxleAy = ay;
             rearAxleAy = ay;
-            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             end
-            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.rearAxleAy)
                 rearAxleAy = state.rearAxleAy;
             elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
@@ -681,8 +681,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         function wheelTravel = computeAntiRollBarTravel(~, cornerUnit)
             cornerState = cornerUnit.state;
             motionRatio = cornerUnit.motionRatio;
-            if isprop(cornerState, 'motionRatioEffective') && ...
-                    cornerState.motionRatioEffective > 0
+            if cornerState.motionRatioEffective > 0
                 motionRatio = cornerState.motionRatioEffective;
             end
             wheelTravel = cornerState.damperPosition / max(motionRatio, eps);
