@@ -166,20 +166,33 @@ classdef CorrelationAppSupport
             end
         end
 
-        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode)
+        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS)
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
+            if nargin < 8 || isempty(limitMotorTorqueByPackPower)
+                limitMotorTorqueByPackPower = false;
+            end
+            if nargin < 9 || isempty(packPowerAdvanceS)
+                packPowerAdvanceS = 0;
+            end
             powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
+            packCapText = 'disabled';
+            if logical(limitMotorTorqueByPackPower)
+                packCapText = 'enabled';
+            end
             fprintf('\n=== Correlation Preflight ===\n');
             lts.correlation.CorrelationAppSupport.printExtractionSummary(manifestFile);
             fprintf('Reference mode: free-space replay\n');
             fprintf('Surface mu: %.3f\n', surfaceMu);
             fprintf('Brake mode: %s\n', char(brakeMode));
             fprintf('Powertrain mode: %s\n', char(powertrainMode));
+            fprintf('Pack power torque cap: %s\n', packCapText);
+            fprintf('Pack power channel advance: %.3f s\n', double(packPowerAdvanceS));
             lts.correlation.CorrelationAppSupport.printReplayRanges(profile);
             lts.correlation.CorrelationAppSupport.validatePressureBrakeMode(profile, vehicle, brakeMode);
-            lts.correlation.CorrelationAppSupport.validatePowertrainCommandMode(profile, powertrainMode);
+            lts.correlation.CorrelationAppSupport.validatePowertrainCommandMode( ...
+                profile, powertrainMode, limitMotorTorqueByPackPower);
             lts.correlation.CorrelationAppSupport.warnOnSteeringScale(profile, vehicle, 120);
             lts.correlation.CorrelationAppSupport.warnOnLateralAccelConsistency(profile, vehicle);
             lts.correlation.CorrelationAppSupport.warnOnBrakeScale(profile);
@@ -194,6 +207,118 @@ classdef CorrelationAppSupport
             name = 'track';
             if isprop(track, 'Name') && ~isempty(track.Name)
                 name = track.Name;
+            end
+        end
+
+        function config = loadCorrelationConfig(configFile)
+            config = struct();
+            if nargin < 1 || isempty(configFile)
+                return;
+            end
+
+            configFile = char(configFile);
+            if strlength(string(configFile)) == 0
+                return;
+            end
+            if ~exist(configFile, 'file')
+                error('run_correlation:MissingCorrelationConfig', ...
+                    'Correlation config "%s" does not exist.', configFile);
+            end
+
+            try
+                config = jsondecode(fileread(configFile));
+            catch err
+                error('run_correlation:InvalidCorrelationConfig', ...
+                    'Could not read correlation config "%s": %s', ...
+                    configFile, err.message);
+            end
+            if ~isstruct(config)
+                error('run_correlation:InvalidCorrelationConfig', ...
+                    'Correlation config "%s" must decode to a JSON object.', configFile);
+            end
+        end
+
+        function value = correlationConfigScalar(config, fieldName, defaultValue)
+            value = defaultValue;
+            if nargin < 1 || isempty(config) || ~isstruct(config)
+                return;
+            end
+
+            containers = {config};
+            nestedNames = {'offsets', 'runCorrelationOptions', ...
+                'plotCorrelationPositionOverlayOptions'};
+            for i = 1:numel(nestedNames)
+                nested = lts.correlation.CorrelationAppSupport.structField( ...
+                    config, nestedNames{i});
+                if isstruct(nested)
+                    containers{end+1} = nested; %#ok<AGROW>
+                end
+            end
+
+            for i = 1:numel(containers)
+                candidate = lts.correlation.CorrelationAppSupport.structField( ...
+                    containers{i}, fieldName);
+                if isnumeric(candidate) && isscalar(candidate) && isfinite(candidate)
+                    value = double(candidate);
+                    return;
+                end
+            end
+        end
+
+        function mu = vehicleCorrelationSurfaceMu(config)
+            mu = NaN;
+            correlation = lts.correlation.CorrelationAppSupport.vehicleCorrelationStruct(config);
+            if isempty(correlation) || ~isfield(correlation, 'surfaceMu')
+                return;
+            end
+
+            candidate = correlation.surfaceMu;
+            if isnumeric(candidate) && isscalar(candidate) && ...
+                    isfinite(candidate) && candidate > 0
+                mu = double(candidate);
+            end
+        end
+
+        function value = vehicleCorrelationFlag(config, fieldName, defaultValue)
+            value = logical(defaultValue);
+            correlation = lts.correlation.CorrelationAppSupport.vehicleCorrelationStruct(config);
+            if isempty(correlation) || ~isfield(correlation, fieldName)
+                return;
+            end
+
+            candidate = correlation.(fieldName);
+            if islogical(candidate) || isnumeric(candidate)
+                value = logical(candidate);
+            end
+        end
+
+        function value = vehicleCorrelationScalar(config, fieldName, defaultValue)
+            value = double(defaultValue);
+            correlation = lts.correlation.CorrelationAppSupport.vehicleCorrelationStruct(config);
+            if isempty(correlation) || ~isfield(correlation, fieldName)
+                return;
+            end
+
+            candidate = correlation.(fieldName);
+            if isnumeric(candidate) && isscalar(candidate) && isfinite(candidate)
+                value = double(candidate);
+            end
+        end
+
+        function correlation = vehicleCorrelationStruct(config)
+            correlation = [];
+            if isempty(config)
+                return;
+            end
+
+            correlation = [];
+            if isobject(config) && isprop(config, 'correlation')
+                correlation = config.correlation;
+            elseif isstruct(config) && isfield(config, 'correlation')
+                correlation = config.correlation;
+            end
+            if ~isstruct(correlation)
+                correlation = [];
             end
         end
     end
@@ -312,7 +437,10 @@ classdef CorrelationAppSupport
             end
         end
 
-        function validatePowertrainCommandMode(profile, powertrainMode)
+        function validatePowertrainCommandMode(profile, powertrainMode, limitMotorTorqueByPackPower)
+            if nargin < 3 || isempty(limitMotorTorqueByPackPower)
+                limitMotorTorqueByPackPower = false;
+            end
             powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
             if powertrainMode ~= "motor_torque_command"
                 return;
@@ -326,12 +454,12 @@ classdef CorrelationAppSupport
                     'is decoded and carried through.']);
             end
 
-            if ~profile.hasPackPower()
+            if logical(limitMotorTorqueByPackPower) && ~profile.hasPackPower()
                 warning('run_correlation:MissingPackPowerChannels', ...
                     ['PowertrainMode "motor_torque_command" is missing ' ...
                     'pack_voltage_v and/or pack_current_a, so the replay cannot ' ...
                     'limit the calculated command against measured DC pack power. ' ...
-                    'Re-extract with the R25 channel map for accurate speed correlation.']);
+                    'Re-extract with the R25 channel map to use pack-power limiting.']);
             end
         end
 
@@ -425,6 +553,19 @@ classdef CorrelationAppSupport
                 if isempty(value)
                     value = defaultValue;
                 end
+            end
+        end
+
+        function value = structField(s, fieldName)
+            value = [];
+            if ~isstruct(s)
+                return;
+            end
+
+            names = fieldnames(s);
+            idx = find(strcmpi(names, fieldName), 1, 'first');
+            if ~isempty(idx)
+                value = s.(names{idx});
             end
         end
 

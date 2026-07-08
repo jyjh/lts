@@ -186,6 +186,31 @@
         "minimum_channels": 2,
         "min_valid_speed_mps": 0.5,
         "stuck_zero_speed_mps": 0.25,
+        "centerline_correction": true,
+        "track_width_m": 1.21,
+        "preferred_components": ["fl", "fr"],
+        "yaw_rate": {
+          "required": false,
+          "default": null,
+          "sources": [
+            {
+              "label": "sim_yaw_rate",
+              "names": ["Yaw Rate", "YawRate", "Gyro Z"],
+              "source_unit_scale": {
+                "rad/s": 1.0,
+                "deg/s": 0.017453292519943295
+              }
+            },
+            {
+              "label": "r25_yaw_rate",
+              "names": ["G Sensor.Front.Yaw Rate", "G Sensor Front Yaw Rate"],
+              "source_unit_scale": {
+                "rad/s": 1.0,
+                "deg/s": 0.017453292519943295
+              }
+            }
+          ]
+        },
         "sources": {
           "fl": {
             "names": [

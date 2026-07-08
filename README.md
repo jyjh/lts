@@ -66,7 +66,9 @@ beside the simulated output under `exports/correlation_*`.
 For correlation-only setup changes, keep `lts.vehicles.R25` as the base vehicle and
 pass a tuning overlay with `TuningFile` or `VehicleTuning`. The supplied
 `src/+lts/+vehicles/R25_correlation_tuning.m` overlay currently applies the
-lap5/raw drivetrain assumptions without changing the base car definition.
+lap5/raw drivetrain and surface assumptions without changing the base car
+definition. Pass `SurfaceMu` to `lts.app.run_correlation` to override the
+track/tuning surface value for a specific replay.
 
 Correlation replay is a free-space replay: it uses the imported driver inputs
 and initial vehicle state, then lets the physics model produce the path without
@@ -74,6 +76,10 @@ GPS/course alignment, track rebasing, path projection, or track-limit stops.
 The configured track is still loaded as an environment descriptor for surface
 friction and export metadata, but its geometry does not steer or constrain the
 car. Logged yaw rate is used as the initial yaw rate by default when present.
+Set `correlation.initialTransientWindowS` in a tuning overlay, or pass
+`InitialTransientWindowS` to `lts.app.run_correlation`, to seed yaw rate and
+lateral transient channels from the median of the first N seconds instead of a
+single initial sample.
 Correlation defaults to time-domain replay and stops at the imported replay
 duration, not the reference track end; use `ReplayDomain`, `StopAtReplayEnd`,
 and `StopAtTrackEnd` to override timing behavior. Console progress and
@@ -106,22 +112,28 @@ charging/regen power.
 By default replay still drives the simulated powertrain from logged throttle.
 Pass `'PowertrainMode', 'motor_torque_command'` to bypass the throttle map and
 EMRAX torque envelope. In that mode, `motor_torque_command_nm` is treated as a
-signed motor-side request, not guaranteed delivered shaft torque. When
-`pack_voltage_v` and `pack_current_a` are present, the simulator caps the applied
-motor torque so requested motor mechanical power cannot exceed measured DC pack
-power before reflecting the capped torque through final-drive ratio and
-drivetrain efficiency. Motoring torque uses `powertrain.efficiency`; negative
-direct-mode regen uses `powertrain.regenEfficiency` when present, falling back
-to `powertrain.efficiency`. The cap uses logged `motor_rpm` when available, then
-logged replay speed, and only falls back to simulated speed when no measured
-speed source exists. Positive commands are drive torque; negative commands are
-sent through the driveline as regen/decel torque only when the logged pack power
-is negative. Regen uses the inverse drivetrain-loss direction, so wheel-side
-braking power is larger in magnitude than the power recovered at the pack by
-the configured regen efficiency. If `Calculated Cmd` has already crossed back
+signed motor-side request. By default the simulator caps the applied motor
+torque against measured DC pack power when `pack_voltage_v` and
+`pack_current_a` are present before reflecting it through final-drive ratio and
+drivetrain efficiency. Pass `'LimitMotorTorqueByPackPower', false` to disable
+that cap for diagnosis. Motoring torque uses `powertrain.efficiency`;
+negative direct-mode regen uses `powertrain.regenEfficiency` when present,
+falling back to `powertrain.efficiency`. When enabled, the cap uses logged
+`motor_rpm` when available, then logged replay speed, and only falls back to
+simulated speed when no measured speed source exists. Positive commands are
+drive torque; negative commands are sent through the driveline as regen/decel
+torque. Regen uses the inverse drivetrain-loss direction, so wheel-side braking
+power is larger in magnitude than the power recovered at the pack by the
+configured regen efficiency. If `Calculated Cmd` has already crossed back
 positive while the pack is still charging, the decoded `regen_torque_nm`
-request is used as the negative torque request instead; the pack-power cap
-still limits the applied value.
+request is used as the negative torque request instead; pack-power limiting,
+when enabled, still limits the applied value. If measured pack voltage/current
+lag the inverter command in the raw log, pass `'PackPowerAdvanceS', seconds` to
+advance only those pack channels before replay sampling. A positive value, for
+example `0.06`, pulls pack-power samples 60 ms earlier. The default is `0`.
+You can also pass `'CorrelationConfig', 'path/to/config.json'`; configs written
+by `scripts/extract_correlation_config.py` currently provide `PackPowerAdvanceS`
+for replay and `GpsAdvanceS` for GPS-position overlay work.
 
 Edit `trackType` in `src/+lts/+app/run_simulation.m` to switch between:
 

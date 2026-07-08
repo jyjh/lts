@@ -146,6 +146,9 @@ classdef VehicleManager
             tire = lts.components.Tire.PacejkaTire(config.tire.tirFile);
             tire.wheelInertia = config.tire.wheelInertia;
             tire.relaxationLength = config.tire.relaxationLength;
+            if isfield(config.tire, 'lateralStiffnessScale')
+                tire.lateralStiffnessScale = config.tire.lateralStiffnessScale;
+            end
             if isfield(config.tire, 'surfaceMuReference')
                 tire.surfaceMuReference = config.tire.surfaceMuReference;
             end

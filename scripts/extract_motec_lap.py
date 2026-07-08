@@ -274,12 +274,21 @@ def derive_speed_from_wheel_speed_median(data, output_name: str, spec: dict, der
         for name in names
     ])
     valid_matrix, rejected = reject_failed_wheel_speed_channels(matrix, derive_spec, names)
-    valid_count = np.sum(np.isfinite(valid_matrix), axis=1)
+    speed_matrix, yaw_signal = centerline_correct_wheel_speeds(
+        data,
+        output_name,
+        derive_spec,
+        time,
+        valid_matrix,
+        names,
+    )
 
-    values = np.full(len(time), np.nan)
-    enough = valid_count >= minimum_channels
-    if np.any(enough):
-        values[enough] = np.nanmedian(valid_matrix[enough, :], axis=1)
+    values, enough = derive_speed_rows_from_components(
+        speed_matrix,
+        names,
+        derive_spec,
+        minimum_channels,
+    )
 
     fallback_spec = derive_spec.get("fallback")
     fallback = None
@@ -319,10 +328,117 @@ def derive_speed_from_wheel_speed_median(data, output_name: str, spec: dict, der
         "time": time,
         "values": values,
     }
+    if yaw_signal is not None:
+        signal["name"] = "yaw-corrected median valid wheel speed"
+        signal["derive_method"] = "wheel_speed_centerline_median"
+        signal["centerline_correction"] = {
+            "track_width_m": float(derive_spec.get("track_width_m")),
+            "yaw_rate": signal_manifest(yaw_signal),
+            "preferred_components": list(derive_spec.get("preferred_components", [])),
+        }
     if fallback is not None:
         signal["fallback"] = signal_manifest(fallback)
     signal.update(signal_stats(values))
     return signal
+
+
+def centerline_correct_wheel_speeds(
+    data,
+    output_name: str,
+    derive_spec: dict,
+    time: np.ndarray,
+    wheel_matrix: np.ndarray,
+    names: list[str],
+) -> tuple[np.ndarray, dict | None]:
+    if not bool(derive_spec.get("centerline_correction", False)):
+        return wheel_matrix, None
+
+    track_width = derive_spec.get("track_width_m")
+    yaw_spec = derive_spec.get("yaw_rate")
+    if track_width is None or not yaw_spec:
+        return wheel_matrix, None
+
+    try:
+        track_width = float(track_width)
+    except (TypeError, ValueError):
+        return wheel_matrix, None
+    if not np.isfinite(track_width) or track_width <= 0:
+        return wheel_matrix, None
+
+    yaw_signal = extract_direct_signal(
+        data,
+        f"{output_name}.yaw_rate",
+        yaw_spec,
+        required=False,
+    )
+    if yaw_signal is None:
+        return wheel_matrix, None
+
+    yaw_rate = resample_signal(yaw_signal, time, np.nan)
+    corrected = np.asarray(wheel_matrix, dtype=float).copy()
+    half_track = 0.5 * track_width
+    for idx, name in enumerate(names):
+        side_sign = wheel_speed_side_sign(name)
+        if side_sign == 0:
+            continue
+        corrected[:, idx] = corrected[:, idx] + side_sign * yaw_rate * half_track
+    return corrected, yaw_signal
+
+
+def wheel_speed_side_sign(name: str) -> int:
+    name = str(name).lower()
+    if name.endswith("l") or name in {"fl", "rl", "left"}:
+        return 1
+    if name.endswith("r") or name in {"fr", "rr", "right"}:
+        return -1
+    return 0
+
+
+def derive_speed_rows_from_components(
+    matrix: np.ndarray,
+    names: list[str],
+    derive_spec: dict,
+    minimum_channels: int,
+) -> tuple[np.ndarray, np.ndarray]:
+    values = np.full(matrix.shape[0], np.nan)
+    enough = np.zeros(matrix.shape[0], dtype=bool)
+
+    preferred = [
+        str(name)
+        for name in derive_spec.get("preferred_components", [])
+        if str(name) in names
+    ]
+    if preferred:
+        preferred_idx = [names.index(name) for name in preferred]
+        preferred_matrix = matrix[:, preferred_idx]
+        preferred_minimum = int(
+            derive_spec.get(
+                "preferred_minimum_channels",
+                min(minimum_channels, len(preferred_idx)),
+            )
+        )
+        values, enough = median_rows_with_minimum(
+            preferred_matrix,
+            max(1, preferred_minimum),
+        )
+
+    fallback_values, fallback_enough = median_rows_with_minimum(
+        matrix,
+        minimum_channels,
+    )
+    fill = ~np.isfinite(values) & np.isfinite(fallback_values)
+    values[fill] = fallback_values[fill]
+    enough = enough | fallback_enough
+    return values, enough
+
+
+def median_rows_with_minimum(matrix: np.ndarray, minimum_channels: int) -> tuple[np.ndarray, np.ndarray]:
+    values = np.full(matrix.shape[0], np.nan)
+    valid_count = np.sum(np.isfinite(matrix), axis=1)
+    enough = valid_count >= minimum_channels
+    if np.any(enough):
+        values[enough] = np.nanmedian(matrix[enough, :], axis=1)
+    return values, enough
 
 
 def reject_failed_wheel_speed_channels(

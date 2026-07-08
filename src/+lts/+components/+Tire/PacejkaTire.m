@@ -42,6 +42,11 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % 0 disables the transient layer (pure steady-state Magic Formula).
         relaxationLength = 0.30
 
+        % Multiplier on force-evaluation slip angle. This is a correlation
+        % knob for cornering-stiffness sensitivity; stored kinematic and
+        % relaxed slip states remain in physical radians.
+        lateralStiffnessScale = 1.0
+
         % Rolling-resistance coefficient [-]. Acts as a wheel-resistance
         % torque T_rr = Crr * Fz * R opposing rotation, so a free-rolling
         % wheel coast-down is driven by the contact patch (not just a body
@@ -57,11 +62,10 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % extra coast-down drag.
         bearingDragCoeff = 0
 
-        % Allow wheel angular velocity to go negative (true reverse rotation).
-        % Default false: a one-direction clutch clamps omega >= 0, which is
-        % stable for forward lap-time simulation. Set true when the powertrain
-        % is regen/reverse-capable so coastdown/regen drag can fully spin a
-        % wheel down. lts.vehicle.VehicleManager sets this from the powertrain.
+        % Allow applied torque to drive wheel angular velocity through zero
+        % without the locked-wheel guard. Even when false, a passive wheel may
+        % roll negative when the local contact-patch longitudinal velocity is
+        % negative during a high-sideslip/steered-wheel transient.
         allowReverseRotation = false
 
         % Cache peak-mu scans by rounded load/camber/speed.
@@ -163,8 +167,10 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             P     = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
 
+            alphaEval = obj.evaluationSlipAngle(alpha);
+
             % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
-            inputsMF = [Fz, kappa, alpha, gamma, 0, V, P];
+            inputsMF = [Fz, kappa, alphaEval, gamma, 0, V, P];
 
             % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
             outputs = mfeval(params, inputsMF, 111);
@@ -201,7 +207,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 mu = obj.surfaceMuReference;
             end
             
-            inputsMF = [normalLoad, 0, slipAngle, 0, 0, ...
+            inputsMF = [normalLoad, 0, obj.evaluationSlipAngle(slipAngle), 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
@@ -399,13 +405,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Euler integration
             omega_new = omega + alpha * dt;
 
-            % Prevent wheel from spinning backwards (one-direction clutch),
-            % unless reverse rotation is explicitly enabled (regen/reverse-
-            % capable powertrain). The clamp keeps forward lap-time sim stable;
-            % when lifted, sign(omega) terms above handle negative rotation.
-            if ~obj.allowReverseRotation && omega_new < 0
-                omega_new = 0;
-            end
+            omega_new = obj.limitWheelAngularVelocity( ...
+                omega, omega_new, longitudinalSpeed);
 
             cornerState.angularVelocity = omega_new;
         end
@@ -419,7 +420,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 dt = 0.001;
             end
 
-            omegaOld = max(cornerState.angularVelocity, 0);
+            omegaOld = cornerState.angularVelocity;
             omegaNew = omegaOld;
             R = max(cornerState.wheelRadius, eps);
             I = max(obj.wheelInertia, eps);
@@ -444,7 +445,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 brakeSign = obj.computeBrakeTorqueSign( ...
                     omegaNew, longitudinalSpeed, driveTorque);
                 netTorque = driveTorque - brakeSign * brakeTorque - finalFx * R;
-                omegaCandidate = max(0, omegaOld + (netTorque / I) * dt);
+                omegaCandidate = obj.limitWheelAngularVelocity( ...
+                    omegaOld, omegaOld + (netTorque / I) * dt, longitudinalSpeed);
 
                 if abs(omegaCandidate - omegaNew) < 1e-4
                     omegaNew = omegaCandidate;
@@ -557,7 +559,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 params = obj.tireConstants.params;
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
-                inputsMF = [Fz(active), kappa(active), alpha(active), ...
+                alphaEval = obj.evaluationSlipAngle(alpha);
+                inputsMF = [Fz(active), kappa(active), alphaEval(active), ...
                     gamma(active), zeros(nActive, 1), ...
                     Vx, repmat(P, nActive, 1)];
                 outputs = mfeval(params, inputsMF, 111);
@@ -671,8 +674,33 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             alpha = ssAlpha - (ssAlpha - cornerState.slipAngle) * decay;
             kappa = ssKappa - (ssKappa - cornerState.slipRatio) * decay;
 
-            alpha = max(-0.3, min(0.3, alpha));
+            alpha = obj.evaluationSlipAngle(alpha);
             kappa = max(-1, min(1, kappa));
+        end
+
+        function omega = limitWheelAngularVelocity(obj, omegaOld, omegaCandidate, longitudinalSpeed)
+            omega = omegaCandidate;
+            if obj.allowReverseRotation
+                return;
+            end
+
+            directionTol = 1e-6;
+            if ~isfinite(longitudinalSpeed) || abs(longitudinalSpeed) < directionTol
+                if omegaOld >= -directionTol && omegaCandidate < 0
+                    omega = 0;
+                end
+                return;
+            end
+
+            if longitudinalSpeed > 0
+                if omegaOld >= -directionTol && omegaCandidate < 0
+                    omega = 0;
+                end
+            else
+                if omegaOld <= directionTol && omegaCandidate > 0
+                    omega = 0;
+                end
+            end
         end
 
         function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)
@@ -861,6 +889,14 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 error('PacejkaTire:InvalidRelaxationMode', ...
                     'relaxationMode must be advance, steady, or hold.');
             end
+        end
+
+        function alphaEval = evaluationSlipAngle(obj, alpha)
+            scale = obj.lateralStiffnessScale;
+            if isempty(scale) || ~isfinite(scale) || scale <= 0
+                scale = 1.0;
+            end
+            alphaEval = max(-0.3, min(0.3, alpha .* scale));
         end
 
         function scale = computeSurfaceScale(obj, surfaceMu)

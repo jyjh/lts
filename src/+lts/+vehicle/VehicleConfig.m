@@ -13,9 +13,10 @@ classdef VehicleConfig
     % a car file only needs to spell out the values it wants to change — but
     % lts.vehicles.baseline spells them all out as documentation/template.
     %
-    % Scope: vehicle PHYSICS only. Track selection, driver tuning, and the
-    % simulation timestep stay in lts.app.run_simulation (they are scenario/test
-    % settings, not car properties).
+    % Scope: vehicle PHYSICS only for normal simulation. Correlation overlays
+    % may also carry replay-only calibration hints consumed by
+    % lts.app.run_correlation; track selection, driver tuning, and timestep
+    % still stay in the app layer.
 
     properties
         name = "VehicleConfig"
@@ -47,6 +48,7 @@ classdef VehicleConfig
 
         powertrain    % Motor map, drivetrain efficiency, differential type
         tire          % Pacejka .tir data + wheel dynamics (inertia, relaxation, drag)
+        correlation   % Correlation replay scenario overrides
     end
 
     methods
@@ -231,6 +233,8 @@ classdef VehicleConfig
             %     tirFile:  Pacejka .tir filename in +Tire/
             %     wheelInertia [kg*m^2] wheel+tire+brake rotating inertia/corner
             %     relaxationLength [m] contact-patch slip lag (0 = steady-state)
+            %     lateralStiffnessScale [-] multiplier on tire slip angle for
+            %       correlation sensitivity (1 preserves raw tire file)
             %     wheelRadius [m] effective rolling radius
             %     rollingResistanceCoeff [-] Crr; per-wheel resistance torque
             %       T_rr = Crr*Fz*R (0 disables coast-down drag)
@@ -240,10 +244,22 @@ classdef VehicleConfig
                 'tirFile', '43105_18x7.5_10_R25B_7.tir', ...
                 'wheelInertia', 0.5, ...
                 'relaxationLength', 0.30, ...
+                'lateralStiffnessScale', 1.0, ...
                 'surfaceMuReference', 1.2, ...
                 'wheelRadius', 0.241935, ...
                 'rollingResistanceCoeff', 0.015, ...
                 'bearingDragCoeff', 0);
+
+            % --- Correlation replay ---
+            % Scenario-level overrides used only by lts.app.run_correlation.
+            % NaN preserves the track/default representative surface mu.
+            % initialTransientWindowS = 0 uses the first logged sample;
+            % positive values median transient seed signals over that many seconds.
+            obj.correlation = struct( ...
+                'surfaceMu', NaN, ...
+                'useLoggedYawRate', true, ...
+                'useLoggedTransientState', true, ...
+                'initialTransientWindowS', 0);
         end
     end
 end

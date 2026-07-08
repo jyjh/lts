@@ -124,7 +124,9 @@ ref = struct( ...
     'idx', 1, ...
     'trackData', straightTrackData());
 input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
-    'motorTorqueCommandNm', 50);
+    'motorTorqueCommandNm', 50, ...
+    'packVoltageV', 300, ...
+    'packCurrentA', 1);
 
 [~, forces] = simulator.step(state, input, ref);
 
@@ -133,7 +135,9 @@ verifyEqual(testCase, forces.driveTorqueTotal, expectedWheelTorque, 'AbsTol', 1e
 verifyEqual(testCase, forces.coastdownTorqueTotal, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, forces.motorTorque, 50, 'AbsTol', 1e-12);
 verifyEqual(testCase, forces.motorTorqueRequested, 50, 'AbsTol', 1e-12);
+verifyTrue(testCase, isnan(forces.motorTorquePowerLimitNm));
 verifyFalse(testCase, forces.motorTorquePowerLimitActive);
+verifyEqual(testCase, forces.packPowerW, 300, 'AbsTol', 1e-12);
 verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
@@ -151,6 +155,7 @@ state.vehicleManager = vehicle;
 
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.powertrainMode = "motor_torque_command";
+simulator.limitMotorTorqueByPackPower = true;
 simulator.wheelSolveIterations = 1;
 ref = struct( ...
     'heading', 0, ...
@@ -192,6 +197,7 @@ state.vehicleManager = vehicle;
 
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.powertrainMode = "motor_torque_command";
+simulator.limitMotorTorqueByPackPower = true;
 simulator.wheelSolveIterations = 1;
 ref = struct( ...
     'heading', 0, ...
@@ -298,6 +304,7 @@ state.vehicleManager = vehicle;
 
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.powertrainMode = "motor_torque_command";
+simulator.limitMotorTorqueByPackPower = true;
 simulator.wheelSolveIterations = 1;
 ref = struct( ...
     'heading', 0, ...

@@ -648,10 +648,10 @@ classdef GraphPlotter
             % Get wheel radius for converting omega to linear speed
             if isfield(stateLog, 'omega_FL') && any(stateLog.omega_FL ~= 0)
                 R = vehicle.tire.FL.wheelRadius;
-                wheelSpeedFL = stateLog.omega_FL * R * 3.6;  % km/h
-                wheelSpeedFR = stateLog.omega_FR * R * 3.6;
-                wheelSpeedRL = stateLog.omega_RL * R * 3.6;
-                wheelSpeedRR = stateLog.omega_RR * R * 3.6;
+                wheelSpeedFL = abs(stateLog.omega_FL * R) * 3.6;  % km/h
+                wheelSpeedFR = abs(stateLog.omega_FR * R) * 3.6;
+                wheelSpeedRL = abs(stateLog.omega_RL * R) * 3.6;
+                wheelSpeedRR = abs(stateLog.omega_RR * R) * 3.6;
                 
                 plot(speedKmh, wheelSpeedFL, '.', 'Color', colFL, 'MarkerSize', 1); hold on;
                 plot(speedKmh, wheelSpeedFR, '.', 'Color', colFR, 'MarkerSize', 1);

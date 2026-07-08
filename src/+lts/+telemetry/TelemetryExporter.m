@@ -411,7 +411,7 @@ classdef TelemetryExporter
                 radius = lts.telemetry.TelemetryExporter.tireRadiusForCorner(stateLog, corner, nSamples);
                 if isfield(stateLog, omegaField) && ~isempty(radius)
                     tableData = lts.telemetry.TelemetryExporter.addComputedChannel(tableData, field, tireSpeedChannels{i, 2}, ...
-                        stateLog.(omegaField)(:) .* radius, 'm/s', nSamples);
+                        abs(stateLog.(omegaField)(:) .* radius), 'm/s', nSamples);
                 end
             end
         end
@@ -504,7 +504,7 @@ classdef TelemetryExporter
             if isfield(stateLog, 'omega_FL') && ~isempty(radius)
                 values = double(stateLog.omega_FL(:));
                 if numel(values) == nSamples
-                    speedKmh = values .* radius * 3.6;
+                    speedKmh = abs(values .* radius) * 3.6;
                     sourceField = 'speedKmh';
                     return;
                 end

@@ -211,7 +211,7 @@ class ExtractMotecLapTest(unittest.TestCase):
         self.assertEqual(real_signal["source_label"], "steering_sensor")
         np.testing.assert_allclose(real_signal["values"], np.deg2rad([5.0, 10.0]))
 
-    def test_r25_speed_derives_from_valid_wheel_speed_median(self):
+    def test_r25_speed_derives_from_valid_front_wheel_speed_median(self):
         data = FakeData(
             [
                 FakeChannel("Vehicle Speed Value", "m/s", 10, [7.0, 7.5, 8.0]),
@@ -234,7 +234,33 @@ class ExtractMotecLapTest(unittest.TestCase):
         self.assertEqual(speed["source"], "derived")
         self.assertEqual(speed["derive_method"], "wheel_speed_median")
         self.assertEqual(speed["rejected_components"], ["rl"])
-        np.testing.assert_allclose(speed["values"], [8.0, 8.5, 9.0])
+        np.testing.assert_allclose(speed["values"], [7.5, 8.0, 8.5])
+
+    def test_r25_speed_prefers_yaw_corrected_front_centerline_speed(self):
+        data = FakeData(
+            [
+                FakeChannel("Vehicle Speed Value", "m/s", 10, [20.0, 20.0]),
+                FakeChannel("Wheel Speed Front Left", "m/s", 10, [7.0, 7.5]),
+                FakeChannel("Wheel Speed Front Right", "m/s", 10, [8.0, 8.5]),
+                FakeChannel("Wheel Speed Rear Left", "m/s", 10, [0.0, 0.0]),
+                FakeChannel("Wheel Speed Rear Right", "m/s", 10, [9.0, 9.5]),
+                FakeChannel("G Sensor Front Yaw Rate", "rad/s", 10, [1.0, 1.0]),
+            ]
+        )
+        channel_map = extract_motec_lap.load_channel_map(
+            REPO_ROOT / "config" / "motec" / "r25_real_channel_map.json"
+        )
+
+        speed = extract_motec_lap.extract_raw_signal(
+            data,
+            "speed_mps",
+            channel_map["channels"]["speed_mps"],
+        )
+
+        self.assertEqual(speed["source"], "derived")
+        self.assertEqual(speed["derive_method"], "wheel_speed_centerline_median")
+        self.assertEqual(speed["rejected_components"], ["rl"])
+        np.testing.assert_allclose(speed["values"], [7.5, 8.0])
 
     def test_optional_gps_course_and_accel_channels_are_extracted(self):
         data = FakeData(

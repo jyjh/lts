@@ -18,6 +18,27 @@ the top to switch vehicle configs.
   acceleration estimate, full-throttle force capped by rear-axle tire grip from
   the active `.tir` file. Saves
   `exports/theoretical_acceleration_75m_diagnostics.png`.
+- **`tire_sensitivity.m`** — loads a Pacejka `.tir` file and creates stacked
+  lateral- and longitudinal-force sensitivity plots over normal load for
+  selected slip angles and positive drive slip ratios. Also plots best
+  steady-state skidpad acceleration over vehicle mass with a simple bicycle
+  load-transfer model and marks a diminishing-returns point from the
+  acceleration-vs-mass curve (true inflection when present, knee fallback
+  otherwise). The mass curve is sampled independently at `MassStepKg = 0.1`
+  kg and brute-force searches `MassSlipAnglesDeg = 0:0.1:14` by default. Saves
+  `exports/tire_lateral_sensitivity.png`,
+  `exports/tire_longitudinal_sensitivity.png`, and
+  `exports/tire_acceleration_vs_mass.png` by default.
+- **`weight_savings_skidpad.m`** — sweeps vehicle mass and finds the point of
+  diminishing returns for weight savings in terms of max sustained skidpad
+  lateral G, using a simplified steady-state bicycle load-transfer model
+  (aero neglected) fed by the active `.tir` file's peak lateral-force
+  envelope. At each mass the max `a_y` is solved by bisection on the
+  load-transfer capacity residual; the diminishing-returns mass is the
+  Kneedle elbow (max perpendicular distance from the chord of the G-vs-mass
+  curve). Defaults to the theoretical tire and R25 geometry (`CgHeight`
+  0.256 m, `StaticFrontWeight` 0.5095, `ReferenceMassKg` 264). Saves
+  `exports/weight_savings_skidpad.png`.
 - **`investigate_lateral_g.m`** — correlation sanity report for lateral
   acceleration. Compares raw MoTeC lateral accel, speed*yaw-rate, steering
   demand, simulated body/tire Ay, and tire-capacity/utilization. Pass
@@ -94,6 +115,32 @@ centers, steer ratio, Ackermann, torsional stiffness, differential type). The
 rest of the ~80-field config has no direct CSV source and is left at the
 baseline defaults — review the `TODO` and `[not in spec sheet]` markers in the
 generated file before simulating.
+
+## extract_correlation_config.py
+
+Estimates timing offsets from a normalized replay CSV and writes a secondary
+JSON config for correlation runs. The current schema includes:
+
+- `PackPowerAdvanceS`: positive values advance `pack_voltage_v` and
+  `pack_current_a` before replay sampling.
+- `GpsAdvanceS`: positive values advance GPS position/course channels; the
+  same value is emitted as `RawTimeOffsetS` for
+  `plot_correlation_position_overlay`.
+
+### Usage
+
+```bash
+python scripts/extract_correlation_config.py exports/correlation_lap5_replay.csv
+```
+
+Then pass the generated file into replay:
+
+```matlab
+lts.app.run_correlation( ...
+    'ReplayCsv', 'exports/correlation_lap5_replay.csv', ...
+    'CorrelationConfig', 'exports/correlation_lap5_correlation_config.json', ...
+    'PowertrainMode', 'motor_torque_command')
+```
 
 ## compare_sim_runs.py
 

@@ -11,7 +11,11 @@ classdef CorrelationStateInitializer
             parser.addParameter('UseLoggedPosition', true, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('UseLoggedYawRate', true, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('UseLoggedWheelSpeeds', true, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('UseLoggedTransientState', true, @(x) islogical(x) || isnumeric(x));
+            parser.addParameter('InitialTransientWindowS', 0, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
             parser.parse(varargin{:});
+            initialTransientWindowS = double(parser.Results.InitialTransientWindowS);
 
             if ~isa(profile, 'lts.correlation.CorrelationReplayProfile')
                 profile = lts.correlation.CorrelationReplayProfile.fromCsv(profile);
@@ -23,7 +27,8 @@ classdef CorrelationStateInitializer
             steer = profile.steer(1);
 
             [vx, vy, speed] = lts.correlation.CorrelationStateInitializer.initialVelocity( ...
-                profile, speed, vehicleManager, logical(parser.Results.UseLoggedYawRate));
+                profile, speed, vehicleManager, logical(parser.Results.UseLoggedYawRate), ...
+                initialTransientWindowS);
 
             yaw = 0;
             if profile.hasYaw()
@@ -49,25 +54,33 @@ classdef CorrelationStateInitializer
                 'brake', brake, ...
                 'steer', steer);
 
-            if logical(parser.Results.UseLoggedYawRate) && ...
-                    ~isempty(profile.yawRate) && isfinite(profile.yawRate(1))
-                state.yawRate = profile.yawRate(1);
+            yawRateSeed = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.yawRate, initialTransientWindowS);
+            if logical(parser.Results.UseLoggedYawRate) && isfinite(yawRateSeed)
+                state.yawRate = yawRateSeed;
             end
 
             if nargin >= 3 && ~isempty(vehicleManager)
                 state.vehicleManager = vehicleManager;
+                wheelSpeeds = [];
                 if logical(parser.Results.UseLoggedWheelSpeeds)
-                    lts.correlation.CorrelationStateInitializer.seedWheelSpeeds( ...
-                        profile, vehicleManager, speed);
+                    wheelSpeeds = lts.correlation.CorrelationStateInitializer.initialWheelSpeedValues( ...
+                        profile, vehicleManager, state, initialTransientWindowS);
                 end
-                state = lts.correlation.CorrelationStateInitializer.seedTransientCorneringState( ...
-                    profile, vehicleManager, state);
+                if logical(parser.Results.UseLoggedTransientState)
+                    state = lts.correlation.CorrelationStateInitializer.seedTransientCorneringState( ...
+                        profile, vehicleManager, state, wheelSpeeds, initialTransientWindowS);
+                else
+                    lts.correlation.CorrelationStateInitializer.seedWheelSpeeds( ...
+                        profile, vehicleManager, state, wheelSpeeds);
+                end
             end
         end
     end
 
     methods (Static, Access = private)
-        function [vx, vy, speed] = initialVelocity(profile, speed, vehicleManager, useLoggedYawRate)
+        function [vx, vy, speed] = initialVelocity( ...
+                profile, speed, vehicleManager, useLoggedYawRate, initialTransientWindowS)
             speed = max(0, speed);
             if profile.hasVelocity()
                 vx = profile.vx(1);
@@ -83,10 +96,11 @@ classdef CorrelationStateInitializer
                 return;
             end
 
-            if useLoggedYawRate && ~isempty(profile.yawRate) && ...
-                    isfinite(profile.yawRate(1))
+            yawRateSeed = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.yawRate, initialTransientWindowS);
+            if useLoggedYawRate && isfinite(yawRateSeed)
                 rearArm = lts.correlation.CorrelationStateInitializer.rearAxleArm(vehicleManager);
-                vyEstimate = profile.yawRate(1) * rearArm;
+                vyEstimate = yawRateSeed * rearArm;
                 maxVy = 0.30 * max(speed, eps);
                 vyEstimate = max(-maxVy, min(maxVy, vyEstimate));
                 if isfinite(vyEstimate) && abs(vyEstimate) > eps
@@ -121,35 +135,43 @@ classdef CorrelationStateInitializer
             end
         end
 
-        function seedWheelSpeeds(profile, vehicleManager, vehicleSpeed)
+        function values = initialWheelSpeedValues( ...
+                profile, vehicleManager, state, initialTransientWindowS)
+            if nargin < 4
+                initialTransientWindowS = 0;
+            end
+            values = [];
             if ~profile.hasInitialWheelSpeeds() || isempty(vehicleManager) || ...
                     isempty(vehicleManager.tire)
                 return;
             end
 
             wheelSpeeds = profile.initialWheelSpeeds();
-            corners = {'FL', 'FR', 'RL', 'RR'};
             values = [wheelSpeeds.FL, wheelSpeeds.FR, ...
                 wheelSpeeds.RL, wheelSpeeds.RR];
             values = lts.correlation.CorrelationStateInitializer.rejectMovingZeroWheelSpeeds( ...
-                values, vehicleSpeed);
+                values, state.speed);
+            yawRateSeed = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.yawRate, initialTransientWindowS);
             values = lts.correlation.CorrelationStateInitializer.estimateMissingWheelSpeeds( ...
-                values, profile, vehicleManager);
-            valid = isfinite(values) & values >= 0;
-            fallbackSpeed = max(vehicleSpeed, 0);
-            if any(valid)
-                fallbackSpeed = median(values(valid));
+                values, yawRateSeed, vehicleManager);
+            values = lts.correlation.CorrelationStateInitializer.fillMissingWheelSpeeds( ...
+                values, state.speed);
+        end
+
+        function seedWheelSpeeds(profile, vehicleManager, state, values)
+            if nargin < 4
+                values = lts.correlation.CorrelationStateInitializer.initialWheelSpeedValues( ...
+                    profile, vehicleManager, state);
+            end
+            if isempty(values) || isempty(vehicleManager) || isempty(vehicleManager.tire)
+                return;
             end
 
+            corners = {'FL', 'FR', 'RL', 'RR'};
             for i = 1:numel(corners)
-                cornerName = corners{i};
-                wheelSpeed = values(i);
-                if ~isfinite(wheelSpeed) || wheelSpeed < 0
-                    wheelSpeed = fallbackSpeed;
-                end
-
-                cornerState = vehicleManager.tire.(cornerName);
-                cornerState.angularVelocity = max(wheelSpeed, 0) / ...
+                cornerState = vehicleManager.tire.(corners{i});
+                cornerState.angularVelocity = max(values(i), 0) / ...
                     max(cornerState.wheelRadius, eps);
             end
 
@@ -158,6 +180,20 @@ classdef CorrelationStateInitializer
                 vehicleManager.powertrain.updateStateFromDrivenWheels( ...
                     [vehicleManager.tire.RL.angularVelocity, ...
                     vehicleManager.tire.RR.angularVelocity]);
+            end
+        end
+
+        function values = fillMissingWheelSpeeds(values, vehicleSpeed)
+            valid = isfinite(values) & values >= 0;
+            fallbackSpeed = max(vehicleSpeed, 0);
+            if any(valid)
+                fallbackSpeed = median(values(valid));
+            end
+
+            for i = 1:numel(values)
+                if ~isfinite(values(i)) || values(i) < 0
+                    values(i) = fallbackSpeed;
+                end
             end
         end
 
@@ -186,14 +222,13 @@ classdef CorrelationStateInitializer
             end
         end
 
-        function values = estimateMissingWheelSpeeds(values, profile, vehicleManager)
-            if isempty(profile.yawRate) || ~isfinite(profile.yawRate(1)) || ...
-                    isempty(vehicleManager) || ~isprop(vehicleManager, 'trackWidth') || ...
+        function values = estimateMissingWheelSpeeds(values, yawRate, vehicleManager)
+            if ~isfinite(yawRate) || isempty(vehicleManager) || ...
+                    ~isprop(vehicleManager, 'trackWidth') || ...
                     ~isfinite(vehicleManager.trackWidth) || vehicleManager.trackWidth <= 0
                 return;
             end
 
-            yawRate = profile.yawRate(1);
             trackWidth = vehicleManager.trackWidth;
             % Wheel-speed sign convention: right side speed is left side
             % speed plus yawRate * trackWidth for positive yaw.
@@ -213,17 +248,24 @@ classdef CorrelationStateInitializer
             end
         end
 
-        function state = seedTransientCorneringState(profile, vehicleManager, state)
+        function state = seedTransientCorneringState( ...
+                profile, vehicleManager, state, wheelSpeeds, initialTransientWindowS)
             % Correlation replays can start mid-corner. Seed the internal
-            % tire/chassis transients from the first logged sample so the
+            % tire/chassis transients from logged startup samples so the
             % simulation does not build lateral force and roll from rest.
             if isempty(vehicleManager)
                 return;
             end
+            if nargin < 4
+                wheelSpeeds = [];
+            end
+            if nargin < 5
+                initialTransientWindowS = 0;
+            end
 
             [bodyAy, frontAy, rearAy] = ...
                 lts.correlation.CorrelationStateInitializer.initialLateralAccelerations( ...
-                profile, state);
+                profile, state, initialTransientWindowS);
             if isfinite(bodyAy)
                 state.ay = bodyAy;
             end
@@ -236,15 +278,23 @@ classdef CorrelationStateInitializer
 
             state = lts.correlation.CorrelationStateInitializer.seedChassisRollState( ...
                 vehicleManager, state, bodyAy, frontAy, rearAy);
+            state = lts.correlation.CorrelationStateInitializer.seedSideslipFromAxleAccelerations( ...
+                profile, vehicleManager, state, wheelSpeeds, bodyAy, frontAy, rearAy);
+            lts.correlation.CorrelationStateInitializer.seedWheelSpeeds( ...
+                profile, vehicleManager, state, wheelSpeeds);
             lts.correlation.CorrelationStateInitializer.seedTireRelaxationState( ...
                 vehicleManager, state);
         end
 
-        function [bodyAy, frontAy, rearAy] = initialLateralAccelerations(profile, state)
+        function [bodyAy, frontAy, rearAy] = initialLateralAccelerations( ...
+                profile, state, initialTransientWindowS)
             g = 9.80665;
-            bodyAy = lts.correlation.CorrelationStateInitializer.firstFinite(profile.latAccelG) * g;
-            frontAy = lts.correlation.CorrelationStateInitializer.firstFinite(profile.frontLatAccelG) * g;
-            rearAy = lts.correlation.CorrelationStateInitializer.firstFinite(profile.rearLatAccelG) * g;
+            bodyAy = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.latAccelG, initialTransientWindowS) * g;
+            frontAy = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.frontLatAccelG, initialTransientWindowS) * g;
+            rearAy = lts.correlation.CorrelationStateInitializer.initialWindowMedian( ...
+                profile, profile.rearLatAccelG, initialTransientWindowS) * g;
 
             if ~isfinite(bodyAy) && isfinite(state.speed) && ...
                     isfinite(state.yawRate)
@@ -266,6 +316,34 @@ classdef CorrelationStateInitializer
             idx = find(isfinite(values), 1, 'first');
             if ~isempty(idx)
                 value = values(idx);
+            end
+        end
+
+        function value = initialWindowMedian(profile, values, windowS)
+            if nargin < 3 || isempty(windowS) || windowS <= 0
+                value = lts.correlation.CorrelationStateInitializer.firstFinite(values);
+                return;
+            end
+
+            value = NaN;
+            if isempty(values)
+                return;
+            end
+
+            values = double(values(:));
+            mask = false(size(values));
+            if ~isempty(profile.time) && numel(profile.time) == numel(values)
+                time = profile.time(:);
+                mask = isfinite(time) & time <= windowS + eps(max(windowS, 1));
+            elseif ~isempty(values)
+                mask(1) = true;
+            end
+
+            windowValues = values(mask & isfinite(values));
+            if isempty(windowValues)
+                value = lts.correlation.CorrelationStateInitializer.firstFinite(values);
+            else
+                value = median(windowValues);
             end
         end
 
@@ -329,6 +407,147 @@ classdef CorrelationStateInitializer
             state.rideHeight = -chassis.getHeave();
         end
 
+        function state = seedSideslipFromAxleAccelerations( ...
+                profile, vehicleManager, state, wheelSpeeds, bodyAy, frontAy, rearAy)
+            if isempty(vehicleManager) || isempty(vehicleManager.tire) || ...
+                    ~isfinite(bodyAy) || ~isfinite(frontAy) || ~isfinite(rearAy) || ...
+                    ~isfinite(state.speed) || state.speed <= 2 || ...
+                    ~isfinite(state.yawRate) || abs(state.yawRate) < 1e-6
+                return;
+            end
+
+            beta0 = atan2(state.vy, max(state.vx, 0.1));
+            maxBeta = 0.25;
+            span = deg2rad(10);
+            candidates = linspace( ...
+                max(-maxBeta, beta0 - span), ...
+                min(maxBeta, beta0 + span), 31);
+            if isempty(candidates)
+                return;
+            end
+
+            target = [bodyAy, frontAy, rearAy];
+            bestScore = inf;
+            bestBeta = beta0;
+            for i = 1:numel(candidates)
+                estimate = lts.correlation.CorrelationStateInitializer.estimateInitialAccelerations( ...
+                    profile, vehicleManager, state, candidates(i), wheelSpeeds);
+                if ~all(isfinite([estimate.ay, estimate.frontAy, estimate.rearAy]))
+                    continue;
+                end
+                errorG = ([estimate.ay, estimate.frontAy, estimate.rearAy] - target) / 9.80665;
+                score = 0.5 * errorG(1)^2 + errorG(2)^2 + errorG(3)^2;
+                if score < bestScore
+                    bestScore = score;
+                    bestBeta = candidates(i);
+                end
+            end
+
+            if isfinite(bestScore)
+                state = lts.correlation.CorrelationStateInitializer.setStateBodySlip( ...
+                    state, bestBeta);
+            end
+        end
+
+        function estimate = estimateInitialAccelerations( ...
+                profile, vehicleManager, state, beta, wheelSpeeds)
+            candidate = lts.correlation.CorrelationStateInitializer.setStateBodySlip( ...
+                state, beta);
+            values = wheelSpeeds;
+            if isempty(values)
+                values = NaN(1, 4);
+            end
+
+            kin = lts.correlation.CorrelationStateInitializer.cornerKinematics( ...
+                vehicleManager, candidate.steer);
+            corners = {'FL', 'FR', 'RL', 'RR'};
+            loads = zeros(4, 1);
+            slipAngles = zeros(4, 1);
+            slipRatios = zeros(4, 1);
+            longSpeeds = zeros(4, 1);
+            cambers = zeros(4, 1);
+            for i = 1:numel(corners)
+                corner = corners{i};
+                tireState = vehicleManager.tire.(corner);
+                [alpha, ~, longSpeed] = ...
+                    lts.correlation.CorrelationStateInitializer.initialCornerSlip( ...
+                    tireState, kin.(corner), candidate);
+                wheelSpeed = NaN;
+                if numel(values) >= i
+                    wheelSpeed = values(i);
+                end
+                if ~isfinite(wheelSpeed)
+                    wheelSpeed = tireState.angularVelocity * tireState.wheelRadius;
+                end
+                if ~isfinite(wheelSpeed)
+                    wheelSpeed = longSpeed;
+                end
+                kappa = lts.correlation.CorrelationStateInitializer.slipRatioFromWheelSpeed( ...
+                    wheelSpeed, longSpeed);
+                loads(i) = lts.correlation.CorrelationStateInitializer.cornerNormalLoad( ...
+                    vehicleManager, corner, tireState);
+                slipAngles(i) = alpha;
+                slipRatios(i) = kappa;
+                longSpeeds(i) = longSpeed;
+                cambers(i) = lts.correlation.CorrelationStateInitializer.fieldOrDefault( ...
+                    kin.(corner), 'camberAngle', 0);
+            end
+
+            estimate = struct('ay', NaN, 'frontAy', NaN, 'rearAy', NaN);
+            if ~ismethod(vehicleManager.tire, 'updateAllCorners') || ...
+                    ~all(isfinite(loads)) || ~any(loads > 0)
+                return;
+            end
+
+            vehicleManager.tire.updateAllCorners( ...
+                loads(1), loads(2), loads(3), loads(4), ...
+                slipAngles(1), slipAngles(2), slipAngles(3), slipAngles(4), ...
+                slipRatios(1), slipRatios(2), slipRatios(3), slipRatios(4), ...
+                cambers(1), cambers(2), cambers(3), cambers(4), ...
+                0, longSpeeds, candidate.mu, true, 'steady');
+
+            [sumFyBody, yawMoment] = ...
+                lts.correlation.CorrelationStateInitializer.planarLateralForceAndMoment( ...
+                vehicleManager, kin, corners);
+            ay = sumFyBody / max(vehicleManager.totalMass, eps);
+            yawAccel = yawMoment / max(vehicleManager.yawInertia, eps);
+            [frontArm, rearArm] = ...
+                lts.correlation.CorrelationStateInitializer.axleArms(vehicleManager);
+            estimate.ay = ay;
+            estimate.frontAy = ay + yawAccel * frontArm;
+            estimate.rearAy = ay - yawAccel * rearArm;
+        end
+
+        function [sumFyBody, yawMoment] = planarLateralForceAndMoment( ...
+                vehicleManager, kin, corners)
+            sumFyBody = 0;
+            yawMoment = 0;
+            for i = 1:numel(corners)
+                corner = corners{i};
+                tireState = vehicleManager.tire.(corner);
+                cornerKin = kin.(corner);
+                wheelHeading = ...
+                    lts.correlation.CorrelationStateInitializer.fieldOrDefault(cornerKin, 'steerAngle', 0) + ...
+                    lts.correlation.CorrelationStateInitializer.fieldOrDefault(cornerKin, 'toeAngle', 0);
+                FxBody = tireState.Fx * cos(wheelHeading) - tireState.Fy * sin(wheelHeading);
+                FyBody = tireState.Fx * sin(wheelHeading) + tireState.Fy * cos(wheelHeading);
+                xPos = lts.correlation.CorrelationStateInitializer.fieldOrDefault( ...
+                    cornerKin, 'xPosition', 0);
+                yPos = lts.correlation.CorrelationStateInitializer.fieldOrDefault( ...
+                    cornerKin, 'yPosition', 0);
+                sumFyBody = sumFyBody + FyBody;
+                yawMoment = yawMoment + xPos * FyBody - yPos * FxBody;
+            end
+        end
+
+        function state = setStateBodySlip(state, beta)
+            speed = max(state.speed, 0);
+            beta = max(-0.25, min(0.25, beta));
+            state.vx = speed * cos(beta);
+            state.vy = speed * sin(beta);
+            state.bodySlipAngle = beta;
+        end
+
         function seedTireRelaxationState(vehicleManager, state)
             if isempty(vehicleManager) || isempty(vehicleManager.tire)
                 return;
@@ -364,7 +583,8 @@ classdef CorrelationStateInitializer
                 longSpeeds(i) = longSpeed;
                 cambers(i) = lts.correlation.CorrelationStateInitializer.fieldOrDefault( ...
                     cornerKin, 'camberAngle', 0);
-                loads(i) = tireState.normalForce;
+                loads(i) = lts.correlation.CorrelationStateInitializer.cornerNormalLoad( ...
+                    vehicleManager, corner, tireState);
             end
 
             if ismethod(vehicleManager.tire, 'updateAllCorners') && all(isfinite(loads)) && any(loads > 0)
@@ -403,9 +623,70 @@ classdef CorrelationStateInitializer
             alpha = max(-0.3, min(0.3, alpha));
 
             wheelSpeed = tireState.angularVelocity * tireState.wheelRadius;
+            kappa = lts.correlation.CorrelationStateInitializer.slipRatioFromWheelSpeed( ...
+                wheelSpeed, longSpeed);
+        end
+
+        function load = cornerNormalLoad(vehicleManager, corner, tireState)
+            load = NaN;
+            if nargin >= 3 && ~isempty(tireState) && ...
+                    isprop(tireState, 'normalForce') && isfinite(tireState.normalForce) && ...
+                    tireState.normalForce > 0
+                load = tireState.normalForce;
+                return;
+            end
+
+            if isempty(vehicleManager) || isempty(vehicleManager.suspension)
+                load = 0;
+                return;
+            end
+
+            suspensionField = '';
+            switch upper(corner)
+                case 'FL'
+                    suspensionField = 'frontLeft';
+                case 'FR'
+                    suspensionField = 'frontRight';
+                case 'RL'
+                    suspensionField = 'rearLeft';
+                case 'RR'
+                    suspensionField = 'rearRight';
+            end
+
+            if ~isempty(suspensionField) && ...
+                    isprop(vehicleManager.suspension, suspensionField)
+                cornerSuspension = vehicleManager.suspension.(suspensionField);
+                if ~isempty(cornerSuspension) && isprop(cornerSuspension, 'state') && ...
+                        isprop(cornerSuspension.state, 'tireNormalForce') && ...
+                        isfinite(cornerSuspension.state.tireNormalForce)
+                    load = max(cornerSuspension.state.tireNormalForce, 0);
+                end
+            end
+
+            if ~isfinite(load)
+                load = 0;
+            end
+        end
+
+        function kappa = slipRatioFromWheelSpeed(wheelSpeed, longSpeed)
             denom = max(abs(wheelSpeed), abs(longSpeed));
             kappa = (wheelSpeed - longSpeed) / max(denom, 1.0);
             kappa = max(-1, min(1, kappa));
+        end
+
+        function kin = cornerKinematics(vehicleManager, steer)
+            if ~isempty(vehicleManager.suspension) && ...
+                    ismethod(vehicleManager.suspension, 'getCornerKinematics')
+                kin = vehicleManager.suspension.getCornerKinematics();
+            else
+                kin = lts.correlation.CorrelationStateInitializer.defaultCornerKinematics( ...
+                    vehicleManager, steer);
+            end
+        end
+
+        function [frontArm, rearArm] = axleArms(vehicleManager)
+            frontArm = vehicleManager.wheelbase * (1 - vehicleManager.staticFrontWeight);
+            rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
         end
 
         function kin = defaultCornerKinematics(vehicleManager, steer)

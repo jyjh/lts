@@ -226,6 +226,26 @@ classdef CorrelationReplayProfile
         function distance = totalDistance(obj)
             distance = obj.distance(end) - obj.distance(1);
         end
+
+        function obj = withPackPowerAdvance(obj, advanceS)
+            if nargin < 2 || isempty(advanceS)
+                advanceS = 0;
+            end
+            if ~isnumeric(advanceS) || ~isscalar(advanceS) || ~isfinite(advanceS)
+                error('lts_correlation_CorrelationReplayProfile:InvalidPackPowerAdvance', ...
+                    'Pack power channel advance must be a finite scalar in seconds.');
+            end
+
+            advanceS = double(advanceS);
+            if advanceS == 0 || ~obj.hasPackPower()
+                return;
+            end
+
+            queryTime = obj.time + advanceS;
+            obj.packVoltageV = obj.shiftTimeChannel(obj.packVoltageV, queryTime);
+            obj.packCurrentA = obj.shiftTimeChannel(obj.packCurrentA, queryTime);
+            obj = obj.buildSampleCaches();
+        end
     end
 
     methods (Access = private)
@@ -432,6 +452,18 @@ classdef CorrelationReplayProfile
             else
                 query = max(cache.axis(1), min(cache.axis(end), query));
                 value = cache.interpolant(query);
+            end
+        end
+
+        function values = shiftTimeChannel(obj, sourceValues, queryTime)
+            cache = obj.buildInterpCache(obj.time, sourceValues);
+            if cache.isMissing
+                values = NaN(size(obj.time));
+            elseif cache.isScalar
+                values = repmat(cache.values(1), size(obj.time));
+            else
+                queryTime = max(cache.axis(1), min(cache.axis(end), queryTime(:)));
+                values = cache.interpolant(queryTime);
             end
         end
     end

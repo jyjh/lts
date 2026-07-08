@@ -119,6 +119,32 @@ tire.updateWheelDynamics(corner, 0, 500, 0.001, 0.5, 20);
 verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
 end
 
+function testPassiveWheelCanRollNegativeWithReverseLocalRoadSpeed(testCase)
+tire = createPacejkaTire();
+corner = tire.FL;
+corner.normalForce = 1000;
+corner.angularVelocity = 0;
+longSpeed = -7;
+
+tire.updateCorner(corner, 1000, 0, 1, 0, 1.2, 0, longSpeed, true, 'steady');
+tire.updateWheelDynamics(corner, 0, 0, 0.001, 0.5, longSpeed);
+
+verifyLessThan(testCase, corner.angularVelocity, 0);
+end
+
+function testBrakeLocksReverseRollingWheelAtZero(testCase)
+tire = createPacejkaTire();
+corner = tire.FL;
+corner.normalForce = 1000;
+corner.angularVelocity = 0;
+longSpeed = -7;
+
+tire.updateCorner(corner, 1000, 0, 1, 0, 1.2, 0, longSpeed, true, 'steady');
+tire.updateWheelDynamics(corner, 0, 2000, 0.001, 0.5, longSpeed);
+
+verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
+end
+
 function tire = createPacejkaTire()
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 end

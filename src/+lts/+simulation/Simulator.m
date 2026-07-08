@@ -52,6 +52,7 @@ classdef Simulator < handle
         applySteeringSlew = true
         brakeMode = "ratio"
         powertrainMode = "throttle"
+        limitMotorTorqueByPackPower = false
         stopOnOffTrack = true
         stopAtTrackEnd = true
         stopTime = inf
@@ -933,10 +934,10 @@ classdef Simulator < handle
                         stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
                         stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
                         stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
-                        stateLog.tireSpeed_FL(step) = vm.tire.FL.angularVelocity * vm.tire.FL.wheelRadius;
-                        stateLog.tireSpeed_FR(step) = vm.tire.FR.angularVelocity * vm.tire.FR.wheelRadius;
-                        stateLog.tireSpeed_RL(step) = vm.tire.RL.angularVelocity * vm.tire.RL.wheelRadius;
-                        stateLog.tireSpeed_RR(step) = vm.tire.RR.angularVelocity * vm.tire.RR.wheelRadius;
+                        stateLog.tireSpeed_FL(step) = abs(vm.tire.FL.angularVelocity * vm.tire.FL.wheelRadius);
+                        stateLog.tireSpeed_FR(step) = abs(vm.tire.FR.angularVelocity * vm.tire.FR.wheelRadius);
+                        stateLog.tireSpeed_RL(step) = abs(vm.tire.RL.angularVelocity * vm.tire.RL.wheelRadius);
+                        stateLog.tireSpeed_RR(step) = abs(vm.tire.RR.angularVelocity * vm.tire.RR.wheelRadius);
                         stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
                         stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
                         stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
@@ -1013,6 +1014,8 @@ classdef Simulator < handle
             parser.addParameter('ApplySteeringSlew', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('BrakeMode', 'ratio', @(x) ischar(x) || isstring(x));
             parser.addParameter('PowertrainMode', 'throttle', @(x) ischar(x) || isstring(x));
+            parser.addParameter('LimitMotorTorqueByPackPower', ...
+                obj.limitMotorTorqueByPackPower, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
             parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
@@ -1032,6 +1035,7 @@ classdef Simulator < handle
             previousSteerPolicy = obj.applySteeringSlew;
             previousBrakeMode = obj.brakeMode;
             previousPowertrainMode = obj.powertrainMode;
+            previousLimitMotorTorqueByPackPower = obj.limitMotorTorqueByPackPower;
             previousOffTrackPolicy = obj.stopOnOffTrack;
             previousTrackEndPolicy = obj.stopAtTrackEnd;
             previousStopTime = obj.stopTime;
@@ -1041,7 +1045,8 @@ classdef Simulator < handle
                 previousDriver, previousMethod, previousPedalPolicy, ...
                 previousSteerPolicy, previousBrakeMode, previousOffTrackPolicy, ...
                 previousTrackEndPolicy, previousStopTime, ...
-                previousReferenceMode, previousFreeSurfaceMu, previousPowertrainMode));
+                previousReferenceMode, previousFreeSurfaceMu, previousPowertrainMode, ...
+                previousLimitMotorTorqueByPackPower));
 
             obj.driverModel = lts.correlation.TelemetryReplayDriver(profile, ...
                 'ReplayDomain', parser.Results.ReplayDomain);
@@ -1050,6 +1055,8 @@ classdef Simulator < handle
             obj.applySteeringSlew = logical(parser.Results.ApplySteeringSlew);
             obj.brakeMode = obj.validateBrakeMode(parser.Results.BrakeMode);
             obj.powertrainMode = obj.validatePowertrainMode(parser.Results.PowertrainMode);
+            obj.limitMotorTorqueByPackPower = ...
+                logical(parser.Results.LimitMotorTorqueByPackPower);
             if obj.powertrainMode == "motor_torque_command" && ...
                     ~profile.hasMotorTorqueCommand()
                 error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
@@ -1143,7 +1150,7 @@ classdef Simulator < handle
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
                 steerPolicy, brakeMode, offTrackPolicy, trackEndPolicy, stopTime, ...
-                referenceMode, freeSurfaceMu, powertrainMode)
+                referenceMode, freeSurfaceMu, powertrainMode, limitMotorTorqueByPackPower)
             obj.driverModel = driverModel;
             obj.cachedDriverInputMethod = inputMethod;
             obj.enforcePedalExclusivity = pedalPolicy;
@@ -1160,6 +1167,9 @@ classdef Simulator < handle
             end
             if nargin >= 12
                 obj.powertrainMode = powertrainMode;
+            end
+            if nargin >= 13
+                obj.limitMotorTorqueByPackPower = limitMotorTorqueByPackPower;
             end
         end
 
@@ -1338,6 +1348,9 @@ classdef Simulator < handle
             end
 
             packPowerW = packVoltageV * packCurrentA;
+            if ~obj.limitMotorTorqueByPackPower
+                return;
+            end
             if ~isfinite(packPowerW) || requestedMotorTorqueNm == 0
                 return;
             end
