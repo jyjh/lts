@@ -78,6 +78,8 @@ classdef Simulator < handle
         cachedRearArm = NaN        % CG-to-rear-axle moment arm [m] (run invariant)
         cachedRollingResistanceCoeff = NaN
         cachedPowertrainHasCoastdown
+        cachedMaxSteeringAngle
+        cachedSteeringRampTime
     end
     
     methods
@@ -204,14 +206,16 @@ classdef Simulator < handle
             % limiter sees the converged motor speed.
             tireInputState = state;
             tireInputState.steer = steer;
-            wheelLongSpeeds = obj.computeCornerLongitudinalSpeeds(tireInputState);
+            tireContact = obj.computePlanarTireContactData( ...
+                tireInputState, obj.getCornerKinematics(steer));
+            wheelLongSpeeds = tireContact.longSpeeds;
 
             nWheelIter = max(1, round(obj.wheelSolveIterations));
             for iter = 1:nWheelIter
-                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds.FL);
-                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds.FR);
-                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL, wheelLongSpeeds.RL);
-                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt, inertia.RR, wheelLongSpeeds.RR);
+                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds(1));
+                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds(2));
+                vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL, wheelLongSpeeds(3));
+                vm.tire.updateWheelDynamics(vm.tire.RR, T_drive_RR, T_brake_rear, obj.dt, inertia.RR, wheelLongSpeeds(4));
 
                 % Re-solve the differential at the updated wheel speeds so a
                 % locked diff enforces a common speed and an LSD re-biases
@@ -242,10 +246,10 @@ classdef Simulator < handle
                 % lag time constant is not shrunk by the sub-iteration.
                 if iter < nWheelIter
                     tireData = obj.updatePlanarTireForces( ...
-                        tireInputState, cornerLoads, 0, false, 'steady');
+                        tireInputState, cornerLoads, 0, false, 'steady', tireContact);
                 else
                     tireData = obj.updatePlanarTireForces( ...
-                        tireInputState, cornerLoads, obj.dt, true, 'advance');
+                        tireInputState, cornerLoads, obj.dt, true, 'advance', tireContact);
                 end
             end
             dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
@@ -265,7 +269,7 @@ classdef Simulator < handle
                 % contact-patch relaxation already advanced once on the final
                 % wheel-solve iteration above, so it must not advance again here.
                 tireData = obj.updatePlanarTireForces( ...
-                    tireInputState, cornerLoads, 0, true, 'hold');
+                    tireInputState, cornerLoads, 0, true, 'hold', tireContact);
                 dynamics = obj.computePlanarDynamics(state, tireData, F_drag);
             end
 
@@ -1745,20 +1749,30 @@ classdef Simulator < handle
         end
 
         function maxSteer = getMaxSteeringAngle(obj)
+            if ~isempty(obj.cachedMaxSteeringAngle)
+                maxSteer = obj.cachedMaxSteeringAngle;
+                return;
+            end
             maxSteer = 0.6;
             if ~isempty(obj.driverModel) && ...
                     isprop(obj.driverModel, 'maxSteeringAngle')
                 maxSteer = obj.driverModel.maxSteeringAngle;
             end
             maxSteer = max(maxSteer, eps);
+            obj.cachedMaxSteeringAngle = maxSteer;
         end
 
         function rampTime = getSteeringRampTime(obj)
+            if ~isempty(obj.cachedSteeringRampTime)
+                rampTime = obj.cachedSteeringRampTime;
+                return;
+            end
             rampTime = obj.steeringRampTime;
             if ~isempty(obj.driverModel) && ...
                     isprop(obj.driverModel, 'steeringRampTime')
                 rampTime = obj.driverModel.steeringRampTime;
             end
+            obj.cachedSteeringRampTime = rampTime;
         end
 
         function ref = referenceAtProgress(~, s, x, y, trackData)
@@ -1771,7 +1785,7 @@ classdef Simulator < handle
                 x, y, trackData, previousIdx);
         end
 
-        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt, computePeakMu, relaxationMode)
+        function tireData = updatePlanarTireForces(obj, state, cornerLoads, dt, computePeakMu, relaxationMode, tireContact)
             % UPDATEPLANARTIREFORCES Evaluate tire forces and assemble body
             % forces / yaw moment from all four corners.
             %   tireData = updatePlanarTireForces(state, cornerLoads)
@@ -1795,48 +1809,24 @@ classdef Simulator < handle
                 end
             end
             vm = obj.vehicleManager;
-            kin = obj.getCornerKinematics(state.steer);
-            corners = {'FL', 'FR', 'RL', 'RR'};
-            nC = numel(corners);
-
-            % Fixed-size column vectors (FL, FR, RL, RR) instead of
-            % dynamically-grown structs with sprintf field names.
-            slipAngles  = zeros(nC, 1);
-            slipRatios  = zeros(nC, 1);
-            longSpeeds  = zeros(nC, 1);
-            wheelHeadings = zeros(nC, 1);
-            cosWh = zeros(nC, 1);
-            sinWh = zeros(nC, 1);
-
-            for i = 1:nC
-                corner = corners{i};
-                cornerKin = kin.(corner);
-
-                vxCorner = state.vx - state.yawRate * cornerKin.yPosition;
-                vyCorner = state.vy + state.yawRate * cornerKin.xPosition;
-                wh = cornerKin.steerAngle + cornerKin.toeAngle;
-
-                cwh = cos(wh); swh = sin(wh);
-                longSpeed = vxCorner * cwh + vyCorner * swh;
-                latSpeed  = -vxCorner * swh + vyCorner * cwh;
-                % Slip angle is the angle between wheel heading and local
-                % contact-patch velocity. The 0.1 m/s denominator floor avoids
-                % undefined atan behavior while the car is nearly stationary.
-                alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
-                tireState = vm.tire.(corner);
-                kappa = obj.computeLocalSlipRatio(tireState, longSpeed);
-
-                slipAngles(i)    = alpha;
-                slipRatios(i)    = kappa;
-                longSpeeds(i)    = longSpeed;
-                wheelHeadings(i) = wh;
-                cosWh(i) = cwh;
-                sinWh(i) = swh;
+            if nargin < 7 || isempty(tireContact)
+                tireContact = obj.computePlanarTireContactData( ...
+                    state, obj.getCornerKinematics(state.steer));
             end
 
             % Per-corner contact-patch longitudinal speeds feed the tire
             % relaxation length (transient slip lag).
-            longSpeedVec = longSpeeds;
+            slipAngles = tireContact.slipAngles;
+            longSpeedVec = tireContact.longSpeeds;
+            tireFL = vm.tire.FL;
+            tireFR = vm.tire.FR;
+            tireRL = vm.tire.RL;
+            tireRR = vm.tire.RR;
+            slipRatios = [ ...
+                obj.computeLocalSlipRatio(tireFL, longSpeedVec(1)); ...
+                obj.computeLocalSlipRatio(tireFR, longSpeedVec(2)); ...
+                obj.computeLocalSlipRatio(tireRL, longSpeedVec(3)); ...
+                obj.computeLocalSlipRatio(tireRR, longSpeedVec(4))];
             surfaceMu = obj.getStateSurfaceMu(state);
 
             if isempty(obj.cachedTireHasBatchUpdate)
@@ -1847,42 +1837,48 @@ classdef Simulator < handle
                     cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
                     slipAngles(1), slipAngles(2), slipAngles(3), slipAngles(4), ...
                     slipRatios(1), slipRatios(2), slipRatios(3), slipRatios(4), ...
-                    kin.FL.camberAngle, kin.FR.camberAngle, ...
-                    kin.RL.camberAngle, kin.RR.camberAngle, dt, longSpeedVec, ...
+                    tireContact.camberAngles(1), tireContact.camberAngles(2), ...
+                    tireContact.camberAngles(3), tireContact.camberAngles(4), dt, longSpeedVec, ...
                     surfaceMu, computePeakMu, relaxationMode);
             else
                 % Fallback for tire models without a batch update: evaluate
                 % each corner individually. Wheel omega is integrated in the
                 % main step() wheel-contact solve, not here.
-                for i = 1:nC
-                    corner = corners{i};
-                    tireState = vm.tire.(corner);
-                    cornerKin = kin.(corner);
-                    vm.tire.updateCorner(tireState, cornerLoads.(corner), ...
-                        slipAngles(i), slipRatios(i), ...
-                        cornerKin.camberAngle, surfaceMu, dt, longSpeeds(i), ...
-                        computePeakMu, relaxationMode);
-                end
+                vm.tire.updateCorner(tireFL, cornerLoads.FL, slipAngles(1), ...
+                    slipRatios(1), tireContact.camberAngles(1), surfaceMu, dt, ...
+                    longSpeedVec(1), computePeakMu, relaxationMode);
+                vm.tire.updateCorner(tireFR, cornerLoads.FR, slipAngles(2), ...
+                    slipRatios(2), tireContact.camberAngles(2), surfaceMu, dt, ...
+                    longSpeedVec(2), computePeakMu, relaxationMode);
+                vm.tire.updateCorner(tireRL, cornerLoads.RL, slipAngles(3), ...
+                    slipRatios(3), tireContact.camberAngles(3), surfaceMu, dt, ...
+                    longSpeedVec(3), computePeakMu, relaxationMode);
+                vm.tire.updateCorner(tireRR, cornerLoads.RR, slipAngles(4), ...
+                    slipRatios(4), tireContact.camberAngles(4), surfaceMu, dt, ...
+                    longSpeedVec(4), computePeakMu, relaxationMode);
             end
 
-            sumFxBody = 0;
-            sumFyBody = 0;
-            yawMoment = 0;
-            for i = 1:nC
-                corner = corners{i};
-                tireState = vm.tire.(corner);
-                cornerKin = kin.(corner);
+            cosWh = tireContact.cosWheelHeading;
+            sinWh = tireContact.sinWheelHeading;
+            xPos = tireContact.xPositions;
+            yPos = tireContact.yPositions;
 
-                FxBody = tireState.Fx * cosWh(i) - tireState.Fy * sinWh(i);
-                FyBody = tireState.Fx * sinWh(i) + tireState.Fy * cosWh(i);
+            FxBodyFL = tireFL.Fx * cosWh(1) - tireFL.Fy * sinWh(1);
+            FyBodyFL = tireFL.Fx * sinWh(1) + tireFL.Fy * cosWh(1);
+            FxBodyFR = tireFR.Fx * cosWh(2) - tireFR.Fy * sinWh(2);
+            FyBodyFR = tireFR.Fx * sinWh(2) + tireFR.Fy * cosWh(2);
+            FxBodyRL = tireRL.Fx * cosWh(3) - tireRL.Fy * sinWh(3);
+            FyBodyRL = tireRL.Fx * sinWh(3) + tireRL.Fy * cosWh(3);
+            FxBodyRR = tireRR.Fx * cosWh(4) - tireRR.Fy * sinWh(4);
+            FyBodyRR = tireRR.Fx * sinWh(4) + tireRR.Fy * cosWh(4);
 
-                sumFxBody = sumFxBody + FxBody;
-                sumFyBody = sumFyBody + FyBody;
-                % Planar yaw moment about CG: Mz = x*Fy - y*Fx for each
-                % contact patch, using suspension geometry contact positions.
-                yawMoment = yawMoment + ...
-                    cornerKin.xPosition * FyBody - cornerKin.yPosition * FxBody;
-            end
+            sumFxBody = FxBodyFL + FxBodyFR + FxBodyRL + FxBodyRR;
+            sumFyBody = FyBodyFL + FyBodyFR + FyBodyRL + FyBodyRR;
+            yawMoment = ...
+                xPos(1) * FyBodyFL - yPos(1) * FxBodyFL + ...
+                xPos(2) * FyBodyFR - yPos(2) * FxBodyFR + ...
+                xPos(3) * FyBodyRL - yPos(3) * FxBodyRL + ...
+                xPos(4) * FyBodyRR - yPos(4) * FxBodyRR;
             tireData.sumFxBody = sumFxBody;
             tireData.sumFyBody = sumFyBody;
             tireData.yawMoment = yawMoment;
@@ -2063,17 +2059,46 @@ classdef Simulator < handle
             trackData = lts.simulation.TrackReference.precomputeSegments(trackData);
         end
 
+        function contact = computePlanarTireContactData(~, state, kin)
+            vx = state.vx;
+            vy = state.vy;
+            yawRate = state.yawRate;
+
+            xPos = [kin.FL.xPosition; kin.FR.xPosition; ...
+                    kin.RL.xPosition; kin.RR.xPosition];
+            yPos = [kin.FL.yPosition; kin.FR.yPosition; ...
+                    kin.RL.yPosition; kin.RR.yPosition];
+            wheelHeading = [ ...
+                kin.FL.steerAngle + kin.FL.toeAngle; ...
+                kin.FR.steerAngle + kin.FR.toeAngle; ...
+                kin.RL.steerAngle + kin.RL.toeAngle; ...
+                kin.RR.steerAngle + kin.RR.toeAngle];
+
+            cosWh = cos(wheelHeading);
+            sinWh = sin(wheelHeading);
+            vxCorner = vx - yawRate .* yPos;
+            vyCorner = vy + yawRate .* xPos;
+            longSpeeds = vxCorner .* cosWh + vyCorner .* sinWh;
+            latSpeeds = -vxCorner .* sinWh + vyCorner .* cosWh;
+
+            contact.kin = kin;
+            contact.slipAngles = atan2(-latSpeeds, max(abs(longSpeeds), 0.1));
+            contact.longSpeeds = longSpeeds;
+            contact.cosWheelHeading = cosWh;
+            contact.sinWheelHeading = sinWh;
+            contact.xPositions = xPos;
+            contact.yPositions = yPos;
+            contact.camberAngles = [kin.FL.camberAngle; kin.FR.camberAngle; ...
+                                    kin.RL.camberAngle; kin.RR.camberAngle];
+        end
+
         function longSpeeds = computeCornerLongitudinalSpeeds(obj, state)
-            kin = obj.getCornerKinematics(state.steer);
-            corners = {'FL', 'FR', 'RL', 'RR'};
-            for i = 1:numel(corners)
-                corner = corners{i};
-                cornerKin = kin.(corner);
-                vxCorner = state.vx - state.yawRate * cornerKin.yPosition;
-                vyCorner = state.vy + state.yawRate * cornerKin.xPosition;
-                wh = cornerKin.steerAngle + cornerKin.toeAngle;
-                longSpeeds.(corner) = vxCorner * cos(wh) + vyCorner * sin(wh);
-            end
+            contact = obj.computePlanarTireContactData( ...
+                state, obj.getCornerKinematics(state.steer));
+            longSpeeds.FL = contact.longSpeeds(1);
+            longSpeeds.FR = contact.longSpeeds(2);
+            longSpeeds.RL = contact.longSpeeds(3);
+            longSpeeds.RR = contact.longSpeeds(4);
         end
 
         function surfaceMu = getStateSurfaceMu(~, state)
