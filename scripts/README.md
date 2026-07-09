@@ -30,15 +30,18 @@ the top to switch vehicle configs.
   `exports/tire_longitudinal_sensitivity.png`, and
   `exports/tire_acceleration_vs_mass.png` by default.
 - **`weight_savings_skidpad.m`** — sweeps vehicle mass and finds the point of
-  diminishing returns for weight savings in terms of max sustained skidpad
-  lateral G, using a simplified steady-state bicycle load-transfer model
-  (aero neglected) fed by the active `.tir` file's peak lateral-force
-  envelope. At each mass the max `a_y` is solved by bisection on the
-  load-transfer capacity residual; the diminishing-returns mass is the
-  Kneedle elbow (max perpendicular distance from the chord of the G-vs-mass
-  curve). Defaults to the theoretical tire and R25 geometry (`CgHeight`
-  0.256 m, `StaticFrontWeight` 0.5095, `ReferenceMassKg` 264). Saves
-  `exports/weight_savings_skidpad.png`.
+  diminishing returns for weight savings in terms of FSAE skidpad lap time,
+  using a simplified steady-state bicycle load-transfer model (aero neglected)
+  fed by the active `.tir` file's peak lateral-force envelope. At each mass the
+  max `a_y` is solved by bisection on the load-transfer capacity residual;
+  lap time uses the FSAE figure-8 constant `T = 5.9527 / sqrt(a_y)`. The
+  diminishing-returns mass is the Kneedle elbow on the lap-time-vs-mass curve
+  (raw G itself has *accelerating* returns to lightness because tire μ rises
+  as load falls; the `1/sqrt(G)` compression in lap time is what produces
+  genuine diminishing returns). Plots three panels (sustained G, lap time,
+  marginal lap-time benefit per kg saved). Defaults to the theoretical tire
+  and R25 geometry (`CgHeight` 0.256 m, `StaticFrontWeight` 0.5095,
+  `ReferenceMassKg` 264). Saves `exports/weight_savings_skidpad.png`.
 - **`investigate_lateral_g.m`** — correlation sanity report for lateral
   acceleration. Compares raw MoTeC lateral accel, speed*yaw-rate, steering
   demand, simulated body/tire Ay, and tire-capacity/utilization. Pass

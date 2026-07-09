@@ -108,7 +108,9 @@ result = struct( ...
     'massKg', massKg, ...
     'sustainedG', sweep.sustainedG, ...
     'sustainedMps2', sweep.sustainedMps2, ...
+    'lapTimeS', sweep.lapTimeS, ...
     'benefitGPerKgSaved', sweep.benefitGPerKgSaved, ...
+    'benefitSPerKgSaved', sweep.benefitSPerKgSaved, ...
     'limitedBy', sweep.limitedBy, ...
     'cornerLoadsN', sweep.cornerLoadsN, ...
     'frontCapacityN', sweep.frontCapacityN, ...
@@ -197,9 +199,16 @@ Fy(active, :) = FyActive;
 end
 
 function sweep = sweepMass(massKg, envelope, loadTransfer)
+% FSAE skidpad figure-8 constant: lap time T [s] relates to sustained lateral
+% accel a_y [g] as a_y = (5.9527 / T)^2, so T = 5.9527 / sqrt(a_y) for the
+% timed figure-8 run. This 1/sqrt compression is what creates diminishing
+% returns in lap time even though raw G has accelerating returns to lightness.
+FSAE_SKIDPAD_CONST = 5.9527;
+
 nMass = numel(massKg);
 sustainedG = zeros(nMass, 1);
 sustainedMps2 = zeros(nMass, 1);
+lapTimeS = zeros(nMass, 1);
 cornerLoadsN = zeros(nMass, 4);
 frontCapacityN = zeros(nMass, 1);
 rearCapacityN = zeros(nMass, 1);
@@ -208,6 +217,7 @@ limitedBy = strings(nMass, 1);
 for i = 1:nMass
     [sustainedG(i), detail] = solveSkidpad(massKg(i), envelope, loadTransfer);
     sustainedMps2(i) = sustainedG(i) * 9.80665;
+    lapTimeS(i) = FSAE_SKIDPAD_CONST / sqrt(max(sustainedG(i), eps));
     cornerLoadsN(i, :) = detail.cornerLoadsN(:).';
     frontCapacityN(i) = detail.frontCapacityN;
     rearCapacityN(i) = detail.rearCapacityN;
@@ -215,16 +225,22 @@ for i = 1:nMass
 end
 
 if nMass >= 2
-    % sustainedG is solved by bisection to ~1e-15, but over this near-linear
-    % range its real variation is in the ~4th significant digit, so the
-    % numerical derivative is dominated by solver/float noise and reads as
-    % spurious oscillation on the marginal-gain plot. The benefit (gain per
-    % kg saved) is -dG/dKg; smooth that with a centered moving average and
-    % round to suppress the residual float wiggles.
+    % Marginal benefit of removing 1 kg, reported as a positive quantity.
+    % Sign depends on whether the metric is "higher-is-better" (G) or
+    % "lower-is-better" (lap time):
+    %   - G:        heavier -> less G, so dG/dm < 0; gain per kg = -dG/dm.
+    %   - lap time: heavier -> more time, so dT/dm > 0; time saved = +dT/dm.
+    % Lap time is where diminishing returns actually live: the 1/sqrt(G)
+    % compression in T means each kg saved shaves less time off as the car
+    % gets lighter. Raw G itself has ACCELERATING returns to lightness (tire
+    % mu rises as load falls), so its curvature points the wrong way for
+    % diminishing returns; lap time is the honest metric.
+    dTdm = gradient(lapTimeS, massKg);
+    benefitSPerKgSaved = smoothMarginal(dTdm, nMass);
     dGdKg = gradient(sustainedG, massKg);
-    benefitGPerKgSaved = -movingAverage(dGdKg, max(5, ceil(nMass / 20)));
-    benefitGPerKgSaved = round(benefitGPerKgSaved, 5);
+    benefitGPerKgSaved = -smoothMarginal(dGdKg, nMass);
 else
+    benefitSPerKgSaved = NaN(nMass, 1);
     benefitGPerKgSaved = NaN(nMass, 1);
 end
 
@@ -232,11 +248,20 @@ sweep = struct( ...
     'massKg', massKg, ...
     'sustainedG', sustainedG, ...
     'sustainedMps2', sustainedMps2, ...
+    'lapTimeS', lapTimeS, ...
     'benefitGPerKgSaved', benefitGPerKgSaved, ...
+    'benefitSPerKgSaved', benefitSPerKgSaved, ...
     'limitedBy', limitedBy, ...
     'cornerLoadsN', cornerLoadsN, ...
     'frontCapacityN', frontCapacityN, ...
     'rearCapacityN', rearCapacityN);
+end
+
+function out = smoothMarginal(derivative, nMass)
+% Numerical derivative of a near-constant curve is float-noise dominated.
+% Centered moving average + coarse round to suppress spurious oscillation.
+out = movingAverage(derivative, max(5, ceil(nMass / 20)));
+out = round(out, 6);
 end
 
 function [ayG, detail] = solveSkidpad(massKg, envelope, loadTransfer)
@@ -338,11 +363,12 @@ end
 end
 
 function knee = findKnee(sweep)
-% Kneedle elbow: the point of maximum perpendicular distance from the chord
-% of the G-vs-mass curve (endpoints excluded). This is the point where
-% returns from further weight savings start to diminish.
+% Kneedle elbow on the LAP-TIME-vs-mass curve (endpoints excluded). Lap time
+% is the honest diminishing-returns metric: the 1/sqrt(G) compression in T
+% means each kg saved shaves less lap time off as the car gets lighter,
+% whereas raw G itself has accelerating returns to lightness.
 mass = sweep.massKg(:);
-accel = sweep.sustainedG(:);
+lapTime = sweep.lapTimeS(:);
 
 if isempty(mass)
     knee = emptyKnee();
@@ -353,7 +379,7 @@ elseif numel(mass) < 3
 end
 
 x = normalizeRange(mass);
-y = normalizeRange(accel);
+y = normalizeRange(lapTime);
 p1 = [x(1), y(1)];
 p2 = [x(end), y(end)];
 lineVec = p2 - p1;
@@ -380,10 +406,15 @@ end
 
 function knee = kneeFromIndex(sweep, idx, method)
 mass = sweep.massKg(:);
-if numel(sweep.benefitGPerKgSaved) >= numel(mass)
-    benefit = sweep.benefitGPerKgSaved(idx);
+if numel(sweep.benefitSPerKgSaved) >= numel(mass)
+    benefitS = sweep.benefitSPerKgSaved(idx);
 else
-    benefit = NaN;
+    benefitS = NaN;
+end
+if numel(sweep.benefitGPerKgSaved) >= numel(mass)
+    benefitG = sweep.benefitGPerKgSaved(idx);
+else
+    benefitG = NaN;
 end
 knee = struct( ...
     'method', method, ...
@@ -391,7 +422,9 @@ knee = struct( ...
     'massKg', mass(idx), ...
     'accelG', sweep.sustainedG(idx), ...
     'accelMps2', sweep.sustainedMps2(idx), ...
-    'benefitGPerKgSaved', benefit);
+    'lapTimeS', sweep.lapTimeS(idx), ...
+    'benefitSPerKgSaved', benefitS, ...
+    'benefitGPerKgSaved', benefitG);
 end
 
 function knee = emptyKnee()
@@ -401,6 +434,8 @@ knee = struct( ...
     'massKg', NaN, ...
     'accelG', NaN, ...
     'accelMps2', NaN, ...
+    'lapTimeS', NaN, ...
+    'benefitSPerKgSaved', NaN, ...
     'benefitGPerKgSaved', NaN);
 end
 
@@ -431,37 +466,32 @@ end
 scale = max(surfaceMu, 0) / max(tire.surfaceMuReference, eps);
 end
 
-function out = curveLinearity(massKg, sustainedG)
-% Characterize how close the G-vs-mass curve is to a straight line. When the
-% fit is nearly linear, a Kneedle knee is a weak/arbitrary pick and the
-% honest takeaway is "each kg saved is worth about the same".
+function out = curveLinearity(massKg, signal)
+% Fit a quadratic to (mass, signal) and report the quadratic coefficient and
+% a linear R^2. The quadratic sign tells us the curvature direction: for a
+% G-vs-mass sweep, c >= 0 means ACCELERATING returns to lightness (lighter
+% pays off progressively more per kg); for a lap-time sweep, c >= 0 means
+% DIMINISHING returns (each kg saved shaves less time off as the car gets
+% lighter). The curvature is the honest signal here, not the knee pick.
 mass = massKg(:);
-g = sustainedG(:);
-out = struct('linearFitR2', NaN, 'isNearlyLinear', false);
-finite = isfinite(mass) & isfinite(g);
+sig = signal(:);
+out = struct('quadCoeff', NaN, 'linearFitR2', NaN);
+finite = isfinite(mass) & isfinite(sig);
 mass = mass(finite);
-g = g(finite);
+sig = sig(finite);
 if numel(mass) < 3
     return;
 end
-p = polyfit(mass, g, 1);
-residuals = g - polyval(p, mass);
+p2 = polyfit(mass, sig, 2);
+out.quadCoeff = p2(1);
+p1 = polyfit(mass, sig, 1);
+residuals = sig - polyval(p1, mass);
 ssRes = sum(residuals.^2);
-ssTot = sum((g - mean(g)).^2);
+ssTot = sum((sig - mean(sig)).^2);
 if ssTot > eps
     out.linearFitR2 = max(0, 1 - ssRes / ssTot);
 else
     out.linearFitR2 = 1;
-end
-out.isNearlyLinear = out.linearFitR2 >= 0.995;
-end
-
-function m = meanFinite(values)
-values = values(isfinite(values));
-if isempty(values)
-    m = NaN;
-else
-    m = mean(values);
 end
 end
 
@@ -485,15 +515,8 @@ for i = 1:n
 end
 end
 
-function out = smoothFinite(values)
-% Round to 1e-6 g/kg (1e-3 milli-g/kg) after smoothing: fine enough to keep
-% any real trend, coarse enough to flatten residual float wiggles.
-out = round(values(:), 6);
-end
-
 function printReport(tireFilePath, surfaceMu, loadTransfer, massKg, sweep, ...
         knee, referenceMassKg)
-g = 9.80665;
 [~, tireName, tireExt] = fileparts(tireFilePath);
 fprintf('\n=== Weight Savings Skidpad (bicycle model, aero neglected) ===\n');
 fprintf('Tire file:           %s%s\n', tireName, tireExt);
@@ -502,68 +525,70 @@ fprintf('Geometry:            track %.3f m, CG %.3f m, static front %.1f%%, fron
     loadTransfer.trackWidth, loadTransfer.cgHeight, ...
     100 * loadTransfer.staticFrontWeight, ...
     100 * loadTransfer.frontLoadTransferDistribution);
+fprintf('Skidpad metric:      FSAE figure-8, T = 5.9527 / sqrt(a_y)\n');
 fprintf('Mass sweep:          %.1f to %.1f kg (%d points)\n', ...
     min(massKg), max(massKg), numel(massKg));
 
-[refG, ~, refLimit] = sustainedAtMass(referenceMassKg, massKg, sweep);
-if isfinite(refG)
-    fprintf('Reference mass:      %.1f kg -> %.3f g sustained, limited by %s\n', ...
-        referenceMassKg, refG, refLimit);
+[refIdx, refLimit] = indexAtMass(referenceMassKg, massKg, sweep);
+if isfinite(refIdx)
+    fprintf('Reference mass:      %.1f kg -> %.3f g, %.3f s lap, limited by %s\n', ...
+        referenceMassKg, sweep.sustainedG(refIdx), ...
+        sweep.lapTimeS(refIdx), refLimit);
 end
 
-fprintf('>> Diminishing-return mass: %.1f kg (%.3f g', ...
-    knee.massKg, knee.accelG);
-if isfinite(knee.benefitGPerKgSaved)
-    fprintf(', %.1f milli-g/kg saved', 1000 * knee.benefitGPerKgSaved);
+% The headline answer is in LAP TIME, where diminishing returns are real:
+% the 1/sqrt(G) compression means each kg saved shaves less time off as the
+% car gets lighter. Raw G itself has ACCELERATING returns (tire mu rises as
+% load falls), so the G curve bends the wrong way for diminishing returns.
+fprintf('>> Diminishing-return mass (lap-time knee): %.1f kg', knee.massKg);
+if isfinite(knee.lapTimeS)
+    fprintf(' (%.3f s lap, %.3f g', knee.lapTimeS, knee.accelG);
+end
+if isfinite(knee.benefitSPerKgSaved)
+    fprintf(', %.4f s/kg saved', knee.benefitSPerKgSaved);
 end
 fprintf(', %s)\n', knee.method);
 
-linearity = curveLinearity(massKg, sweep.sustainedG);
-if linearity.isNearlyLinear
-    fprintf('   NOTE: the G-vs-mass curve is nearly linear over this range (R^2 %.3f vs a straight line).\n', ...
-        linearity.linearFitR2);
-    fprintf('   The knee is therefore weak; each kg saved is worth roughly the same (~%.2f milli-g/kg).\n', ...
-        1000 * meanFinite(sweep.benefitGPerKgSaved));
-else
-    fprintf('   Curve curvature is significant (R^2 %.3f vs a straight line); the knee marks the elbow.\n', ...
-        linearity.linearFitR2);
+gCurv = curveLinearity(massKg, sweep.sustainedG);
+tCurv = curveLinearity(massKg, sweep.lapTimeS);
+fprintf('   G curve:    quad coeff %+.3e  (>=0 = accelerating returns, <0 = diminishing)\n', gCurv.quadCoeff);
+fprintf('   Lap-time:   quad coeff %+.3e  (>=0 = diminishing returns as car gets lighter)\n', tCurv.quadCoeff);
+if gCurv.quadCoeff >= 0 && tCurv.quadCoeff >= 0
+    fprintf('   Raw G gives accelerating returns to lightness; lap time shows diminishing returns\n');
+    fprintf('   (each kg saved shaves less time off as the car gets lighter) but the elbow is gentle.\n');
+elseif tCurv.quadCoeff < 0
+    fprintf('   Lap-time curve is concave; knee marks the diminishing-returns elbow.\n');
 end
 
-[gMin, idxMin, limitMin] = sustainedAtMass(min(massKg), massKg, sweep);
-[gMax, idxMax, limitMax] = sustainedAtMass(max(massKg), massKg, sweep);
-if isfinite(gMin) && isfinite(gMax)
-    fprintf('   At %.0f kg: %.3f g', min(massKg), gMin);
-    if idxMin >= 1 && idxMin <= numel(sweep.benefitGPerKgSaved) ...
-            && isfinite(sweep.benefitGPerKgSaved(idxMin))
-        fprintf(', %.1f milli-g/kg', 1000 * sweep.benefitGPerKgSaved(idxMin));
+endpts = [1, numel(massKg)];
+for k = 1:numel(endpts)
+    i = endpts(k);
+    fprintf('   At %.0f kg: %.3f g, %.3f s', massKg(i), ...
+        sweep.sustainedG(i), sweep.lapTimeS(i));
+    if isfinite(sweep.benefitSPerKgSaved(i))
+        fprintf(', %.4f s/kg', sweep.benefitSPerKgSaved(i));
     end
-    fprintf(' (%s)   |   At %.0f kg: %.3f g', limitMin, max(massKg), gMax);
-    if idxMax >= 1 && idxMax <= numel(sweep.benefitGPerKgSaved) ...
-            && isfinite(sweep.benefitGPerKgSaved(idxMax))
-        fprintf(', %.1f milli-g/kg', 1000 * sweep.benefitGPerKgSaved(idxMax));
-    end
-    fprintf(' (%s)\n', limitMax);
+    fprintf(' (%s)\n', sweep.limitedBy(i));
 end
 fprintf('Aero downforce is neglected; only tire load sensitivity couples mass to grip.\n');
 end
 
-function [gVal, idx, limit] = sustainedAtMass(targetMassKg, massKg, sweep)
-idx = [];
-[~, idx] = min(abs(massKg(:) - targetMassKg));
-if isempty(idx) || ~isfinite(idx)
-    gVal = NaN;
+function [idx, limit] = indexAtMass(targetMassKg, massKg, sweep)
+idx = NaN;
+[~, found] = min(abs(massKg(:) - targetMassKg));
+if isempty(found) || ~isfinite(found)
     limit = '';
     return;
 end
-gVal = sweep.sustainedG(idx);
+idx = found;
 limit = char(sweep.limitedBy(idx));
 end
 
 function fig = plotCurve(sweep, knee, referenceMassKg, tireFilePath, ...
         surfaceMu, loadTransfer, visibleState)
-fig = figure('Name', 'Weight savings diminishing returns', ...
+fig = figure('Name', 'Weight savings diminishing returns (lap time)', ...
     'Color', 'w', 'Visible', visibleState);
-fig.Position = [120 80 1100 780];
+fig.Position = [120 60 1120 900];
 set(fig, ...
     'DefaultTextColor', 'k', ...
     'DefaultAxesColor', 'w', ...
@@ -572,16 +597,20 @@ set(fig, ...
     'DefaultLegendColor', 'w', ...
     'DefaultLegendTextColor', 'k');
 
-layout = tiledlayout(fig, 2, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
+layout = tiledlayout(fig, 3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
 mass = sweep.massKg;
 accel = sweep.sustainedG;
-benefitMilliGPerKg = 1000 * sweep.benefitGPerKgSaved;
+lapTime = sweep.lapTimeS;
+benefitMsPerKg = 1000 * sweep.benefitSPerKgSaved;
+blue = [0.07 0.29 0.67];
+green = [0.10 0.50 0.28];
 kneeColor = [0.80 0.12 0.10];
 refColor = [0.45 0.45 0.45];
 
+% --- Tile 1: sustained G vs mass (accelerating returns to lightness) ---
 axAccel = nexttile(layout);
-plot(axAccel, mass, accel, 'Color', [0.07 0.29 0.67], ...
-    'LineWidth', 1.8, 'DisplayName', 'Sustained a_y');
+plot(axAccel, mass, accel, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', 'Sustained a_y');
 hold(axAccel, 'on');
 if isfinite(referenceMassKg)
     xline(axAccel, referenceMassKg, ':', 'Color', refColor, ...
@@ -592,46 +621,68 @@ if isfinite(knee.massKg)
         'LineWidth', 1.1, 'HandleVisibility', 'off');
     plot(axAccel, knee.massKg, knee.accelG, 'o', 'MarkerSize', 8, ...
         'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
-        'MarkerEdgeColor', 'w', 'DisplayName', 'Diminishing returns');
+        'MarkerEdgeColor', 'w', 'HandleVisibility', 'off');
 end
 hold(axAccel, 'off');
 styleAxis(axAccel);
 grid(axAccel, 'on');
 ylabel(axAccel, 'Sustained a_y [g]');
-title(axAccel, 'Max steady-state skidpad G vs vehicle mass');
+title(axAccel, 'Skidpad G vs mass (convex: lighter pays off progressively more per kg)');
 legend(axAccel, 'Location', 'best');
 
+% --- Tile 2: lap time vs mass (where diminishing returns live) ---
+axLap = nexttile(layout);
+plot(axLap, mass, lapTime, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', 'Lap time');
+hold(axLap, 'on');
+if isfinite(referenceMassKg)
+    xline(axLap, referenceMassKg, ':', 'Color', refColor, ...
+        'LineWidth', 1.1, 'HandleVisibility', 'off');
+end
+if isfinite(knee.massKg) && isfinite(knee.lapTimeS)
+    xline(axLap, knee.massKg, '--', 'Color', kneeColor, ...
+        'LineWidth', 1.1, 'HandleVisibility', 'off');
+    plot(axLap, knee.massKg, knee.lapTimeS, 'o', 'MarkerSize', 8, ...
+        'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
+        'MarkerEdgeColor', 'w', 'DisplayName', 'Diminishing-returns knee');
+end
+hold(axLap, 'off');
+styleAxis(axLap);
+grid(axLap, 'on');
+ylabel(axLap, 'FSAE skidpad lap time [s]');
+title(axLap, 'Lap time vs mass (concave: each kg saved shaves less time off as car gets lighter)');
+legend(axLap, 'Location', 'best');
+
+% --- Tile 3: marginal lap-time benefit per kg saved (the key panel) ---
 axBenefit = nexttile(layout);
-plot(axBenefit, mass, benefitMilliGPerKg, 'Color', [0.10 0.50 0.28], ...
-    'LineWidth', 1.6, 'DisplayName', 'Marginal gain');
+plot(axBenefit, mass, benefitMsPerKg, 'Color', green, 'LineWidth', 1.6, ...
+    'DisplayName', 'Marginal lap-time gain');
 hold(axBenefit, 'on');
 yline(axBenefit, 0, ':', 'Color', refColor, 'HandleVisibility', 'off');
 if isfinite(referenceMassKg)
     xline(axBenefit, referenceMassKg, ':', 'Color', refColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
 end
-if isfinite(knee.massKg)
+if isfinite(knee.massKg) && isfinite(knee.benefitSPerKgSaved)
     xline(axBenefit, knee.massKg, '--', 'Color', kneeColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
-    if isfinite(knee.benefitGPerKgSaved)
-        plot(axBenefit, knee.massKg, 1000 * knee.benefitGPerKgSaved, ...
-            'o', 'MarkerSize', 8, 'LineWidth', 1.5, ...
-            'MarkerFaceColor', kneeColor, 'MarkerEdgeColor', 'w', ...
-            'DisplayName', 'Diminishing returns');
-    end
+    plot(axBenefit, knee.massKg, 1000 * knee.benefitSPerKgSaved, ...
+        'o', 'MarkerSize', 8, 'LineWidth', 1.5, ...
+        'MarkerFaceColor', kneeColor, 'MarkerEdgeColor', 'w', ...
+        'DisplayName', 'Diminishing-returns knee');
 end
 hold(axBenefit, 'off');
 styleAxis(axBenefit);
 grid(axBenefit, 'on');
 xlabel(axBenefit, 'Vehicle mass [kg]');
-ylabel(axBenefit, 'Gain [milli-g / kg saved]');
-title(axBenefit, 'Marginal G gained per kg of mass removed');
+ylabel(axBenefit, 'Gain [ms / kg saved]');
+title(axBenefit, 'Marginal lap-time gain per kg removed (falls as car gets lighter)');
 legend(axBenefit, 'Location', 'best');
 
-linkaxes([axAccel, axBenefit], 'x');
+linkaxes([axAccel, axLap, axBenefit], 'x');
 [~, tireName, tireExt] = fileparts(tireFilePath);
 plotTitle = sgtitle(sprintf( ...
-    ['Weight savings diminishing returns | %s%s | surface mu %.3f | ' ...
+    ['Weight savings vs FSAE skidpad lap time | %s%s | surface mu %.3f | ' ...
      'track %.2f m, CG %.2f m, front %.0f%%, LLTD %.0f%%'], ...
     tireName, tireExt, surfaceMu, loadTransfer.trackWidth, ...
     loadTransfer.cgHeight, 100 * loadTransfer.staticFrontWeight, ...
