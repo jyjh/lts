@@ -81,6 +81,7 @@ function cfg = R25()
         'toeCurve',         [0.75 0.75 0.75] * pi / 180, ...        %   [CSV r29: -1.5 deg total front toe-out -> +0.75 deg per wheel in simulator sign convention]
         'motionRatioCurve', [1 1 1], ...                            %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.034977, ...                     %   [CSV r33: 34.977 mm]
+        'rollCenterLateral', 0.013469, ...                    %   [CSV r34: 13.469 mm lateral at 1g]
         'casterAngle',      4 * pi / 180, ...                 %   [CSV r35: 4 deg]
         'mechanicalTrail',  0.0143, ...                       %   [CSV r35: 14.3 mm] [m]
         'scrubRadius',      0.02093, ...                      %   [CSV r35: 20.93 mm] [m]
@@ -92,6 +93,7 @@ function cfg = R25()
         'toeCurve',         [0 0 0] * pi / 180, ...                  %   [CSV r29: 0 deg rear toe]
         'motionRatioCurve', [1 1 1], ...                             %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.050496, ...                     %   [CSV r33: 50.496 mm]
+        'rollCenterLateral', 0.024413, ...                    %   [CSV r34: 24.413 mm lateral at 1g]
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
         'scrubRadius',      0, ...

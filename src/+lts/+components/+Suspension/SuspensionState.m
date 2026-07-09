@@ -85,6 +85,12 @@ classdef SuspensionState < handle
         mechanicalTrail  = 0
         scrubRadius      = 0
         kingpinOffset    = 0
+
+        % Axle roll-center position resolved from suspension geometry.
+        % Height participates in geometric lateral load transfer; lateral is
+        % the configured signed +1g datum exposed through kinematics.
+        rollCenterHeight = 0
+        rollCenterLateral = 0
         
         % Net suspension force acting on sprung mass [N]
         % Includes spring, damper, bump stop, and anti-roll bar terms.
@@ -128,6 +134,8 @@ classdef SuspensionState < handle
             obj.mechanicalTrail = 0;
             obj.scrubRadius     = 0;
             obj.kingpinOffset   = 0;
+            obj.rollCenterHeight = 0;
+            obj.rollCenterLateral = 0;
             obj.suspensionForce = 0;
             obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;
@@ -162,6 +170,8 @@ classdef SuspensionState < handle
             obj.mechanicalTrail = 0;
             obj.scrubRadius     = 0;
             obj.kingpinOffset   = 0;
+            obj.rollCenterHeight = 0;
+            obj.rollCenterLateral = 0;
             obj.suspensionForce = 0;
             obj.antiRollBarForce = 0;
             obj.demandedLoad    = 0;

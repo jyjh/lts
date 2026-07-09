@@ -27,11 +27,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         % the load-transfer algebra reads a single named constant.
         g = 9.80665
 
-        % Roll-center height per axle [m], resolved from geometry at
-        % construction. Drives the geometric (instantaneous) component of
-        % lateral load transfer; 0 recovers the CG-height-only split.
+        % Roll-center position per axle [m], resolved from geometry at
+        % construction. Height drives the geometric (instantaneous) component
+        % of lateral load transfer. Lateral is the signed +1g kinematic datum
+        % scaled by current axle lateral acceleration.
         frontRollCenterHeight = 0
         rearRollCenterHeight = 0
+        frontRollCenterLateral = 0
+        rearRollCenterLateral = 0
 
         % Anti-roll bars per axle, resolved from geometry at construction.
         % Their wheel-rate stiffness is added to each axle's wheel-spring
@@ -123,6 +126,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             end
             if isprop(geometry, 'rearRollCenterHeight')
                 obj.rearRollCenterHeight = geometry.rearRollCenterHeight;
+            end
+            if isprop(geometry, 'frontRollCenterLateral')
+                obj.frontRollCenterLateral = geometry.frontRollCenterLateral;
+            end
+            if isprop(geometry, 'rearRollCenterLateral')
+                obj.rearRollCenterLateral = geometry.rearRollCenterLateral;
             end
 
             % Resolve per-axle anti-roll bars from the geometry model.
@@ -252,13 +261,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             end
             
             % Geometry (stored in corners from lts.vehicle.VehicleManager)
-            tw = obj.frontLeft.trackWidth;
             wb = obj.frontLeft.wheelbase;
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
-            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
-            hrcF = obj.frontRollCenterHeight;
-            hrcR = obj.rearRollCenterHeight;
             
             % --- Static weight per corner ---
             Fz_static_front = W * frontWeightFrac;
@@ -282,22 +287,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             % the roll-stiffness distribution. With hrcF = hrcR = 0 the
             % geometric part vanishes and the split collapses to the legacy
             % CG-height-only behavior.
-            equivalentAy = frontWeightFrac * abs(frontAxleAy) + ...
-                (1 - frontWeightFrac) * abs(rearAxleAy);
-            latForce = totalMass * equivalentAy;
-            totalLatTransfer = latForce * cgH / tw;
-            geoLatFront = totalMass * abs(frontAxleAy) * hrcF / tw;
-            geoLatRear  = totalMass * abs(rearAxleAy) * hrcR / tw;
-            elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
-            frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
-            rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
-
-            signFrontAy = sign(frontAxleAy);
-            signRearAy = sign(rearAxleAy);
-            Fz_lat_FL = -signFrontAy * frontLatTransfer / 2;
-            Fz_lat_FR =  signFrontAy * frontLatTransfer / 2;
-            Fz_lat_RL = -signRearAy * rearLatTransfer / 2;
-            Fz_lat_RR =  signRearAy * rearLatTransfer / 2;
+            lat = obj.computeSignedLateralTransfer( ...
+                totalMass, frontAxleAy, rearAxleAy);
+            Fz_lat_FL = -lat.front;
+            Fz_lat_FR =  lat.front;
+            Fz_lat_RL = -lat.rear;
+            Fz_lat_RR =  lat.rear;
             
             % --- Longitudinal load transfer ---
             % positive ax (acceleration) → load transfers to rear
@@ -386,13 +381,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 rearAxleAy = state.rearAxleAy;
             end
 
-            tw = obj.frontLeft.trackWidth;
             wb = obj.frontLeft.wheelbase;
             cgH = obj.frontLeft.cgHeight;
             frontWeightFrac = obj.staticFrontWeight;
-            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
-            hrcF = obj.frontRollCenterHeight;
-            hrcR = obj.rearRollCenterHeight;
 
             Fz_static_front = W * frontWeightFrac;
             Fz_static_rear  = W * (1 - frontWeightFrac);
@@ -406,22 +397,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             Fz_aero_RL = Fz_aero_rear  / 2;
             Fz_aero_RR = Fz_aero_rear  / 2;
 
-            equivalentAy = frontWeightFrac * abs(frontAxleAy) + ...
-                (1 - frontWeightFrac) * abs(rearAxleAy);
-            latForce = totalMass * equivalentAy;
-            totalLatTransfer = latForce * cgH / tw;
-            geoLatFront = totalMass * abs(frontAxleAy) * hrcF / tw;
-            geoLatRear  = totalMass * abs(rearAxleAy) * hrcR / tw;
-            elasticLat = max(totalLatTransfer - geoLatFront - geoLatRear, 0);
-            frontLatTransfer = geoLatFront + elasticLat * rollStiffDist;
-            rearLatTransfer  = geoLatRear  + elasticLat * (1 - rollStiffDist);
-
-            signFrontAy = sign(frontAxleAy);
-            signRearAy = sign(rearAxleAy);
-            Fz_lat_FL = -signFrontAy * frontLatTransfer / 2;
-            Fz_lat_FR =  signFrontAy * frontLatTransfer / 2;
-            Fz_lat_RL = -signRearAy * rearLatTransfer / 2;
-            Fz_lat_RR =  signRearAy * rearLatTransfer / 2;
+            lat = obj.computeSignedLateralTransfer( ...
+                totalMass, frontAxleAy, rearAxleAy);
+            Fz_lat_FL = -lat.front;
+            Fz_lat_FR =  lat.front;
+            Fz_lat_RL = -lat.rear;
+            Fz_lat_RR =  lat.rear;
 
             totalLongTransfer = totalMass * ax * cgH / wb;
             Fz_long_FL = -totalLongTransfer / 2;
@@ -486,6 +467,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             loads.FR = obj.frontRight.state.tireNormalForce;
             loads.RL = obj.rearLeft.state.tireNormalForce;
             loads.RR = obj.rearRight.state.tireNormalForce;
+            loads = obj.applyChassisGeometricTransfer(loads, chassis);
         end
 
         function frac = deriveFrontRollStiffnessFraction(obj)
@@ -574,6 +556,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             cornerState.mechanicalTrail = kin.mechanicalTrail;
             cornerState.scrubRadius = kin.scrubRadius;
             cornerState.kingpinOffset = kin.kingpinOffset;
+            cornerState.rollCenterHeight = kin.rollCenterHeight;
+            cornerState.rollCenterLateral = kin.rollCenterLateral;
         end
 
         function cornerKinematics = getCornerKinematics(obj)
@@ -662,10 +646,87 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             kin.mechanicalTrail = state.mechanicalTrail;
             kin.scrubRadius = state.scrubRadius;
             kin.kingpinOffset = state.kingpinOffset;
+            kin.rollCenterHeight = state.rollCenterHeight;
+            kin.rollCenterLateral = state.rollCenterLateral;
         end
     end
 
     methods (Access = private)
+        function lat = computeSignedLateralTransfer(obj, totalMass, frontAxleAy, rearAxleAy)
+            % COMPUTESIGNEDLATERALTRANSFER Per-side transfer amounts [N].
+            % Positive values transfer load from left to right on that axle.
+            tw = max(obj.frontLeft.trackWidth, eps);
+            cgH = obj.frontLeft.cgHeight;
+            frontWeightFrac = obj.staticFrontWeight;
+            rearWeightFrac = 1 - frontWeightFrac;
+            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
+
+            mF = totalMass * frontWeightFrac;
+            mR = totalMass * rearWeightFrac;
+            hrcF = obj.frontRollCenterHeight;
+            hrcR = obj.rearRollCenterHeight;
+            rclF = obj.scaledRollCenterLateral(obj.frontRollCenterLateral, frontAxleAy);
+            rclR = obj.scaledRollCenterLateral(obj.rearRollCenterLateral, rearAxleAy);
+
+            geoFront = mF * frontAxleAy * hrcF / tw;
+            geoRear  = mR * rearAxleAy  * hrcR / tw;
+            elasticMoment = ...
+                mF * (frontAxleAy * (cgH - hrcF) + obj.g * rclF) + ...
+                mR * (rearAxleAy  * (cgH - hrcR) + obj.g * rclR);
+            elasticTotal = elasticMoment / tw;
+
+            lat.front = geoFront + elasticTotal * rollStiffDist;
+            lat.rear = geoRear + elasticTotal * (1 - rollStiffDist);
+            lat.geometricFront = geoFront;
+            lat.geometricRear = geoRear;
+            lat.elasticFront = elasticTotal * rollStiffDist;
+            lat.elasticRear = elasticTotal * (1 - rollStiffDist);
+            lat.frontRollCenterLateral = rclF;
+            lat.rearRollCenterLateral = rclR;
+        end
+
+        function loads = applyChassisGeometricTransfer(obj, loads, chassis)
+            transfer = obj.readChassisGeometricTransfer(chassis);
+
+            loads.FL = max(loads.FL - transfer.front, 0);
+            loads.FR = max(loads.FR + transfer.front, 0);
+            loads.RL = max(loads.RL - transfer.rear, 0);
+            loads.RR = max(loads.RR + transfer.rear, 0);
+
+            obj.frontLeft.state.tireNormalForce = loads.FL;
+            obj.frontRight.state.tireNormalForce = loads.FR;
+            obj.rearLeft.state.tireNormalForce = loads.RL;
+            obj.rearRight.state.tireNormalForce = loads.RR;
+        end
+
+        function transfer = readChassisGeometricTransfer(~, chassis)
+            transfer = struct('front', 0, 'rear', 0);
+            if isempty(chassis) || ~isprop(chassis, 'state') || isempty(chassis.state)
+                return;
+            end
+
+            state = chassis.state;
+            if isprop(state, 'frontGeometricLateralLoadTransfer')
+                transfer.front = state.frontGeometricLateralLoadTransfer;
+            end
+            if isprop(state, 'rearGeometricLateralLoadTransfer')
+                transfer.rear = state.rearGeometricLateralLoadTransfer;
+            end
+            if ~isfinite(transfer.front)
+                transfer.front = 0;
+            end
+            if ~isfinite(transfer.rear)
+                transfer.rear = 0;
+            end
+        end
+
+        function value = scaledRollCenterLateral(obj, lateralAt1g, axleAy)
+            value = lateralAt1g * axleAy / max(abs(obj.g), eps);
+            if ~isfinite(value)
+                value = 0;
+            end
+        end
+
         function bar = makeWheelRateBar(~, wheelRate)
             % MAKEWHEELRATEBAR Build a unit-ratio ARB whose wheel-rate roll
             % stiffness equals the requested value [N/m]. Used by

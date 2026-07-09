@@ -175,6 +175,8 @@ verifyEqual(testCase, front.travelGrid, [-0.0254 0 0.0254], 'AbsTol', 1e-12);
 verifyEqual(testCase, rear.travelGrid, [-0.0254 0 0.0254], 'AbsTol', 1e-12);
 verifyEqual(testCase, front.motionRatioCurve, [1 1 1], 'AbsTol', 1e-12);
 verifyEqual(testCase, rear.motionRatioCurve, [1 1 1], 'AbsTol', 1e-12);
+verifyEqual(testCase, front.rollCenterLateral, 0.013469, 'AbsTol', 1e-12);
+verifyEqual(testCase, rear.rollCenterLateral, 0.024413, 'AbsTol', 1e-12);
 
 frontCamberDeg = front.camberCurve * 180 / pi;
 rearCamberDeg = rear.camberCurve * 180 / pi;
@@ -189,6 +191,20 @@ verifyEqual(testCase, frontCamberSlope, -49.9, 'AbsTol', 1e-6);
 verifyEqual(testCase, rearCamberSlope, -66.8, 'AbsTol', 1e-6);
 verifyEqual(testCase, front.toeCurve * 180 / pi, [0.75 0.75 0.75], 'AbsTol', 1e-12);
 verifyEqual(testCase, rear.toeCurve * 180 / pi, [0 0 0], 'AbsTol', 1e-12);
+
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
+verifyEqual(testCase, geometry.frontRollCenterLateral, front.rollCenterLateral, 'AbsTol', 1e-12);
+verifyEqual(testCase, geometry.rearRollCenterLateral, rear.rollCenterLateral, 'AbsTol', 1e-12);
+
+frontKin = geometry.computeCornerKinematics('FL', 0, 0);
+rearKin = geometry.computeCornerKinematics('RL', 0, 0);
+verifyEqual(testCase, frontKin.rollCenterLateral, front.rollCenterLateral, 'AbsTol', 1e-12);
+verifyEqual(testCase, rearKin.rollCenterLateral, rear.rollCenterLateral, 'AbsTol', 1e-12);
 end
 
 function testTwistUsesSeparateFrontAndRearRollForCornerKinematics(testCase)
@@ -211,17 +227,7 @@ end
 
 function testAlgebraicSuspensionFallbackStillComputesLoads(testCase)
 config = lts.vehicles.baseline();
-vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
-vehicle.totalMass = config.totalMass;
-vehicle.wheelbase = config.wheelbase;
-vehicle.trackWidth = config.trackWidth;
-vehicle.cgHeight = config.cgHeight;
-vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
-    config.suspension.geometry, vehicle);
-suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
-vehicle.suspension = suspension;
-suspension.warmup(vehicle.totalMass, 0.001);
+[vehicle, suspension] = createAlgebraicVehicle(config);
 state = lts.simulation.VehicleState('speed', 20);
 state.vehicleManager = vehicle;
 state.ax = 3;
@@ -234,19 +240,59 @@ verifyTrue(testCase, all(isfinite(loadValues)));
 verifyTrue(testCase, all(loadValues >= 0));
 end
 
+function testAlgebraicFallbackZeroRollCenterPreservesLateralMoment(testCase)
+config = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+[vehicle, suspension] = createAlgebraicVehicle(config);
+state = lts.simulation.VehicleState('speed', 20);
+state.vehicleManager = vehicle;
+state.ax = 0;
+state.ay = 6;
+
+loads = suspension.estimateCornerLoads(state, 0, 0, vehicle.totalMass);
+
+expectedRightMinusLeft = 2 * vehicle.totalMass * state.ay * ...
+    vehicle.cgHeight / vehicle.trackWidth;
+verifyEqual(testCase, rightMinusLeft(loads), expectedRightMinusLeft, ...
+    'AbsTol', 1e-9);
+verifyEqual(testCase, totalNormalLoad(loads), ...
+    vehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 1e-9);
+end
+
+function testAlgebraicFallbackRollCenterHeightChangesAxleSplit(testCase)
+ay = 6;
+flatConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+raisedConfig = setRollCenters(lts.vehicles.baseline(), 0.12, 0.03, 0, 0);
+[flatVehicle, flatSuspension] = createAlgebraicVehicle(flatConfig);
+[raisedVehicle, raisedSuspension] = createAlgebraicVehicle(raisedConfig);
+flatState = lts.simulation.VehicleState('speed', 20);
+flatState.vehicleManager = flatVehicle;
+flatState.ax = 0;
+flatState.ay = ay;
+raisedState = lts.simulation.VehicleState('speed', 20);
+raisedState.vehicleManager = raisedVehicle;
+raisedState.ax = 0;
+raisedState.ay = ay;
+
+flatLoads = flatSuspension.estimateCornerLoads( ...
+    flatState, 0, 0, flatVehicle.totalMass);
+raisedLoads = raisedSuspension.estimateCornerLoads( ...
+    raisedState, 0, 0, raisedVehicle.totalMass);
+
+expectedRightMinusLeft = 2 * raisedVehicle.totalMass * ay * ...
+    raisedVehicle.cgHeight / raisedVehicle.trackWidth;
+flatFrontDiff = flatLoads.FR - flatLoads.FL;
+raisedFrontDiff = raisedLoads.FR - raisedLoads.FL;
+
+verifyEqual(testCase, rightMinusLeft(raisedLoads), expectedRightMinusLeft, ...
+    'AbsTol', 1e-9);
+verifyGreaterThan(testCase, abs(raisedFrontDiff - flatFrontDiff), 1e-6);
+verifyEqual(testCase, totalNormalLoad(raisedLoads), ...
+    raisedVehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 1e-9);
+end
+
 function testAlgebraicFallbackUsesAxleSpecificLateralAcceleration(testCase)
-config = lts.vehicles.baseline();
-vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
-vehicle.totalMass = config.totalMass;
-vehicle.wheelbase = config.wheelbase;
-vehicle.trackWidth = config.trackWidth;
-vehicle.cgHeight = config.cgHeight;
-vehicle.staticFrontWeight = config.staticFrontWeight;
-geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
-    config.suspension.geometry, vehicle);
-suspension = createSuspension(vehicle, config.suspension, config.unsprungMass, geometry);
-vehicle.suspension = suspension;
-suspension.warmup(vehicle.totalMass, 0.001);
+config = setRollCenters(lts.vehicles.baseline(), 0.10, 0.10, 0, 0);
+[vehicle, suspension] = createAlgebraicVehicle(config);
 state = lts.simulation.VehicleState('speed', 20);
 state.vehicleManager = vehicle;
 state.ax = 0;
@@ -260,11 +306,97 @@ verifyGreaterThan(testCase, loads.FR, loads.FL);
 verifyGreaterThan(testCase, loads.RL, loads.RR);
 end
 
-function [vehicle, suspension, chassis] = createVehicleWithChassis()
+function testRollCenterHeightReducesChassisRollResponse(testCase)
+lowConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+highConfig = setRollCenters(lts.vehicles.baseline(), 0.15, 0.15, 0, 0);
+[~, ~, lowChassis] = createVehicleWithChassis(lowConfig);
+[~, ~, highChassis] = createVehicleWithChassis(highConfig);
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+lowChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+highChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+
+verifyLessThan(testCase, abs(highChassis.state.frontRollAccel), ...
+    abs(lowChassis.state.frontRollAccel));
+verifyLessThan(testCase, abs(highChassis.state.rearRollAccel), ...
+    abs(lowChassis.state.rearRollAccel));
+
+for idx = 1:1000
+    lowChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+    highChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+end
+
+verifyLessThan(testCase, abs(highChassis.getRollAngle()), ...
+    abs(lowChassis.getRollAngle()));
+end
+
+function testChassisLoadsChangeWithRollCenterHeight(testCase)
+lowConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+highConfig = setRollCenters(lts.vehicles.baseline(), 0.15, 0.15, 0, 0);
+[~, lowSuspension, lowChassis] = createVehicleWithChassis(lowConfig);
+[~, highSuspension, highChassis] = createVehicleWithChassis(highConfig);
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+lowChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+highChassis.updateFromAccelerations(0, 6, zeroAero, dt, 0);
+lowLoads = lowSuspension.computeCornerLoadsFromChassis(lowChassis, 0, dt);
+highLoads = highSuspension.computeCornerLoadsFromChassis(highChassis, 0, dt);
+
+verifyGreaterThan(testCase, ...
+    abs(rightMinusLeft(highLoads) - rightMinusLeft(lowLoads)), 10);
+end
+
+function testRollCenterLateralContributesSignedChassisRollMoment(testCase)
+zeroConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+lateralConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0.05, 0.05);
+[~, ~, zeroPositive] = createVehicleWithChassis(zeroConfig);
+[~, ~, lateralPositive] = createVehicleWithChassis(lateralConfig);
+[~, ~, zeroNegative] = createVehicleWithChassis(zeroConfig);
+[~, ~, lateralNegative] = createVehicleWithChassis(lateralConfig);
+zeroAero = zeroAeroForces();
+dt = 0.001;
+g = lts.vehicle.VehicleManager.g;
+
+zeroPositive.updateFromAccelerations(0, g, zeroAero, dt, 0);
+lateralPositive.updateFromAccelerations(0, g, zeroAero, dt, 0);
+zeroNegative.updateFromAccelerations(0, -g, zeroAero, dt, 0);
+lateralNegative.updateFromAccelerations(0, -g, zeroAero, dt, 0);
+
+verifyGreaterThan(testCase, lateralPositive.state.frontRollAccel, ...
+    zeroPositive.state.frontRollAccel);
+verifyGreaterThan(testCase, lateralPositive.state.rearRollAccel, ...
+    zeroPositive.state.rearRollAccel);
+verifyLessThan(testCase, lateralNegative.state.frontRollAccel, ...
+    zeroNegative.state.frontRollAccel);
+verifyLessThan(testCase, lateralNegative.state.rearRollAccel, ...
+    zeroNegative.state.rearRollAccel);
+verifyEqual(testCase, lateralPositive.state.frontRollCenterLateral, 0.05, ...
+    'AbsTol', 1e-12);
+verifyEqual(testCase, lateralNegative.state.frontRollCenterLateral, -0.05, ...
+    'AbsTol', 1e-12);
+end
+
+function testRollCenterLateralVisibleThroughManagerKinematics(testCase)
+config = setRollCenters(lts.vehicles.baseline(), 0.03, 0.04, 0.011, 0.022);
+[~, suspension] = createAlgebraicVehicle(config);
+
+kin = suspension.getCornerKinematics();
+
+verifyEqual(testCase, kin.FL.rollCenterLateral, 0.011, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.FR.rollCenterLateral, 0.011, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.RL.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.RR.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
+end
+
+function [vehicle, suspension, chassis] = createVehicleWithChassis(config)
 % Minimal chassis+suspension fixture for unit tests. Sources all tuning
 % values from the baseline car config (single source of truth) rather than
 % re-declaring literals here, so these tests stay in sync with the config.
-config = lts.vehicles.baseline();
+if nargin < 1 || isempty(config)
+    config = lts.vehicles.baseline();
+end
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
@@ -286,6 +418,37 @@ chassis = chassis.setSuspension(suspension);
 suspension.chassis = chassis;
 vehicle.chassis = chassis;
 vehicle.suspension = suspension;
+end
+
+function [vehicle, suspension] = createAlgebraicVehicle(config)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.totalMass = config.totalMass;
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.cgHeight = config.cgHeight;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
+suspension = createSuspension(vehicle, config.suspension, ...
+    config.unsprungMass, geometry);
+vehicle.suspension = suspension;
+suspension.warmup(vehicle.totalMass, 0.001);
+end
+
+function config = setRollCenters(config, frontHeight, rearHeight, ...
+        frontLateral, rearLateral)
+config.suspension.geometry.front.rollCenterHeight = frontHeight;
+config.suspension.geometry.rear.rollCenterHeight = rearHeight;
+config.suspension.geometry.front.rollCenterLateral = frontLateral;
+config.suspension.geometry.rear.rollCenterLateral = rearLateral;
+end
+
+function value = rightMinusLeft(loads)
+value = (loads.FR + loads.RR) - (loads.FL + loads.RL);
+end
+
+function value = totalNormalLoad(loads)
+value = loads.FL + loads.FR + loads.RL + loads.RR;
 end
 
 function suspension = createSuspension(vehicle, suspCfg, unsprungMass, geometry)

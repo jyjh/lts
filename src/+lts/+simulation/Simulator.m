@@ -1274,6 +1274,9 @@ classdef Simulator < handle
             [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
                 packCurrentA, packPowerW, powerLimitActive] = ...
                 obj.limitMotorTorqueCommandByPackPower(motorTorqueCommandNm, input);
+            [appliedMotorTorqueNm, rpmLimitActive] = ...
+                obj.limitDirectMotorTorqueByRpm( ...
+                motorTorqueCommandNm, appliedMotorTorqueNm);
             if appliedMotorTorqueNm >= 0
                 wheelTorque = appliedMotorTorqueNm * ratio * efficiency;
                 stateEfficiency = efficiency;
@@ -1293,7 +1296,7 @@ classdef Simulator < handle
             if ~isempty(vm.powertrain.state)
                 vm.powertrain.state.updateOutputs( ...
                     throttle, appliedMotorTorqueNm, wheelTorque, driveForce, ...
-                    stateEfficiency, false);
+                    stateEfficiency, rpmLimitActive);
                 vm.powertrain.state.requestedMotorTorque = motorTorqueCommandNm;
                 vm.powertrain.state.motorTorquePowerLimitNm = powerLimitNm;
                 vm.powertrain.state.motorTorquePowerLimitActive = powerLimitActive;
@@ -1378,6 +1381,42 @@ classdef Simulator < handle
 
             toleranceNm = max(1e-9, 1e-6 * abs(requestedMotorTorqueNm));
             powerLimitActive = abs(appliedMotorTorqueNm - requestedMotorTorqueNm) > toleranceNm;
+        end
+
+        function [appliedMotorTorqueNm, rpmLimitActive] = ...
+                limitDirectMotorTorqueByRpm(obj, requestedMotorTorqueNm, appliedMotorTorqueNm)
+            rpmLimitActive = false;
+            if requestedMotorTorqueNm <= 0
+                return;
+            end
+
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.powertrain) || isempty(vm.powertrain.state)
+                return;
+            end
+
+            motorRPM = vm.powertrain.state.motorRPM;
+            if ~isfinite(motorRPM)
+                return;
+            end
+
+            if ismethod(vm.powertrain, 'isRPMLimitActive')
+                rpmLimitActive = vm.powertrain.isRPMLimitActive(motorRPM);
+            elseif isprop(vm.powertrain, 'rpmLimitRPM')
+                limitRPM = vm.powertrain.rpmLimitRPM;
+                if isfinite(limitRPM) && limitRPM > 0
+                    releaseRPM = limitRPM;
+                    if vm.powertrain.state.rpmLimitActive && ...
+                            isprop(vm.powertrain, 'rpmLimitHysteresisRPM')
+                        releaseRPM = limitRPM - max(0, vm.powertrain.rpmLimitHysteresisRPM);
+                    end
+                    rpmLimitActive = motorRPM >= releaseRPM;
+                end
+            end
+
+            if rpmLimitActive
+                appliedMotorTorqueNm = min(appliedMotorTorqueNm, 0);
+            end
         end
 
         function motorOmega = motorAngularVelocityForPowerLimit(obj, input)

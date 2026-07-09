@@ -50,12 +50,15 @@ classdef SuspensionGeometry
         maxWheelSteerAngle = 0.6        % [rad]
         rearSteerRatio = 0.0
 
-        % Roll-center height per axle [m] above the ground plane. The roll
-        % center is the point through which the lateral (geometric) load
-        % transfer acts. 0 collapses the lateral-transfer split to the
-        % legacy CG-height-only behavior.
+        % Roll-center position per axle. Height [m] above the ground plane
+        % drives geometric lateral load transfer. Lateral [m] is retained
+        % from +1g kinematic outputs for inspection and dynamics inputs.
+        % A zero height collapses the lateral-transfer split to the legacy
+        % CG-height-only behavior.
         frontRollCenterHeight = 0
         rearRollCenterHeight = 0
+        frontRollCenterLateral = 0
+        rearRollCenterLateral = 0
 
         % Anti-roll bars per axle. Empty/disabled => the axle's roll
         % stiffness is its wheel springs only.
@@ -102,6 +105,7 @@ classdef SuspensionGeometry
                 kpi = obj.frontKingpinInclination;
                 kingpinOffset = obj.frontKingpinOffset;
                 rollCenterHeight = obj.frontRollCenterHeight;
+                rollCenterLateral = obj.frontRollCenterLateral;
             else
                 travelGrid = obj.rearTravelGrid;
                 camberCurve = obj.rearCamberCurve;
@@ -113,6 +117,7 @@ classdef SuspensionGeometry
                 kpi = obj.rearKingpinInclination;
                 kingpinOffset = obj.rearKingpinOffset;
                 rollCenterHeight = obj.rearRollCenterHeight;
+                rollCenterLateral = obj.rearRollCenterLateral;
             end
 
             wheelSteer = obj.computeWheelSteerFast(isFront, isLeft, steerInput);
@@ -164,6 +169,7 @@ classdef SuspensionGeometry
             kin.kingpinInclination = kpi;
             kin.kingpinOffset = kingpinOffset;
             kin.rollCenterHeight = rollCenterHeight;
+            kin.rollCenterLateral = rollCenterLateral;
         end
 
         function steer = computeSteeringAngles(obj, steerInput)
@@ -384,6 +390,8 @@ classdef SuspensionGeometry
             obj.frontToeCurve         = f.toeCurve;
             obj.frontMotionRatioCurve = f.motionRatioCurve;
             obj.frontRollCenterHeight = f.rollCenterHeight;
+            obj.frontRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'rollCenterLateral', 'rollCenterY'}, 0);
             obj.frontCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 f, {'casterAngle', 'caster'}, 0);
             obj.frontMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
@@ -401,6 +409,8 @@ classdef SuspensionGeometry
             obj.rearToeCurve         = r.toeCurve;
             obj.rearMotionRatioCurve = r.motionRatioCurve;
             obj.rearRollCenterHeight = r.rollCenterHeight;
+            obj.rearRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'rollCenterLateral', 'rollCenterY'}, 0);
             obj.rearCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 r, {'casterAngle', 'caster'}, 0);
             obj.rearMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...

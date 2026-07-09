@@ -477,6 +477,20 @@ def extract(rows, driver_mass):
             s.add_direct("suspension.geometry.rear.rollCenterHeight",
                          s.rchRear, f"CSV r33: {rr:g} mm")
 
+    # --- Roll center lateral position at 1g lateral acceleration (r34) ---
+    r = find_row(rows, "roll center position at 1g lateral acc")
+    if r:
+        front_lateral = parse_num(r[4]) if len(r) > 4 else None
+        rear_lateral = parse_num(r[7]) if len(r) > 7 else None
+        if front_lateral is not None:
+            s.rclFront = front_lateral / 1000.0
+            s.add_direct("suspension.geometry.front.rollCenterLateral",
+                         s.rclFront, f"CSV r34: {front_lateral:g} mm at 1g")
+        if rear_lateral is not None:
+            s.rclRear = rear_lateral / 1000.0
+            s.add_direct("suspension.geometry.rear.rollCenterLateral",
+                         s.rclRear, f"CSV r34: {rear_lateral:g} mm at 1g")
+
     # --- Front caster, trail, and scrub radius (r35) ---
     r = find_row(rows, "front caster, trail, and scrub radius")
     if r:
@@ -687,7 +701,7 @@ def extract(rows, driver_mass):
         ("Roll camber", "r28"),
         ("Camber adjustment method", "r31"),
         ("Anti-dive / anti-squat", "r32"),
-        ("Roll center @ 1g lateral (dynamic)", "r34"),
+        ("Roll center height @ 1g lateral (dynamic)", "r34"),
         ("Brake rotors / master cyl / calipers / pads", "r42-45"),
         ("Upright / hub / bearing / axle hardware", "r47-53"),
         ("Ergonomics, steering wheel, instrumentation", "r55-61"),
@@ -957,6 +971,8 @@ def build_matlab(name, s):
       f"{src_comment(s, 'suspension.geometry.*.motionRatioCurve', 'baseline')}")
     A(f"        'rollCenterHeight', {fmt(g('rchFront', 0.030))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.front.rollCenterHeight', '0.030')}")
+    A(f"        'rollCenterLateral', {fmt(g('rclFront', 0))}, ...                    % "
+      f"{src_comment(s, 'suspension.geometry.front.rollCenterLateral', '0')}")
     A(f"        'casterAngle',      {fmt_rad_as_deg_expr(g('frontCasterAngle', 7.0 * math.pi / 180.0))}, ...            % "
       f"{src_comment(s, 'suspension.geometry.front.casterAngle', '7.0*pi/180')}")
     A(f"        'mechanicalTrail',  {fmt(g('frontMechanicalTrail', 0.030))}, ...                     % "
@@ -974,6 +990,8 @@ def build_matlab(name, s):
     A(f"        'motionRatioCurve', {fmt_matlab_vector(rear_mr_curve)}, ...")
     A(f"        'rollCenterHeight', {fmt(g('rchRear', 0.045))}, ...                     % "
       f"{src_comment(s, 'suspension.geometry.rear.rollCenterHeight', '0.045')}")
+    A(f"        'rollCenterLateral', {fmt(g('rclRear', 0))}, ...                    % "
+      f"{src_comment(s, 'suspension.geometry.rear.rollCenterLateral', '0')}")
     A("        'casterAngle',      0, ...")
     A("        'mechanicalTrail',  0, ...")
     A("        'scrubRadius',      0, ...")

@@ -221,6 +221,76 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 verifyTrue(testCase, forces.motorTorquePowerLimitActive);
 end
 
+function testMotorTorqueCommandModeCutsPositiveTorqueAtRpmLimit(testCase)
+[vehicle, tire, powertrain] = directTorqueVehicle();
+vehicle.powertrain.totalRatio = 3.4;
+vehicle.powertrain.efficiency = 0.9;
+vehicle.powertrain.rpmLimitRPM = 1000;
+powertrain = vehicle.powertrain;
+
+speed = 20;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state.vehicleManager = vehicle;
+
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.powertrainMode = "motor_torque_command";
+simulator.wheelSolveIterations = 1;
+ref = struct( ...
+    'heading', 0, ...
+    'x', 0, ...
+    'y', 0, ...
+    'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 50, ...
+    'packVoltageV', 300, ...
+    'packCurrentA', 100);
+
+[~, forces] = simulator.step(state, input, ref);
+
+verifyGreaterThan(testCase, powertrain.state.motorRPM, powertrain.rpmLimitRPM);
+verifyEqual(testCase, forces.motorTorqueRequested, 50, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.motorTorque, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.wheelTorque, 0, 'AbsTol', 1e-12);
+verifyTrue(testCase, forces.rpmLimitActive);
+end
+
+function testMotorTorqueCommandModeAllowsNegativeTorqueAtRpmLimit(testCase)
+[vehicle, tire, powertrain] = directTorqueVehicle();
+vehicle.powertrain.totalRatio = 3.4;
+vehicle.powertrain.efficiency = 0.9;
+vehicle.powertrain.rpmLimitRPM = 1000;
+powertrain = vehicle.powertrain;
+
+speed = 20;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state.vehicleManager = vehicle;
+
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.powertrainMode = "motor_torque_command";
+simulator.wheelSolveIterations = 1;
+ref = struct( ...
+    'heading', 0, ...
+    'x', 0, ...
+    'y', 0, ...
+    'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.3, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', -20);
+
+[~, forces] = simulator.step(state, input, ref);
+
+expectedWheelTorque = -20 * powertrain.totalRatio / powertrain.efficiency;
+verifyGreaterThan(testCase, powertrain.state.motorRPM, powertrain.rpmLimitRPM);
+verifyEqual(testCase, forces.motorTorque, -20, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
+verifyFalse(testCase, forces.rpmLimitActive);
+end
+
 function testMotorTorqueCommandModeUsesNegativeTorqueAsCoastdown(testCase)
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;

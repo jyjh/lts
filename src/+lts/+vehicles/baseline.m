@@ -80,6 +80,7 @@ function cfg = baseline()
     %                                  toe positive = toe-left)
     %   motionRatioCurve [-] referenced to the wheel
     %   rollCenterHeight [m] above ground (drives the geometric load transfer)
+    %   rollCenterLateral [m] signed lateral position at +1g, scaled by axle ay
     %   casterAngle/mechanicalTrail/scrubRadius/kingpinInclination define
     %   the steering axis and contact patch sweep under steer.
     % Vehicle-level wheelbase/track/weight are pulled from the lts.vehicle.VehicleManager
@@ -90,6 +91,7 @@ function cfg = baseline()
         'toeCurve',         [-0.05 0 0.05] * pi / 180, ... % toes out in bump
         'motionRatioCurve', [0.93 0.95 0.97], ...
         'rollCenterHeight', 0.030, ...                     % slightly above ground
+        'rollCenterLateral', 0, ...                         % not specified
         'casterAngle',      7.0 * pi / 180, ...            % positive caster
         'mechanicalTrail',  0.030, ...                     % [m]
         'scrubRadius',      0.018, ...                     % [m], positive outboard
@@ -101,6 +103,7 @@ function cfg = baseline()
         'toeCurve',         [0.05 0 -0.05] * pi / 180, ... % toes in in bump
         'motionRatioCurve', [0.94 0.95 0.96], ...
         'rollCenterHeight', 0.045, ...                     % a bit higher = stable platform
+        'rollCenterLateral', 0, ...                         % not specified
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
         'scrubRadius',      0, ...

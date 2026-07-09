@@ -4,6 +4,8 @@ classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
         totalRatio = 1
         efficiency = 1
         regenEfficiency = NaN
+        rpmLimitRPM = Inf
+        rpmLimitHysteresisRPM = 0
     end
 
     methods
@@ -38,6 +40,15 @@ classdef SimulatorZeroPowertrain < lts.components.Powertrain.PowertrainComponent
 
         function efficiency = getDrivetrainEfficiency(obj)
             efficiency = obj.efficiency;
+        end
+
+        function active = isRPMLimitActive(obj, motorRPM)
+            if obj.state.rpmLimitActive
+                threshold = obj.rpmLimitRPM - max(0, obj.rpmLimitHysteresisRPM);
+            else
+                threshold = obj.rpmLimitRPM;
+            end
+            active = isfinite(threshold) && threshold > 0 && motorRPM >= threshold;
         end
     end
 end
