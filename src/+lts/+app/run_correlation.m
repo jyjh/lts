@@ -39,6 +39,10 @@ parser.addParameter('LimitMotorTorqueByPackPower', true, @(x) islogical(x) || is
 parser.addParameter('PackPowerAdvanceS', 0, ...
     @(x) isnumeric(x) && isscalar(x) && isfinite(x));
 parser.addParameter('Dt', 0.001, @(x) isnumeric(x) && isscalar(x) && x > 0);
+parser.addParameter('TelemetryMode', 'full', ...
+    @(x) any(strcmpi(string(x), ["full", "lean"])));
+parser.addParameter('WheelSolveIterations', [], ...
+    @(x) isempty(x) || (isnumeric(x) && isscalar(x) && isfinite(x) && x > 0));
 parser.addParameter('ImportFrequency', [], @(x) isempty(x) || (isnumeric(x) && isscalar(x) && x > 0));
 parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
@@ -47,6 +51,8 @@ parser.addParameter('SurfaceMu', NaN, @(x) isempty(x) || (isnumeric(x) && isscal
 parser.addParameter('OutputBase', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('PythonCommand', 'python', @(x) ischar(x) || isstring(x));
 parser.addParameter('ExportMoTeC', true, @(x) islogical(x) || isnumeric(x));
+parser.addParameter('ExportChannels', {}, @(x) iscell(x) || isstring(x) || ischar(x));
+parser.addParameter('IncludeDerived', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('UseLoggedPosition', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('UseLoggedYawRate', [], @(x) isempty(x) || islogical(x) || isnumeric(x));
 parser.addParameter('UseLoggedTransientState', [], @(x) isempty(x) || islogical(x) || isnumeric(x));
@@ -139,6 +145,10 @@ initialState = lts.correlation.CorrelationStateInitializer.fromReplayProfile( ..
     'InitialTransientWindowS', initialTransientWindowS);
 
 simulator = lts.simulation.Simulator(vehicle, [], dt);
+simulator.telemetryMode = lower(string(opts.TelemetryMode));
+if ~isempty(opts.WheelSolveIterations)
+    simulator.wheelSolveIterations = max(1, round(double(opts.WheelSolveIterations)));
+end
 [stateLog, lapTime] = simulator.simulateReplay( ...
     initialState, track, profile, ...
     'ReplayDomain', opts.ReplayDomain, ...
@@ -155,10 +165,14 @@ simulator = lts.simulation.Simulator(vehicle, [], dt);
 
 outputs.csvFile = [outputs.outputBase '.csv'];
 outputs.ldFile = [outputs.outputBase '.ld'];
+outputs.telemetryMode = char(simulator.telemetryMode);
+outputs.wheelSolveIterations = simulator.wheelSolveIterations;
+exportArgs = {'Channels', opts.ExportChannels, ...
+    'IncludeDerived', logical(opts.IncludeDerived)};
 
 if logical(opts.ExportMoTeC)
     lts.telemetry.TelemetryExporter.exportToMoTeCLog( ...
-        stateLog, outputs.csvFile, ...
+        stateLog, outputs.csvFile, exportArgs{:}, ...
         'OutputFile', outputs.ldFile, ...
         'Frequency', 1 / dt, ...
         'VehicleWeight', round(vehicle.totalMass), ...
@@ -167,7 +181,8 @@ if logical(opts.ExportMoTeC)
         'EventName', 'FSAE LTS Correlation Replay', ...
         'VehicleType', 'FSAE');
 else
-    lts.telemetry.TelemetryExporter.writeToMoTeCFormat(stateLog, outputs.csvFile);
+    lts.telemetry.TelemetryExporter.writeToMoTeCFormat( ...
+        stateLog, outputs.csvFile, exportArgs{:});
     outputs.ldFile = '';
 end
 

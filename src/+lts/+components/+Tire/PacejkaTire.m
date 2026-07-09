@@ -533,6 +533,16 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             longSpeed = longSpeeds(:);
             surfaceScale = obj.expandSurfaceScale(surfaceMu, 4);
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
+            P = obj.tireConstants.nomPressure;
+            params = obj.tireConstants.params;
+            if computePeakMu
+                peakVx = obj.computeMFevalSpeed(longSpeed);
+                peakFzKey = round(Fz / 10) * 10;
+                peakGammaKey = round(gamma * 1000) / 1000;
+                peakVxKey = round(peakVx * 10) / 10;
+                peakNumericKey = obj.packPeakMuCacheKey( ...
+                    peakFzKey, peakGammaKey, P, peakVxKey);
+            end
 
             % Apply per-corner relaxation to obtain the transient (force-
             % producing) slip. The lagged slip stored on each corner only
@@ -575,8 +585,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
 
             active = Fz > 0;
             if any(active)
-                P = obj.tireConstants.nomPressure;
-                params = obj.tireConstants.params;
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
                 alphaEval = obj.evaluationSlipAngle(alpha);
@@ -589,8 +597,23 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 for j = 1:numel(activeIdx)
                     i = activeIdx(j);
                     if computePeakMu
-                        rawPeakMu = obj.getCachedPeakMu( ...
-                            Fz(i), gamma(i), P, params, longSpeed(i));
+                        numericKey = peakNumericKey(i);
+                        if states{i}.peakMuCacheKey == numericKey
+                            rawPeakMu = states{i}.rawPeakMu;
+                        elseif isKey(obj.peakMuNumericCache, numericKey)
+                            rawPeakMu = obj.peakMuNumericCache(numericKey);
+                            states{i}.peakMuCacheKey = numericKey;
+                            states{i}.rawPeakMu = rawPeakMu;
+                        else
+                            rawPeakMu = obj.computePeakMuInternal( ...
+                                Fz(i), gamma(i), P, params, peakVx(i));
+                            obj.peakMuNumericCache(numericKey) = rawPeakMu;
+                            key = sprintf('%.0f_%.3f_%.0f_%.1f', ...
+                                peakFzKey(i), peakGammaKey(i), P, peakVxKey(i));
+                            obj.peakMuCache(key) = rawPeakMu;
+                            states{i}.peakMuCacheKey = numericKey;
+                            states{i}.rawPeakMu = rawPeakMu;
+                        end
                         states{i}.peakMu = rawPeakMu * surfaceScale(i);
                     end
                     states{i}.Fx = outputs(j,1) * surfaceScale(i);
@@ -1025,5 +1048,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             outputs = mfeval(params, inputsMF, 111);
             peakMu = max(abs(outputs(:,2))) / Fz;
         end
+
     end
 end

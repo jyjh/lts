@@ -314,9 +314,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
             
             frontAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.frontLeft, obj.frontRight, obj.getAxleBarWheelRate(obj.frontAntiRollBar));
+                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarWheelRate);
             rearAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.rearLeft, obj.rearRight, obj.getAxleBarWheelRate(obj.rearAntiRollBar));
+                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarWheelRate);
 
             % --- Update each corner's transient state ---
             obj.frontLeft.updateCorner( ...
@@ -352,10 +352,10 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   same axle coupling.
             front = obj.computeAntiRollBarForces( ...
                 obj.frontLeft, obj.frontRight, ...
-                obj.getAxleBarWheelRate(obj.frontAntiRollBar));
+                obj.frontAntiRollBarWheelRate);
             rear = obj.computeAntiRollBarForces( ...
                 obj.rearLeft, obj.rearRight, ...
-                obj.getAxleBarWheelRate(obj.rearAntiRollBar));
+                obj.rearAntiRollBarWheelRate);
             forces.FL = front.left;
             forces.FR = front.right;
             forces.RL = rear.left;
