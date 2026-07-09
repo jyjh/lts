@@ -82,50 +82,88 @@ classdef SuspensionGeometry
             % Physics: camber and toe change the tire's local force axes and
             % Magic Formula inputs; trail/scrub move the contact patch relative
             % to the wheel center, changing the local velocity and yaw moment.
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
+            cornerKey = upper(char(corner));
+            isFront = cornerKey(1) == 'F';
+            isLeft = cornerKey(end) == 'L';
+            if isLeft
+                side = 1;
+            else
+                side = -1;
+            end
 
-            if strcmp(axle, 'front')
+            if isFront
                 travelGrid = obj.frontTravelGrid;
                 camberCurve = obj.frontCamberCurve;
                 toeCurve = obj.frontToeCurve;
                 motionRatioCurve = obj.frontMotionRatioCurve;
+                caster = obj.frontCasterAngle;
+                trail = obj.frontMechanicalTrail;
+                scrub = obj.frontScrubRadius;
+                kpi = obj.frontKingpinInclination;
+                kingpinOffset = obj.frontKingpinOffset;
+                rollCenterHeight = obj.frontRollCenterHeight;
             else
                 travelGrid = obj.rearTravelGrid;
                 camberCurve = obj.rearCamberCurve;
                 toeCurve = obj.rearToeCurve;
                 motionRatioCurve = obj.rearMotionRatioCurve;
+                caster = obj.rearCasterAngle;
+                trail = obj.rearMechanicalTrail;
+                scrub = obj.rearScrubRadius;
+                kpi = obj.rearKingpinInclination;
+                kingpinOffset = obj.rearKingpinOffset;
+                rollCenterHeight = obj.rearRollCenterHeight;
             end
 
-            wheelSteer = obj.computeWheelSteer(corner, steerInput);
+            wheelSteer = obj.computeWheelSteerFast(isFront, isLeft, steerInput);
             baseCamber = obj.interpolateCurve(travelGrid, camberCurve, wheelTravel);
             toeAngle = side * obj.interpolateCurve(travelGrid, toeCurve, wheelTravel);
             wheelHeading = wheelSteer + toeAngle;
-            axis = obj.computeSteeringAxis(corner);
+            axis = [-sin(caster), -side * sin(kpi), cos(caster) * cos(kpi)];
+            normAxis = norm(axis);
+            if normAxis <= eps
+                axis = [0, 0, 1];
+            else
+                axis = axis ./ normAxis;
+            end
+
+            if abs(scrub) > eps || abs(kingpinOffset) <= eps
+                effectiveScrub = scrub;
+            else
+                effectiveScrub = kingpinOffset;
+            end
+
+            if isFront
+                wheelCenterX = obj.wheelbase * (1 - obj.staticFrontWeight);
+            else
+                wheelCenterX = -obj.wheelbase * obj.staticFrontWeight;
+            end
+            wheelCenterY = side * obj.trackWidth / 2;
+
+            [contactX, contactY, kingpinX, kingpinY] = ...
+                obj.computeContactPatchPositionFast( ...
+                    trail, effectiveScrub, side, wheelHeading, ...
+                    wheelCenterX, wheelCenterY);
 
             kin.wheelTravel = wheelTravel;
             kin.baseCamberAngle = baseCamber;
-            kin.camberAngle = obj.applySteeringAxisCamber( ...
+            kin.camberAngle = obj.applySteeringAxisCamberFast( ...
                 baseCamber, wheelHeading, axis, side);
             kin.toeAngle = toeAngle;
             kin.steerAngle = wheelSteer;
             kin.motionRatio = obj.interpolateCurve(travelGrid, motionRatioCurve, wheelTravel);
-            [kin.wheelCenterXPosition, kin.wheelCenterYPosition] = ...
-                obj.computeWheelPosition(corner);
-            [kin.xPosition, kin.yPosition, kin.kingpinXPosition, ...
-                kin.kingpinYPosition] = obj.computeContactPatchPosition( ...
-                corner, wheelHeading, kin.wheelCenterXPosition, ...
-                kin.wheelCenterYPosition);
-            kin.casterAngle = obj.getAxleValue(axle, 'CasterAngle');
-            kin.mechanicalTrail = obj.getAxleValue(axle, 'MechanicalTrail');
-            kin.scrubRadius = obj.getEffectiveScrubRadius(axle);
-            kin.kingpinInclination = obj.getAxleValue(axle, 'KingpinInclination');
-            kin.kingpinOffset = obj.getAxleValue(axle, 'KingpinOffset');
-            if strcmp(axle, 'front')
-                kin.rollCenterHeight = obj.frontRollCenterHeight;
-            else
-                kin.rollCenterHeight = obj.rearRollCenterHeight;
-            end
+            kin.wheelCenterXPosition = wheelCenterX;
+            kin.wheelCenterYPosition = wheelCenterY;
+            kin.xPosition = contactX;
+            kin.yPosition = contactY;
+            kin.kingpinXPosition = kingpinX;
+            kin.kingpinYPosition = kingpinY;
+            kin.casterAngle = caster;
+            kin.mechanicalTrail = trail;
+            kin.scrubRadius = effectiveScrub;
+            kin.kingpinInclination = kpi;
+            kin.kingpinOffset = kingpinOffset;
+            kin.rollCenterHeight = rollCenterHeight;
         end
 
         function steer = computeSteeringAngles(obj, steerInput)
@@ -177,6 +215,43 @@ classdef SuspensionGeometry
             wheelSteer = obj.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
+        function wheelSteer = computeWheelSteerFast(obj, isFront, isLeft, steerInput)
+            if ~isFront
+                wheelSteer = obj.rearSteerRatio * steerInput;
+                wheelSteer = max(-obj.maxWheelSteerAngle, ...
+                    min(obj.maxWheelSteerAngle, wheelSteer));
+                return;
+            end
+
+            meanSteer = steerInput / max(obj.steeringRatio, eps);
+            meanSteer = max(-obj.maxWheelSteerAngle, ...
+                min(obj.maxWheelSteerAngle, meanSteer));
+            if abs(meanSteer) < eps || obj.ackermann <= 0
+                wheelSteer = meanSteer;
+                return;
+            end
+
+            turnSign = sign(meanSteer);
+            absSteer = abs(meanSteer);
+            turnRadius = obj.wheelbase / max(tan(absSteer), eps);
+            halfTrack = obj.trackWidth / 2;
+
+            idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
+            idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
+            ackermannBlend = max(0, min(1, obj.ackermann));
+
+            isInside = (turnSign > 0 && isLeft) || (turnSign < 0 && ~isLeft);
+            if isInside
+                target = idealInner;
+            else
+                target = idealOuter;
+            end
+
+            wheelSteer = turnSign * (absSteer + ackermannBlend * (target - absSteer));
+            wheelSteer = max(-obj.maxWheelSteerAngle, ...
+                min(obj.maxWheelSteerAngle, wheelSteer));
+        end
+
         function [x, y] = computeWheelPosition(obj, corner)
             frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
             rearArm = obj.wheelbase * obj.staticFrontWeight;
@@ -226,6 +301,25 @@ classdef SuspensionGeometry
             camber = atan2(dot(topVector, outward), dot(topVector, [0, 0, 1]));
         end
 
+        function camber = applySteeringAxisCamberFast(~, baseCamber, wheelHeading, axis, side)
+            topVector = [0, side * sin(baseCamber), cos(baseCamber)];
+            c = cos(wheelHeading);
+            s = sin(wheelHeading);
+            crossAxisTop = [ ...
+                axis(2) * topVector(3) - axis(3) * topVector(2), ...
+                axis(3) * topVector(1) - axis(1) * topVector(3), ...
+                axis(1) * topVector(2) - axis(2) * topVector(1)];
+            axisDotTop = axis(1) * topVector(1) + ...
+                axis(2) * topVector(2) + axis(3) * topVector(3);
+            topVector = topVector * c + crossAxisTop * s + ...
+                axis * axisDotTop * (1 - c);
+
+            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
+            camber = atan2( ...
+                topVector(1) * outward(1) + topVector(2) * outward(2), ...
+                topVector(3));
+        end
+
         function [x, y, kingpinX, kingpinY] = computeContactPatchPosition( ...
                 obj, corner, wheelHeading, baseX, baseY)
             axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
@@ -233,6 +327,19 @@ classdef SuspensionGeometry
             trail = obj.getAxleValue(axle, 'MechanicalTrail');
             scrub = obj.getEffectiveScrubRadius(axle);
 
+            offset0 = [-trail, side * scrub];
+            forward = [cos(wheelHeading), sin(wheelHeading)];
+            left = [-sin(wheelHeading), cos(wheelHeading)];
+            offset = -trail * forward + side * scrub * left;
+
+            kingpinX = baseX - offset0(1);
+            kingpinY = baseY - offset0(2);
+            x = kingpinX + offset(1);
+            y = kingpinY + offset(2);
+        end
+
+        function [x, y, kingpinX, kingpinY] = computeContactPatchPositionFast( ...
+                ~, trail, scrub, side, wheelHeading, baseX, baseY)
             offset0 = [-trail, side * scrub];
             forward = [cos(wheelHeading), sin(wheelHeading)];
             left = [-sin(wheelHeading), cos(wheelHeading)];
@@ -334,7 +441,37 @@ classdef SuspensionGeometry
                 value = 0;
                 return;
             end
-            value = interp1(grid(:), curve(:), query, 'linear', 'extrap');
+            grid = grid(:);
+            curve = curve(:);
+            n = min(numel(grid), numel(curve));
+            if n <= 0
+                value = 0;
+                return;
+            elseif n == 1
+                value = curve(1);
+                return;
+            end
+
+            % Scalar linear interpolation with extrapolation. This is called
+            % for every corner every step, and avoids interp1's setup cost.
+            grid = grid(1:n);
+            curve = curve(1:n);
+            if query <= grid(1)
+                idx0 = 1;
+            elseif query >= grid(end)
+                idx0 = n - 1;
+            else
+                idx0 = find(grid <= query, 1, 'last');
+                idx0 = min(max(idx0, 1), n - 1);
+            end
+
+            dx = grid(idx0 + 1) - grid(idx0);
+            if abs(dx) <= eps || ~isfinite(dx)
+                value = curve(idx0);
+                return;
+            end
+            frac = (query - grid(idx0)) / dx;
+            value = curve(idx0) + frac * (curve(idx0 + 1) - curve(idx0));
         end
 
         function axle = getAxle(corner)

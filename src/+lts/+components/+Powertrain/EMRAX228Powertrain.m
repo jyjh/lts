@@ -241,14 +241,16 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
             % Update motor RPM from driven-wheel angular velocity [rad/s].
-            obj.state.allowReverseRotation = obj.reverseCapable;
+            obj.state.allowReverseRotation = ...
+                obj.regenEnabled || obj.motoringDragTorque > 0;
             obj.state.updateFromDrivenWheels( ...
                 drivenWheelAngularVelocity, obj.totalGearRatio);
         end
 
         function updateStateFromVehicleSpeed(obj, vehicleSpeed)
             % Fallback update for callers without wheel rotational state.
-            obj.state.allowReverseRotation = obj.reverseCapable;
+            obj.state.allowReverseRotation = ...
+                obj.regenEnabled || obj.motoringDragTorque > 0;
             obj.state.updateFromVehicleSpeed( ...
                 vehicleSpeed, obj.wheelRadius, obj.totalGearRatio);
         end

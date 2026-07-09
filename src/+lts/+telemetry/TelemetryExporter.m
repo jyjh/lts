@@ -172,6 +172,8 @@ classdef TelemetryExporter
             tableData.names = {};
             tableData.units = {};
             tableData.values = zeros(nSamples, 0);
+            tableData.valueColumns = {};
+            tableData.sourceFields = {};
 
             if includeDerived
                 tableData = lts.telemetry.TelemetryExporter.addDerivedChannels(tableData, stateLog, nSamples);
@@ -198,6 +200,18 @@ classdef TelemetryExporter
                 [channelName, unit] = lts.telemetry.TelemetryExporter.rawChannelMetadata(field);
                 tableData = lts.telemetry.TelemetryExporter.addRawChannel( ...
                     tableData, stateLog, field, channelName, unit, nSamples);
+            end
+            tableData = lts.telemetry.TelemetryExporter.finalizeTableData(tableData, nSamples);
+        end
+
+        function tableData = finalizeTableData(tableData, nSamples)
+            if isfield(tableData, 'valueColumns') && ~isempty(tableData.valueColumns)
+                tableData.values = [tableData.valueColumns{:}];
+            else
+                tableData.values = zeros(nSamples, 0);
+            end
+            if isfield(tableData, 'valueColumns')
+                tableData = rmfield(tableData, 'valueColumns');
             end
         end
 
@@ -546,7 +560,7 @@ classdef TelemetryExporter
 
             tableData.names{end + 1} = channelName;
             tableData.units{end + 1} = unit;
-            tableData.values(:, end + 1) = values;
+            tableData.valueColumns{end + 1} = values;
             tableData.sourceFields{numel(tableData.names)} = field;
         end
 
@@ -830,9 +844,16 @@ classdef TelemetryExporter
 
             fprintf(fid, '%s\n', lts.telemetry.TelemetryExporter.csvRow(lts.telemetry.TelemetryExporter.motecHeaderNames(tableData)));
 
-            for row = 1:size(tableData.values, 1)
-                fprintf(fid, '%s\n', lts.telemetry.TelemetryExporter.numericCsvRow(tableData.values(row, :)));
+            nCols = size(tableData.values, 2);
+            if nCols == 0
+                return;
             end
+            if nCols == 1
+                rowFormat = '%.9g\n';
+            else
+                rowFormat = [repmat('%.9g,', 1, nCols - 1) '%.9g\n'];
+            end
+            fprintf(fid, rowFormat, tableData.values.');
         end
 
         function row = numericCsvRow(values)

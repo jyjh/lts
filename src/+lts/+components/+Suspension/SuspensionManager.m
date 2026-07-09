@@ -38,6 +38,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         % rate to derive the elastic load-transfer split.
         frontAntiRollBar = []
         rearAntiRollBar  = []
+        frontAntiRollBarWheelRate = 0
+        rearAntiRollBarWheelRate = 0
 
         % Optional override for the front elastic load-transfer fraction
         % [0-1]. When set (non-NaN), it is used directly and the spring+ARB
@@ -143,6 +145,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                     isempty(obj.rearAntiRollBar)
                 obj.rearAntiRollBar = obj.makeWheelRateBar(rearAntiRollBarRate);
             end
+            obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
+            obj.rearAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.rearAntiRollBar);
 
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
@@ -232,14 +236,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             ay = state.ay;
             frontAxleAy = ay;
             rearAxleAy = ay;
-            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             end
-            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.rearAxleAy)
                 rearAxleAy = state.rearAxleAy;
             elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
@@ -310,9 +314,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
             
             frontAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.frontLeft, obj.frontRight, obj.getAxleBarWheelRate(obj.frontAntiRollBar));
+                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarWheelRate);
             rearAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.rearLeft, obj.rearRight, obj.getAxleBarWheelRate(obj.rearAntiRollBar));
+                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarWheelRate);
 
             % --- Update each corner's transient state ---
             obj.frontLeft.updateCorner( ...
@@ -348,10 +352,10 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   same axle coupling.
             front = obj.computeAntiRollBarForces( ...
                 obj.frontLeft, obj.frontRight, ...
-                obj.getAxleBarWheelRate(obj.frontAntiRollBar));
+                obj.frontAntiRollBarWheelRate);
             rear = obj.computeAntiRollBarForces( ...
                 obj.rearLeft, obj.rearRight, ...
-                obj.getAxleBarWheelRate(obj.rearAntiRollBar));
+                obj.rearAntiRollBarWheelRate);
             forces.FL = front.left;
             forces.FR = front.right;
             forces.RL = rear.left;
@@ -367,14 +371,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             ay = state.ay;
             frontAxleAy = ay;
             rearAxleAy = ay;
-            if isobject(state) && isprop(state, 'frontAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
                     isfinite(state.frontAxleAy)
                 frontAxleAy = state.frontAxleAy;
             end
-            if isobject(state) && isprop(state, 'rearAxleAy') && ...
+            if isa(state, 'lts.simulation.VehicleState') && ...
                     isfinite(state.rearAxleAy)
                 rearAxleAy = state.rearAxleAy;
             elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
@@ -456,15 +460,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             end
 
             % Refresh per-corner sprung displacement/velocity from the chassis
-            % attitude (positive = compression-producing). The chassis
-            % capability is a run invariant; resolve it once.
-            if isempty(obj.cachedChassisHasCornerKinematics)
-                obj.cachedChassisHasCornerKinematics = ...
-                    ismethod(chassis, 'computeCornerKinematics');
-            end
-            if obj.cachedChassisHasCornerKinematics
-                chassis.computeCornerKinematics();
-            end
+            % attitude (positive = compression-producing). ChassisComponent
+            % declares this method, so avoid probing for it in the hot loop.
+            chassis.computeCornerKinematics();
             disp = chassis.state.cornerDisplacement;
             vel  = chassis.state.cornerVelocity;
 
@@ -541,10 +539,10 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             % Wheel springs + anti-roll bar, referenced to the wheel. Shared
             % with the chassis roll model so the load-transfer split and the
             % chassis roll stiffness use the same numbers.
-            KwSpringF = obj.frontLeft.getEffectiveWheelRate(obj.frontLeft.state);
-            KwSpringR = obj.rearLeft.getEffectiveWheelRate(obj.rearLeft.state);
-            KwF = KwSpringF + obj.getAxleBarWheelRate(obj.frontAntiRollBar);
-            KwR = KwSpringR + obj.getAxleBarWheelRate(obj.rearAntiRollBar);
+            KwSpringF = obj.fastEffectiveWheelRate(obj.frontLeft, obj.frontLeft.state);
+            KwSpringR = obj.fastEffectiveWheelRate(obj.rearLeft, obj.rearLeft.state);
+            KwF = KwSpringF + obj.frontAntiRollBarWheelRate;
+            KwR = KwSpringR + obj.rearAntiRollBarWheelRate;
         end
 
         function kw = getAxleBarWheelRate(~, antiRollBar)
@@ -619,14 +617,34 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   so an AntiRollBar is built whose wheel rate equals the input.
             if nargin >= 2 && ~isempty(frontRate)
                 obj.frontAntiRollBar = obj.makeWheelRateBar(max(frontRate, 0));
+                obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
             end
             if nargin >= 3 && ~isempty(rearRate)
                 obj.rearAntiRollBar = obj.makeWheelRateBar(max(rearRate, 0));
+                obj.rearAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.rearAntiRollBar);
             end
         end
     end
 
     methods (Static, Access = private)
+        function wheelRate = fastEffectiveWheelRate(cornerUnit, cornerState)
+            motionRatio = cornerUnit.motionRatio;
+            if cornerState.motionRatioEffective > 0
+                motionRatio = cornerState.motionRatioEffective;
+            end
+            motionRatio = max(motionRatio, eps);
+            wheelRate = cornerUnit.springRate * motionRatio^2;
+
+            staticCompression = cornerState.staticSuspensionCompression;
+            if ~isfinite(staticCompression)
+                staticCompression = 0;
+            end
+            if cornerUnit.bumpStopRate > 0 && ...
+                    staticCompression >= max(cornerUnit.bumpStopLength, 0) - 1e-12
+                wheelRate = wheelRate + cornerUnit.bumpStopRate;
+            end
+        end
+
         function kin = stateToKinematics(state)
             kin.wheelTravel = state.wheelTravel;
             kin.camberAngle = state.camberAngle;
@@ -681,8 +699,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         function wheelTravel = computeAntiRollBarTravel(~, cornerUnit)
             cornerState = cornerUnit.state;
             motionRatio = cornerUnit.motionRatio;
-            if isprop(cornerState, 'motionRatioEffective') && ...
-                    cornerState.motionRatioEffective > 0
+            if cornerState.motionRatioEffective > 0
                 motionRatio = cornerState.motionRatioEffective;
             end
             wheelTravel = cornerState.damperPosition / max(motionRatio, eps);

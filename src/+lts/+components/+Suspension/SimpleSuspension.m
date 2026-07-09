@@ -312,8 +312,7 @@ classdef SimpleSuspension
     methods (Access = private)
         function MR_eff = getEffectiveMotionRatio(obj, cornerState)
             MR_eff = obj.motionRatio;
-            if isprop(cornerState, 'motionRatioEffective') && ...
-                    cornerState.motionRatioEffective > 0
+            if cornerState.motionRatioEffective > 0
                 MR_eff = cornerState.motionRatioEffective;
             end
             MR_eff = max(MR_eff, eps);

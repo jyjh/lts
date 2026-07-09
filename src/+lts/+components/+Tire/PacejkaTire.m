@@ -68,8 +68,11 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % negative during a high-sideslip/steered-wheel transient.
         allowReverseRotation = false
 
-        % Cache peak-mu scans by rounded load/camber/speed.
+        % Cache peak-mu scans by rounded load/camber/speed. The public
+        % string-keyed cache is kept readable for tests/debugging; the
+        % numeric cache is the hot-loop lookup path.
         peakMuCache
+        peakMuNumericCache
 
         % Track-surface Mu that corresponds to the raw tire file. A surface
         % Mu of 1.2 preserves the current dry-track Pacejka behavior.
@@ -99,6 +102,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             obj.RL = lts.components.Tire.TireState();
             obj.RR = lts.components.Tire.TireState();
             obj.peakMuCache = containers.Map('KeyType', 'char', 'ValueType', 'double');
+            obj.peakMuNumericCache = containers.Map('KeyType', 'double', 'ValueType', 'double');
             
             fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
         end
@@ -529,6 +533,16 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             longSpeed = longSpeeds(:);
             surfaceScale = obj.expandSurfaceScale(surfaceMu, 4);
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
+            P = obj.tireConstants.nomPressure;
+            params = obj.tireConstants.params;
+            if computePeakMu
+                peakVx = obj.computeMFevalSpeed(longSpeed);
+                peakFzKey = round(Fz / 10) * 10;
+                peakGammaKey = round(gamma * 1000) / 1000;
+                peakVxKey = round(peakVx * 10) / 10;
+                peakNumericKey = obj.packPeakMuCacheKey( ...
+                    peakFzKey, peakGammaKey, P, peakVxKey);
+            end
 
             % Apply per-corner relaxation to obtain the transient (force-
             % producing) slip. The lagged slip stored on each corner only
@@ -536,17 +550,33 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % intermediate wheel-solve iterations (dt = 0) the force is
             % evaluated at the steady-state kinematic slip while the lagged
             % state is preserved for the next physics step.
-            alpha = zeros(4, 1);
-            kappa = zeros(4, 1);
+            previousAlpha = [obj.FL.slipAngle; obj.FR.slipAngle; ...
+                             obj.RL.slipAngle; obj.RR.slipAngle];
+            previousKappa = [obj.FL.slipRatio; obj.FR.slipRatio; ...
+                             obj.RL.slipRatio; obj.RR.slipRatio];
+            sigma = obj.relaxationLength;
+            advanceMode = strcmp(relaxationMode, 'advance');
+            holdMode = strcmp(relaxationMode, 'hold');
+            if holdMode && sigma > 0
+                alpha = previousAlpha;
+                kappa = previousKappa;
+            elseif sigma <= 0 || dt <= 0 || strcmp(relaxationMode, 'steady')
+                alpha = ssAlpha;
+                kappa = ssKappa;
+            else
+                V_eff = max(abs(longSpeed), 1.0);
+                decay = exp(-V_eff * dt / sigma);
+                alpha = ssAlpha - (ssAlpha - previousAlpha) .* decay;
+                kappa = ssKappa - (ssKappa - previousKappa) .* decay;
+                alpha = obj.evaluationSlipAngle(alpha);
+                kappa = max(-1, min(1, kappa));
+            end
             for i = 1:4
                 states{i}.normalForce = Fz(i);
                 states{i}.ssSlipAngle = ssAlpha(i);
                 states{i}.ssSlipRatio = ssKappa(i);
                 states{i}.camberAngle = gamma(i);
-                [alpha(i), kappa(i)] = obj.applyRelaxation( ...
-                    states{i}, ssAlpha(i), ssKappa(i), longSpeeds(i), dt, ...
-                    relaxationMode);
-                if strcmp(relaxationMode, 'advance') && dt > 0
+                if advanceMode && dt > 0
                     % Commit the advanced lagged state for next step.
                     states{i}.slipAngle = alpha(i);
                     states{i}.slipRatio = kappa(i);
@@ -555,8 +585,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
 
             active = Fz > 0;
             if any(active)
-                P = obj.tireConstants.nomPressure;
-                params = obj.tireConstants.params;
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
                 alphaEval = obj.evaluationSlipAngle(alpha);
@@ -569,8 +597,23 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 for j = 1:numel(activeIdx)
                     i = activeIdx(j);
                     if computePeakMu
-                        rawPeakMu = obj.getCachedPeakMu( ...
-                            Fz(i), gamma(i), P, params, longSpeed(i));
+                        numericKey = peakNumericKey(i);
+                        if states{i}.peakMuCacheKey == numericKey
+                            rawPeakMu = states{i}.rawPeakMu;
+                        elseif isKey(obj.peakMuNumericCache, numericKey)
+                            rawPeakMu = obj.peakMuNumericCache(numericKey);
+                            states{i}.peakMuCacheKey = numericKey;
+                            states{i}.rawPeakMu = rawPeakMu;
+                        else
+                            rawPeakMu = obj.computePeakMuInternal( ...
+                                Fz(i), gamma(i), P, params, peakVx(i));
+                            obj.peakMuNumericCache(numericKey) = rawPeakMu;
+                            key = sprintf('%.0f_%.3f_%.0f_%.1f', ...
+                                peakFzKey(i), peakGammaKey(i), P, peakVxKey(i));
+                            obj.peakMuCache(key) = rawPeakMu;
+                            states{i}.peakMuCacheKey = numericKey;
+                            states{i}.rawPeakMu = rawPeakMu;
+                        end
                         states{i}.peakMu = rawPeakMu * surfaceScale(i);
                     end
                     states{i}.Fx = outputs(j,1) * surfaceScale(i);
@@ -955,14 +998,27 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             FzKey = round(Fz / 10) * 10;
             gammaKey = round(gamma * 1000) / 1000;
             VxKey = round(Vx * 10) / 10;
-            key = sprintf('%.0f_%.3f_%.0f_%.1f', FzKey, gammaKey, P, VxKey);
-            if isKey(obj.peakMuCache, key)
-                peakMu = obj.peakMuCache(key);
+            numericKey = obj.packPeakMuCacheKey(FzKey, gammaKey, P, VxKey);
+            if isKey(obj.peakMuNumericCache, numericKey)
+                peakMu = obj.peakMuNumericCache(numericKey);
                 return;
             end
 
             peakMu = obj.computePeakMuInternal(Fz, gamma, P, params, Vx);
+            obj.peakMuNumericCache(numericKey) = peakMu;
+            key = sprintf('%.0f_%.3f_%.0f_%.1f', FzKey, gammaKey, P, VxKey);
             obj.peakMuCache(key) = peakMu;
+        end
+
+        function key = packPeakMuCacheKey(~, FzKey, gammaKey, P, VxKey)
+            % Pack quantized cache coordinates into a collision-free double
+            % for normal tire loads/cambers/speeds. This keeps cache hits out
+            % of sprintf/char-map overhead while preserving readable misses.
+            fzBin = round(FzKey / 10) + 50000;
+            gammaBin = round(gammaKey * 1000) + 50000;
+            vxBin = round(VxKey * 10);
+            pressureBin = round(P / 1000);
+            key = fzBin + 1e5 * gammaBin + 1e10 * vxBin + 1e13 * pressureBin;
         end
         
         function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params, Vx)
@@ -983,9 +1039,15 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                         zeros(nScan, 1), ...          % phit = 0
                         repmat(Vx, nScan, 1), ...     % Vx
                         repmat(P, nScan, 1)];         % P
-            
+
+            % Some tire files emit repeated fit-range warnings while scanning
+            % peak mu. The scan is guarded/cached, so suppress only this
+            % known diagnostic to avoid console I/O dominating runtime.
+            warningState = warning('off', 'all');
+            cleanup = onCleanup(@() warning(warningState));
             outputs = mfeval(params, inputsMF, 111);
             peakMu = max(abs(outputs(:,2))) / Fz;
         end
+
     end
 end

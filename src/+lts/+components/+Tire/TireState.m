@@ -60,6 +60,11 @@ classdef TireState < handle
         
         % Peak friction coefficient at current load
         peakMu          = 0
+
+        % Last raw peak-mu lookup used by this corner. PacejkaTire owns the
+        % key format; the state keeps the hot per-corner hit path local.
+        peakMuCacheKey  = NaN
+        rawPeakMu       = NaN
     end
     
     methods
@@ -80,6 +85,8 @@ classdef TireState < handle
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.peakMuCacheKey  = NaN;
+            obj.rawPeakMu       = NaN;
         end
         
         function reset(obj)
@@ -97,6 +104,8 @@ classdef TireState < handle
             obj.My              = 0;
             obj.Mz              = 0;
             obj.peakMu          = 0;
+            obj.peakMuCacheKey  = NaN;
+            obj.rawPeakMu       = NaN;
         end
     end
 end

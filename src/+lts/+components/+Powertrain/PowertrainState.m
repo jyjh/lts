@@ -74,16 +74,31 @@ classdef PowertrainState < handle
         function updateFromDrivenWheels(obj, drivenWheelAngularVelocity, gearRatio)
             % UPDATEFROMDRIVENWHEELS Update motor speed from driven wheels.
             %   drivenWheelAngularVelocity may be a scalar or vector [rad/s].
-            drivenWheelAngularVelocity = drivenWheelAngularVelocity(:);
-            drivenWheelAngularVelocity = drivenWheelAngularVelocity( ...
-                isfinite(drivenWheelAngularVelocity));
-
-            if isempty(drivenWheelAngularVelocity)
-                avgWheelOmega = 0;
+            if isscalar(drivenWheelAngularVelocity)
+                avgWheelOmega = drivenWheelAngularVelocity;
+                if ~isfinite(avgWheelOmega)
+                    avgWheelOmega = 0;
+                elseif ~obj.allowReverseRotation
+                    avgWheelOmega = max(0, avgWheelOmega);
+                end
             elseif obj.allowReverseRotation
-                avgWheelOmega = mean(drivenWheelAngularVelocity);
+                drivenWheelAngularVelocity = drivenWheelAngularVelocity(:);
+                drivenWheelAngularVelocity = drivenWheelAngularVelocity( ...
+                    isfinite(drivenWheelAngularVelocity));
+                if isempty(drivenWheelAngularVelocity)
+                    avgWheelOmega = 0;
+                else
+                    avgWheelOmega = mean(drivenWheelAngularVelocity);
+                end
             else
-                avgWheelOmega = mean(max(0, drivenWheelAngularVelocity));
+                drivenWheelAngularVelocity = drivenWheelAngularVelocity(:);
+                drivenWheelAngularVelocity = drivenWheelAngularVelocity( ...
+                    isfinite(drivenWheelAngularVelocity));
+                if isempty(drivenWheelAngularVelocity)
+                    avgWheelOmega = 0;
+                else
+                    avgWheelOmega = mean(max(0, drivenWheelAngularVelocity));
+                end
             end
             
             obj.drivenWheelAngularVelocity = avgWheelOmega;

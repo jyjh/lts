@@ -17,6 +17,9 @@ classdef TelemetryReplayDriver < handle
         % Let the replay channel map define road-wheel steering scale.
         maxSteeringAngle = inf
         steeringRampTime = 0
+        replayDomainIsTime = false
+        replayDurationDenom = 1
+        replayDistanceDenom = 1
     end
 
     methods
@@ -32,6 +35,9 @@ classdef TelemetryReplayDriver < handle
             end
             obj.replayDomain = lower(string(parser.Results.ReplayDomain));
             obj.validateReplayDomain();
+            obj.replayDomainIsTime = obj.replayDomain == "time";
+            obj.replayDurationDenom = max(obj.profile.duration(), eps);
+            obj.replayDistanceDenom = max(obj.profile.totalDistance(), eps);
         end
 
         function obj = prepareForSimulation(obj, ~, ~, dt)
@@ -41,21 +47,21 @@ classdef TelemetryReplayDriver < handle
         end
 
         function input = computeInput(obj, state, observation)
-            switch obj.replayDomain
-                case "distance"
-                    s = state.s;
-                    if nargin >= 3 && isstruct(observation) && ...
-                            isfield(observation, 's') && isfinite(observation.s)
-                        s = observation.s;
-                    end
-                    input = obj.profile.sampleByDistance(s);
-                    input = obj.addReplayProgress(input, "distance");
-                case "time"
-                    input = obj.profile.sampleByTime(state.time);
-                    input = obj.addReplayProgress(input, "time");
-                otherwise
-                    error('lts_correlation_TelemetryReplayDriver:InvalidReplayDomain', ...
-                        'ReplayDomain must be "distance" or "time".');
+            if obj.replayDomainIsTime
+                input = obj.profile.sampleByTime(state.time);
+                input.replayDomain = 'time';
+                input.replayProgress = max(0, min(1, ...
+                    input.sourceTime / obj.replayDurationDenom));
+            else
+                s = state.s;
+                if nargin >= 3 && isstruct(observation) && ...
+                        isfield(observation, 's') && isfinite(observation.s)
+                    s = observation.s;
+                end
+                input = obj.profile.sampleByDistance(s);
+                input.replayDomain = 'distance';
+                input.replayProgress = max(0, min(1, ...
+                    input.sourceDistance / obj.replayDistanceDenom));
             end
         end
     end
@@ -69,20 +75,5 @@ classdef TelemetryReplayDriver < handle
             end
         end
 
-        function input = addReplayProgress(obj, input, domain)
-            input.replayDomain = char(domain);
-            switch domain
-                case "time"
-                    denom = max(obj.profile.duration(), eps);
-                    numerator = input.sourceTime;
-                case "distance"
-                    denom = max(obj.profile.totalDistance(), eps);
-                    numerator = input.sourceDistance;
-                otherwise
-                    denom = 1;
-                    numerator = 0;
-            end
-            input.replayProgress = max(0, min(1, numerator / denom));
-        end
     end
 end

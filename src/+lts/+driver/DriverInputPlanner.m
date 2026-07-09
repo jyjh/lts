@@ -24,6 +24,16 @@ classdef DriverInputPlanner
         racingLineCurvatureSmoothDistance = 6.0
         racingLineOffsetSmoothDistance = 8.0
         racingLineMinCornerLength = 2.0
+        vehicleTrackWidth = 0
+        edgeSlowdownMargin = 0.75
+        racingLineApexPhase = 0.5
+        cachedRollingResistanceCoeff = 0.015
+        cachedCorneringUsage = 0.98
+        cachedBrakingUsage = 0.98
+        cachedDriveUsage = 0.98
+        cachedTrailBrakeReserve = 0.30
+        cachedTractionCircleReserve = 0
+        cachedCorneringGripMargin = 0.95
         % When the feedforward plan calls for coast (both pedals zero) and the
         % speed error stays within this tolerance [m/s], the closed-loop layer
         % holds coast instead of pedaling to correct the small drift. This lets
@@ -61,6 +71,69 @@ classdef DriverInputPlanner
             else
                 obj.driverModel = [];
             end
+            obj = obj.cacheRunConstants();
+        end
+
+        function obj = cacheRunConstants(obj)
+            vm = obj.vehicleManager;
+            if isa(vm, 'lts.vehicle.VehicleManager')
+                obj.vehicleTrackWidth = vm.trackWidth;
+                if isa(vm.tire, 'lts.components.Tire.PacejkaTire')
+                    obj.cachedRollingResistanceCoeff = vm.tire.rollingResistanceCoeff;
+                elseif ~isempty(vm.tire) && isprop(vm.tire, 'rollingResistanceCoeff')
+                    obj.cachedRollingResistanceCoeff = vm.tire.rollingResistanceCoeff;
+                end
+            elseif isstruct(vm)
+                if isfield(vm, 'trackWidth')
+                    obj.vehicleTrackWidth = vm.trackWidth;
+                end
+                if isfield(vm, 'tire')
+                    obj.cachedRollingResistanceCoeff = obj.readRollingResistanceCoeff(vm.tire);
+                end
+            elseif isobject(vm)
+                if isprop(vm, 'trackWidth')
+                    obj.vehicleTrackWidth = vm.trackWidth;
+                end
+                if isprop(vm, 'tire')
+                    obj.cachedRollingResistanceCoeff = obj.readRollingResistanceCoeff(vm.tire);
+                end
+            end
+
+            dm = obj.driverModel;
+            if ~isempty(dm)
+                if isa(dm, 'lts.driver.DriverModel')
+                    obj.edgeSlowdownMargin = dm.edgeSlowdownMargin;
+                    obj.racingLineApexPhase = dm.apexPhase;
+                    obj.cachedCorneringUsage = dm.corneringUsage;
+                    obj.cachedBrakingUsage = dm.brakingUsage;
+                    obj.cachedDriveUsage = dm.driveUsage;
+                    obj.cachedTrailBrakeReserve = dm.trailBrakeReserve;
+                    obj.cachedTractionCircleReserve = dm.tractionCircleReserve;
+                    obj.cachedCorneringGripMargin = dm.corneringGripMargin;
+                else
+                    obj.edgeSlowdownMargin = obj.readObjectValue(dm, 'edgeSlowdownMargin', obj.edgeSlowdownMargin);
+                    obj.racingLineApexPhase = obj.readObjectValue(dm, 'apexPhase', obj.racingLineApexPhase);
+                    obj.cachedCorneringUsage = obj.readObjectValue(dm, 'corneringUsage', obj.cachedCorneringUsage);
+                    obj.cachedBrakingUsage = obj.readObjectValue(dm, 'brakingUsage', obj.cachedBrakingUsage);
+                    obj.cachedDriveUsage = obj.readObjectValue(dm, 'driveUsage', obj.cachedDriveUsage);
+                    obj.cachedTrailBrakeReserve = obj.readObjectValue(dm, 'trailBrakeReserve', obj.cachedTrailBrakeReserve);
+                    obj.cachedTractionCircleReserve = obj.readObjectValue(dm, 'tractionCircleReserve', obj.cachedTractionCircleReserve);
+                    obj.cachedCorneringGripMargin = obj.readObjectValue(dm, 'corneringGripMargin', obj.cachedCorneringGripMargin);
+                end
+            end
+
+            if isempty(obj.cachedRollingResistanceCoeff) || ~isfinite(obj.cachedRollingResistanceCoeff)
+                obj.cachedRollingResistanceCoeff = 0.015;
+            end
+            obj.cachedRollingResistanceCoeff = max(obj.cachedRollingResistanceCoeff, 0);
+            obj.edgeSlowdownMargin = max(0, obj.edgeSlowdownMargin);
+            obj.racingLineApexPhase = max(0.1, min(0.9, obj.racingLineApexPhase));
+            obj.cachedCorneringUsage = max(0, min(1, obj.cachedCorneringUsage));
+            obj.cachedBrakingUsage = max(0, min(1, obj.cachedBrakingUsage));
+            obj.cachedDriveUsage = max(0, min(1, obj.cachedDriveUsage));
+            obj.cachedTrailBrakeReserve = max(0, min(1, obj.cachedTrailBrakeReserve));
+            obj.cachedTractionCircleReserve = max(0, min(1, obj.cachedTractionCircleReserve));
+            obj.cachedCorneringGripMargin = max(1e-3, min(1, obj.cachedCorneringGripMargin));
         end
 
         function profile = buildOpenLoopProfile(obj, initialState, trackData)
@@ -363,21 +436,8 @@ classdef DriverInputPlanner
         end
 
         function offsetLimit = computeRacingLineOffsetLimit(obj, trackHalfWidth)
-            vm = obj.vehicleManager;
-            vehicleTrackWidth = 0;
-            if ~isempty(vm)
-                if isstruct(vm) && isfield(vm, 'trackWidth')
-                    vehicleTrackWidth = vm.trackWidth;
-                elseif isobject(vm) && isprop(vm, 'trackWidth')
-                    vehicleTrackWidth = vm.trackWidth;
-                end
-            end
-
-            edgeMargin = 0.75;
-            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'edgeSlowdownMargin')
-                edgeMargin = obj.driverModel.edgeSlowdownMargin;
-            end
-            cgMargin = max(0.5 * vehicleTrackWidth + 0.25, edgeMargin);
+            cgMargin = max(0.5 * obj.vehicleTrackWidth + 0.25, ...
+                obj.edgeSlowdownMargin);
             offsetLimit = trackHalfWidth - cgMargin;
             offsetLimit = max(0, obj.racingLineOffsetFraction * offsetLimit);
         end
@@ -417,11 +477,7 @@ classdef DriverInputPlanner
         end
 
         function offset = racingLineOffsetAtPhase(obj, phase, turnSign, offsetLimit)
-            apexPhase = 0.5;
-            if ~isempty(obj.driverModel) && isprop(obj.driverModel, 'apexPhase')
-                apexPhase = obj.driverModel.apexPhase;
-            end
-            apexPhase = max(0.1, min(0.9, apexPhase));
+            apexPhase = obj.racingLineApexPhase;
             phase = max(0, min(1, phase(:)));
             offset = zeros(size(phase));
 
@@ -541,26 +597,25 @@ classdef DriverInputPlanner
         end
 
         function crr = getRollingResistanceCoeff(obj)
+            crr = obj.cachedRollingResistanceCoeff;
+        end
+
+        function crr = readRollingResistanceCoeff(~, tire)
             crr = 0.015;
-            vm = obj.vehicleManager;
-            if isempty(vm)
-                return;
-            end
-            tire = [];
-            if isstruct(vm) && isfield(vm, 'tire')
-                tire = vm.tire;
-            elseif isobject(vm) && isprop(vm, 'tire')
-                tire = vm.tire;
-            end
             if isstruct(tire) && isfield(tire, 'rollingResistanceCoeff')
                 crr = tire.rollingResistanceCoeff;
             elseif isobject(tire) && isprop(tire, 'rollingResistanceCoeff')
                 crr = tire.rollingResistanceCoeff;
             end
-            if isempty(crr) || ~isfinite(crr)
-                crr = 0.015;
+        end
+
+        function value = readObjectValue(~, source, fieldName, defaultValue)
+            value = defaultValue;
+            if isstruct(source) && isfield(source, fieldName)
+                value = source.(fieldName);
+            elseif isobject(source) && isprop(source, fieldName)
+                value = source.(fieldName);
             end
-            crr = max(crr, 0);
         end
 
         function limits = estimateGGVLimits(obj, speed, templateState, curvature)
@@ -595,35 +650,12 @@ classdef DriverInputPlanner
             rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
             brakeAccel = (brakeForce + F_drag + rollingResistance) / vm.totalMass;
 
-            corneringUsage = 0.98;
-            brakingUsage = 0.98;
-            driveUsage = 0.98;
-            trailBrakeReserve = 0.30;
-            tractionReserve = 0;
-            corneringGripMargin = 0.95;
-            if ~isempty(obj.driverModel)
-                if isprop(obj.driverModel, 'corneringUsage')
-                    corneringUsage = obj.driverModel.corneringUsage;
-                end
-                if isprop(obj.driverModel, 'brakingUsage')
-                    brakingUsage = obj.driverModel.brakingUsage;
-                end
-                if isprop(obj.driverModel, 'driveUsage')
-                    driveUsage = obj.driverModel.driveUsage;
-                end
-                if isprop(obj.driverModel, 'trailBrakeReserve')
-                    trailBrakeReserve = obj.driverModel.trailBrakeReserve;
-                end
-                if isprop(obj.driverModel, 'tractionCircleReserve')
-                    tractionReserve = obj.driverModel.tractionCircleReserve;
-                end
-                if isprop(obj.driverModel, 'corneringGripMargin')
-                    corneringGripMargin = obj.driverModel.corneringGripMargin;
-                end
-            end
-            corneringUsage = max(0, min(1, corneringUsage));
-            brakingUsage = max(0, min(1, brakingUsage));
-            driveUsage = max(0, min(1, driveUsage));
+            corneringUsage = obj.cachedCorneringUsage;
+            brakingUsage = obj.cachedBrakingUsage;
+            driveUsage = obj.cachedDriveUsage;
+            trailBrakeReserve = obj.cachedTrailBrakeReserve;
+            tractionReserve = obj.cachedTractionCircleReserve;
+            corneringGripMargin = obj.cachedCorneringGripMargin;
 
             % --- Traction-circle longitudinal cap from lateral demand ---
             % At a corner the tires spend grip on ay = v^2 * |kappa|; only the
@@ -632,7 +664,7 @@ classdef DriverInputPlanner
             % trails to trailBrakeReserve (gentler, for trail-braking).
             ay = tempState.speed^2 * abs(curvature);
             ayMax = max(corneringUsage * tireAccel, 0.1);
-            margin = max(1e-3, min(1, corneringGripMargin));
+            margin = corneringGripMargin;
             latUse = min(ay / ayMax / margin, 1);
             ellipse = sqrt(max(0, 1 - latUse^2));
             driveScale = max(0, min(1, tractionReserve)) + (1 - max(0, min(1, tractionReserve))) * ellipse;

@@ -228,18 +228,20 @@ classdef VehicleState
             %   integrated rigid-body DOF driven by m*ax*cgH + aero pitch
             %   moment). Otherwise pitch is inferred from the suspension
             %   front/rear sprung-position difference.
-            if isempty(obj.vehicleManager)
+            vm = obj.vehicleManager;
+            if isempty(vm)
                 pitchAngle = 0;
                 return;
             end
-            if ~isempty(obj.vehicleManager.chassis) && ...
-                    isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent')
-                pitchAngle = obj.vehicleManager.chassis.getPitchAngle();
+            chassis = vm.chassis;
+            if ~isempty(chassis) && ...
+                    isa(chassis, 'lts.components.Chassis.ChassisComponent')
+                pitchAngle = chassis.getPitchAngle();
                 return;
             end
-            if ~isempty(obj.vehicleManager.suspension) && ...
-                    ismethod(obj.vehicleManager.suspension, 'computePitchAngle')
-                pitchAngle = obj.vehicleManager.suspension.computePitchAngle();
+            suspension = vm.suspension;
+            if ~isempty(suspension) && ismethod(suspension, 'computePitchAngle')
+                pitchAngle = suspension.computePitchAngle();
                 return;
             end
             pitchAngle = 0;
@@ -248,101 +250,145 @@ classdef VehicleState
         function rollAngle = computeRoll(obj)
             % COMPUTEROLL Roll angle [rad], positive = right side down.
             % Sourced from the chassis attitude model when present.
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollAngle = 0;
                 return;
             end
-            rollAngle = obj.vehicleManager.chassis.getRollAngle();
+            rollAngle = vm.chassis.getRollAngle();
         end
 
         function rollRate = computeRollRate(obj)
             % COMPUTEROLLRATE Average chassis roll rate [rad/s].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getRollRate')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollRate = 0;
                 return;
             end
-            rollRate = obj.vehicleManager.chassis.getRollRate();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getRollRate')
+                rollRate = chassis.getRollRate();
+            else
+                rollRate = 0;
+            end
         end
 
         function rollAngle = computeFrontRoll(obj)
             % COMPUTEFRONTROLL Front-end chassis roll angle [rad].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getFrontRollAngle')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollAngle = obj.computeRoll();
                 return;
             end
-            rollAngle = obj.vehicleManager.chassis.getFrontRollAngle();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getFrontRollAngle')
+                rollAngle = chassis.getFrontRollAngle();
+            else
+                rollAngle = obj.computeRoll();
+            end
         end
 
         function rollAngle = computeRearRoll(obj)
             % COMPUTEREARROLL Rear-end chassis roll angle [rad].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getRearRollAngle')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollAngle = obj.computeRoll();
                 return;
             end
-            rollAngle = obj.vehicleManager.chassis.getRearRollAngle();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getRearRollAngle')
+                rollAngle = chassis.getRearRollAngle();
+            else
+                rollAngle = obj.computeRoll();
+            end
         end
 
         function rollRate = computeFrontRollRate(obj)
             % COMPUTEFRONTROLLRATE Front-end chassis roll rate [rad/s].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getFrontRollRate')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollRate = obj.computeRollRate();
                 return;
             end
-            rollRate = obj.vehicleManager.chassis.getFrontRollRate();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getFrontRollRate')
+                rollRate = chassis.getFrontRollRate();
+            else
+                rollRate = obj.computeRollRate();
+            end
         end
 
         function rollRate = computeRearRollRate(obj)
             % COMPUTEREARROLLRATE Rear-end chassis roll rate [rad/s].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getRearRollRate')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rollRate = obj.computeRollRate();
                 return;
             end
-            rollRate = obj.vehicleManager.chassis.getRearRollRate();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getRearRollRate')
+                rollRate = chassis.getRearRollRate();
+            else
+                rollRate = obj.computeRollRate();
+            end
         end
 
         function twist = computeTwist(obj)
             % COMPUTETWIST Chassis torsional twist [rad] = front - rear roll.
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getTwistAngle')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 twist = 0;
                 return;
             end
-            twist = obj.vehicleManager.chassis.getTwistAngle();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getTwistAngle')
+                twist = chassis.getTwistAngle();
+            else
+                twist = 0;
+            end
         end
 
         function twistRate = computeTwistRate(obj)
             % COMPUTETWISTRATE Chassis torsional twist rate [rad/s].
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent') || ...
-                    ~ismethod(obj.vehicleManager.chassis, 'getTwistRate')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 twistRate = obj.frontRollRate - obj.rearRollRate;
                 return;
             end
-            twistRate = obj.vehicleManager.chassis.getTwistRate();
+            chassis = vm.chassis;
+            if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                    ismethod(chassis, 'getTwistRate')
+                twistRate = chassis.getTwistRate();
+            else
+                twistRate = obj.frontRollRate - obj.rearRollRate;
+            end
         end
 
         function rideHeight = computeRideHeight(obj)
             % COMPUTERIDEHEIGHT Ride-height deviation [m], positive = higher.
             % Downforce compresses the sprung mass downward, so heave
             % (positive down) maps to a negative ride-height deviation.
-            if isempty(obj.vehicleManager) || isempty(obj.vehicleManager.chassis) || ...
-                    ~isa(obj.vehicleManager.chassis, 'lts.components.Chassis.ChassisComponent')
+            vm = obj.vehicleManager;
+            if isempty(vm) || isempty(vm.chassis) || ...
+                    ~isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
                 rideHeight = 0;
                 return;
             end
-            rideHeight = -obj.vehicleManager.chassis.getHeave();
+            rideHeight = -vm.chassis.getHeave();
         end
 
         function bodySlipAngle = computeBodySlipAngle(obj)
