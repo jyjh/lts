@@ -94,6 +94,99 @@ def estimate_pack_power_advance(
     return result
 
 
+def estimate_motoring_pack_power_advance(
+    data: dict[str, np.ndarray],
+    max_advance_s: float = 0.4,
+    step_s: float = 0.005,
+) -> dict:
+    time = replay_time(data)
+    command = data.get("motor_torque_command_nm")
+    voltage = data.get("pack_voltage_v")
+    current = data.get("pack_current_a")
+    if command is None or voltage is None or current is None:
+        return unavailable("missing motor_torque_command_nm, pack_voltage_v, or pack_current_a")
+
+    command_torque_nm = np.maximum(0.0, np.asarray(command, dtype=float))
+    pack_power_kw = np.maximum(
+        0.0, np.asarray(voltage, dtype=float) * np.asarray(current, dtype=float) / 1000.0
+    )
+    active = (command_torque_nm > 1.0) | (pack_power_kw > 0.1)
+    result = sweep_alignment(
+        time,
+        reference=command_torque_nm,
+        shifted_signal=pack_power_kw,
+        active=active,
+        max_advance_s=max_advance_s,
+        step_s=step_s,
+        objective="rmse",
+    )
+    result.update(
+        {
+            "source": "positive_motor_torque_command_vs_pack_power",
+            "reference": "positive motor_torque_command_nm",
+            "shiftedChannel": "positive pack power [kW]",
+            "meaning": "Positive advance pulls pack_voltage_v and pack_current_a earlier for replay torque-cap timing.",
+        }
+    )
+
+    motor_rpm = data.get("motor_rpm")
+    if motor_rpm is not None:
+        motor_omega = np.asarray(motor_rpm, dtype=float) * 2.0 * np.pi / 60.0
+        command_power_kw = np.maximum(0.0, np.asarray(command, dtype=float) * motor_omega / 1000.0)
+        power_reference_time = first_fraction_crossing(time, command_power_kw, 0.40)
+        pack_time = first_fraction_crossing(time, pack_power_kw, 0.40)
+        mechanical_advance_s = None
+        if power_reference_time is not None and pack_time is not None:
+            mechanical_advance_s = max(
+                -max_advance_s, min(max_advance_s, pack_time - power_reference_time)
+            )
+        result["mechanicalPowerDiagnostic"] = {
+            "advanceS": clean_float(mechanical_advance_s),
+            "reference": "positive command * logged motor speed [kW]",
+            "shiftedChannel": "positive pack power [kW]",
+            "objective": "first_40_percent_crossing",
+        }
+
+    return result
+
+
+def estimate_motor_torque_command_delay(
+    data: dict[str, np.ndarray],
+    max_delay_s: float = 0.25,
+) -> dict:
+    time = replay_time(data)
+    command = data.get("motor_torque_command_nm")
+    if command is None:
+        return unavailable_delay("missing motor_torque_command_nm")
+
+    command = np.maximum(0.0, np.asarray(command, dtype=float))
+    command_time = first_fraction_crossing(time, command, 0.90)
+    if command_time is None:
+        return unavailable_delay("insufficient positive motor command transient")
+
+    response, response_source = rear_wheel_response_signal(data)
+    if response is None:
+        return unavailable_delay("missing rear wheel speed response channel")
+
+    response_time = first_absolute_crossing_after(
+        time, response, threshold=5.0, start_time=command_time - 0.25
+    )
+    if response_time is None:
+        return unavailable_delay("rear wheel response did not cross 5 m/s")
+
+    delay_s = max(0.0, min(max_delay_s, response_time - command_time))
+    return {
+        "status": "ok",
+        "delayS": clean_float(delay_s),
+        "sampleCount": int(np.count_nonzero(np.isfinite(command) & np.isfinite(response))),
+        "quality": "medium",
+        "objective": "command_90_percent_to_rear_wheel_5_mps",
+        "source": "positive_motor_torque_command_nm",
+        "reference": response_source,
+        "meaning": "Positive delay samples motor_torque_command_nm later in the simulation.",
+    }
+
+
 def estimate_gps_advance(
     data: dict[str, np.ndarray],
     max_advance_s: float = 1.0,
@@ -239,6 +332,10 @@ def unavailable(reason: str) -> dict:
     return {"status": "unavailable", "reason": reason, "advanceS": None}
 
 
+def unavailable_delay(reason: str) -> dict:
+    return {"status": "unavailable", "reason": reason, "delayS": None}
+
+
 def metric_row(
     advance_s: float,
     sample_count: int,
@@ -269,6 +366,54 @@ def interpolate_shift(time: np.ndarray, values: np.ndarray, advance_s: float) ->
     shifted = np.interp(query, unique_time, unique_values)
     shifted[(query < unique_time[0]) | (query > unique_time[-1])] = np.nan
     return shifted
+
+
+def first_fraction_crossing(
+    time: np.ndarray, values: np.ndarray, fraction: float
+) -> float | None:
+    values = np.asarray(values, dtype=float)
+    finite_values = values[np.isfinite(values)]
+    if finite_values.size < 3:
+        return None
+    peak = float(np.nanpercentile(finite_values, 95))
+    if not np.isfinite(peak) or peak <= 0:
+        return None
+    threshold = fraction * peak
+    idx = np.flatnonzero(np.isfinite(values) & (values >= threshold))
+    if idx.size == 0:
+        return None
+    return float(time[int(idx[0])])
+
+
+def first_absolute_crossing_after(
+    time: np.ndarray, values: np.ndarray, threshold: float, start_time: float
+) -> float | None:
+    values = np.asarray(values, dtype=float)
+    idx = np.flatnonzero(
+        np.isfinite(time)
+        & np.isfinite(values)
+        & (time >= start_time)
+        & (values >= threshold)
+    )
+    if idx.size == 0:
+        return None
+    return float(time[int(idx[0])])
+
+
+def rear_wheel_response_signal(
+    data: dict[str, np.ndarray]
+) -> tuple[np.ndarray | None, str]:
+    rr = data.get("wheel_speed_rr_mps")
+    rl = data.get("wheel_speed_rl_mps")
+    if rr is not None and np.count_nonzero(np.isfinite(rr)) >= 3:
+        return np.asarray(rr, dtype=float), "wheel_speed_rr_mps crossing 5 m/s"
+    if rl is not None and np.count_nonzero(np.isfinite(rl)) >= 3:
+        return np.asarray(rl, dtype=float), "wheel_speed_rl_mps crossing 5 m/s"
+    if rr is not None and rl is not None:
+        response = np.nanmean(np.vstack([rr, rl]), axis=0)
+        if np.count_nonzero(np.isfinite(response)) >= 3:
+            return response, "mean rear wheel speed crossing 5 m/s"
+    return None, ""
 
 
 def fit_gain(signal: np.ndarray, reference: np.ndarray) -> float:
@@ -351,24 +496,57 @@ def clean_float(value: float | None) -> float | None:
     return round(float(value), 6)
 
 
-def build_config(replay_csv: Path, pack: dict, gps: dict) -> dict:
-    pack_advance = pack.get("advanceS")
+def select_pack_estimate(regen_pack: dict, motoring_pack: dict) -> dict:
+    if motoring_pack.get("status") == "ok":
+        selected = dict(motoring_pack)
+        selected["selectedFrom"] = "motoring"
+        selected["regenEstimate"] = regen_pack
+        return selected
+    selected = dict(regen_pack)
+    selected["selectedFrom"] = "regen"
+    selected["motoringEstimate"] = motoring_pack
+    return selected
+
+
+def build_config(
+    replay_csv: Path,
+    pack: dict,
+    gps: dict,
+    motor_torque_delay: dict | None = None,
+) -> dict:
+    estimated_pack_advance = finite_offset(pack.get("advanceS"))
     gps_advance = gps.get("advanceS")
+    motor_delay = None
+    if motor_torque_delay is not None:
+        motor_delay = finite_offset(motor_torque_delay.get("delayS"))
+    pack_advance = estimated_pack_advance
+    if estimated_pack_advance is not None and motor_delay is not None:
+        pack_advance = clean_float(estimated_pack_advance + motor_delay)
+
+    pack_estimate = dict(pack)
+    pack_estimate["appliedAdvanceS"] = pack_advance
+    if motor_delay is not None and estimated_pack_advance is not None:
+        pack_estimate["appliedIncludesMotorTorqueCommandDelayS"] = motor_delay
     return {
         "schema": SCHEMA,
         "sourceReplayCsv": str(replay_csv),
         "offsets": {
             "PackPowerAdvanceS": pack_advance,
+            "MotorTorqueCommandDelayS": motor_delay,
             "GpsAdvanceS": gps_advance,
         },
         "runCorrelationOptions": {
             "PackPowerAdvanceS": pack_advance,
+            "MotorTorqueCommandDelayS": motor_delay,
         },
         "plotCorrelationPositionOverlayOptions": {
             "RawTimeOffsetS": gps_advance,
         },
         "estimates": {
-            "PackPowerAdvanceS": pack,
+            "PackPowerAdvanceS": pack_estimate,
+            "MotorTorqueCommandDelayS": motor_torque_delay or unavailable_delay(
+                "not estimated"
+            ),
             "GpsAdvanceS": gps,
         },
     }
@@ -381,6 +559,12 @@ def default_output_path(replay_csv: Path) -> Path:
     return replay_csv.with_name(f"{stem}_correlation_config.json")
 
 
+def finite_offset(value: float | None) -> float | None:
+    if isinstance(value, (int, float)) and np.isfinite(value):
+        return float(value)
+    return None
+
+
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description="Estimate replay timing offsets and write a secondary correlation config JSON."
@@ -390,6 +574,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--output", help="Output JSON path; defaults beside the replay CSV")
     parser.add_argument("--pack-max-advance", type=float, default=0.4)
     parser.add_argument("--pack-step", type=float, default=0.005)
+    parser.add_argument("--motor-command-max-delay", type=float, default=0.25)
     parser.add_argument("--gps-max-advance", type=float, default=1.0)
     parser.add_argument("--gps-step", type=float, default=0.01)
     return parser.parse_args()
@@ -403,9 +588,16 @@ def main() -> int:
 
     replay_csv = Path(input_text)
     data = read_replay_csv(replay_csv)
-    pack = estimate_pack_power_advance(data, args.pack_max_advance, args.pack_step)
+    regen_pack = estimate_pack_power_advance(data, args.pack_max_advance, args.pack_step)
+    motoring_pack = estimate_motoring_pack_power_advance(
+        data, args.pack_max_advance, args.pack_step
+    )
+    pack = select_pack_estimate(regen_pack, motoring_pack)
+    motor_delay = estimate_motor_torque_command_delay(
+        data, args.motor_command_max_delay
+    )
     gps = estimate_gps_advance(data, args.gps_max_advance, args.gps_step)
-    config = build_config(replay_csv, pack, gps)
+    config = build_config(replay_csv, pack, gps, motor_delay)
 
     output_path = Path(args.output) if args.output else default_output_path(replay_csv)
     output_path.parent.mkdir(parents=True, exist_ok=True)
@@ -414,7 +606,14 @@ def main() -> int:
         handle.write("\n")
 
     print(f"Correlation config written: {output_path}")
-    print(f"PackPowerAdvanceS: {pack.get('advanceS')} ({pack.get('status')})")
+    print(
+        "PackPowerAdvanceS: "
+        f"{config['offsets']['PackPowerAdvanceS']} ({pack.get('status')})"
+    )
+    print(
+        "MotorTorqueCommandDelayS: "
+        f"{motor_delay.get('delayS')} ({motor_delay.get('status')})"
+    )
     print(f"GpsAdvanceS: {gps.get('advanceS')} ({gps.get('status')})")
     return 0
 

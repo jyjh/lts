@@ -36,6 +36,54 @@ class ExtractCorrelationConfigTest(unittest.TestCase):
         self.assertEqual(estimate["status"], "ok")
         self.assertAlmostEqual(estimate["advanceS"], delay, delta=0.006)
 
+    def test_motoring_launch_alignment_estimates_power_advance_and_command_delay(self):
+        time = np.arange(0.0, 3.0, 0.01)
+        pack_delay = 0.10
+        command_delay = 0.04
+        command = 300.0 * np.clip((time - 1.0) / 0.20, 0.0, 1.0)
+        command_90_time = 1.0 + 0.90 * 0.20
+        motor_rpm = 5000.0 * np.clip((time - 1.04) / 0.30, 0.0, 1.0)
+        wheel_speed_rr = 8.0 * (time >= command_90_time + command_delay)
+        pack_power_kw = np.interp(
+            time - pack_delay, time, 0.2 * command, left=0.0, right=0.2 * command[-1]
+        )
+        voltage = np.full(time.shape, 300.0)
+        data = {
+            "time_s": time,
+            "motor_torque_command_nm": command,
+            "motor_rpm": motor_rpm,
+            "wheel_speed_rr_mps": wheel_speed_rr,
+            "pack_voltage_v": voltage,
+            "pack_current_a": pack_power_kw * 1000.0 / voltage,
+        }
+
+        pack = extract_correlation_config.estimate_motoring_pack_power_advance(data)
+        motor_delay = extract_correlation_config.estimate_motor_torque_command_delay(data)
+        config = extract_correlation_config.build_config(
+            Path("launch_replay.csv"),
+            pack,
+            extract_correlation_config.unavailable("no gps"),
+            motor_delay,
+        )
+
+        self.assertEqual(pack["status"], "ok")
+        self.assertAlmostEqual(pack["advanceS"], pack_delay, delta=0.011)
+        self.assertEqual(motor_delay["status"], "ok")
+        self.assertAlmostEqual(motor_delay["delayS"], command_delay, delta=0.011)
+        self.assertAlmostEqual(
+            config["estimates"]["PackPowerAdvanceS"]["advanceS"], pack_delay, delta=0.011
+        )
+        self.assertAlmostEqual(
+            config["runCorrelationOptions"]["PackPowerAdvanceS"],
+            pack_delay + command_delay,
+            delta=0.011,
+        )
+        self.assertAlmostEqual(
+            config["runCorrelationOptions"]["MotorTorqueCommandDelayS"],
+            command_delay,
+            delta=0.011,
+        )
+
     def test_gps_advance_estimates_lagged_gps_course(self):
         time = np.arange(0.0, 10.0, 0.01)
         delay = 0.12
@@ -92,6 +140,7 @@ class ExtractCorrelationConfigTest(unittest.TestCase):
             loaded["runCorrelationOptions"]["PackPowerAdvanceS"],
             loaded["offsets"]["PackPowerAdvanceS"],
         )
+        self.assertIsNone(loaded["offsets"]["MotorTorqueCommandDelayS"])
         self.assertEqual(
             loaded["plotCorrelationPositionOverlayOptions"]["RawTimeOffsetS"],
             loaded["offsets"]["GpsAdvanceS"],

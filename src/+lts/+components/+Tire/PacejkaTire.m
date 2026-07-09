@@ -62,10 +62,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % extra coast-down drag.
         bearingDragCoeff = 0
 
-        % Allow applied torque to drive wheel angular velocity through zero
-        % without the locked-wheel guard. Even when false, a passive wheel may
-        % roll negative when the local contact-patch longitudinal velocity is
-        % negative during a high-sideslip/steered-wheel transient.
+        % Deprecated compatibility flag retained for configs that set it.
+        % Wheel angular velocity is no longer direction-clamped.
         allowReverseRotation = false
 
         % Cache peak-mu scans by rounded load/camber/speed. The public
@@ -409,9 +407,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Euler integration
             omega_new = omega + alpha * dt;
 
-            omega_new = obj.limitWheelAngularVelocity( ...
-                omega, omega_new, longitudinalSpeed);
-
             cornerState.angularVelocity = omega_new;
         end
 
@@ -449,8 +444,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 brakeSign = obj.computeBrakeTorqueSign( ...
                     omegaNew, longitudinalSpeed, driveTorque);
                 netTorque = driveTorque - brakeSign * brakeTorque - finalFx * R;
-                omegaCandidate = obj.limitWheelAngularVelocity( ...
-                    omegaOld, omegaOld + (netTorque / I) * dt, longitudinalSpeed);
+                omegaCandidate = omegaOld + (netTorque / I) * dt;
 
                 if abs(omegaCandidate - omegaNew) < 1e-4
                     omegaNew = omegaCandidate;
@@ -719,31 +713,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
 
             alpha = obj.evaluationSlipAngle(alpha);
             kappa = max(-1, min(1, kappa));
-        end
-
-        function omega = limitWheelAngularVelocity(obj, omegaOld, omegaCandidate, longitudinalSpeed)
-            omega = omegaCandidate;
-            if obj.allowReverseRotation
-                return;
-            end
-
-            directionTol = 1e-6;
-            if ~isfinite(longitudinalSpeed) || abs(longitudinalSpeed) < directionTol
-                if omegaOld >= -directionTol && omegaCandidate < 0
-                    omega = 0;
-                end
-                return;
-            end
-
-            if longitudinalSpeed > 0
-                if omegaOld >= -directionTol && omegaCandidate < 0
-                    omega = 0;
-                end
-            else
-                if omegaOld <= directionTol && omegaCandidate > 0
-                    omega = 0;
-                end
-            end
         end
 
         function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)

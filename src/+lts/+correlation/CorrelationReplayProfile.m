@@ -258,6 +258,29 @@ classdef CorrelationReplayProfile
             obj.packCurrentA = obj.shiftTimeChannel(obj.packCurrentA, queryTime);
             obj = obj.buildSampleCaches();
         end
+
+        function obj = withMotorTorqueCommandDelay(obj, delayS)
+            if nargin < 2 || isempty(delayS)
+                delayS = 0;
+            end
+            if ~isnumeric(delayS) || ~isscalar(delayS) || ~isfinite(delayS)
+                error('lts_correlation_CorrelationReplayProfile:InvalidMotorTorqueCommandDelay', ...
+                    'Motor torque command delay must be a finite scalar in seconds.');
+            end
+
+            delayS = double(delayS);
+            if delayS == 0 || ~obj.hasMotorTorqueCommand()
+                return;
+            end
+
+            queryTime = obj.time - delayS;
+            obj.motorTorqueCommandNm = obj.shiftTimeChannel( ...
+                obj.motorTorqueCommandNm, queryTime);
+            if obj.hasRegenTorque()
+                obj.regenTorqueNm = obj.shiftTimeChannel(obj.regenTorqueNm, queryTime);
+            end
+            obj = obj.buildSampleCaches();
+        end
     end
 
     methods (Access = private)

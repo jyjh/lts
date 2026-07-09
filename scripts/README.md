@@ -125,7 +125,11 @@ Estimates timing offsets from a normalized replay CSV and writes a secondary
 JSON config for correlation runs. The current schema includes:
 
 - `PackPowerAdvanceS`: positive values advance `pack_voltage_v` and
-  `pack_current_a` before replay sampling.
+  `pack_current_a` before replay sampling. When a motor command delay is
+  estimated, this emitted replay advance includes that delay so the pack-power
+  torque cap remains aligned with the delayed command.
+- `MotorTorqueCommandDelayS`: positive values delay `motor_torque_command_nm`
+  and `regen_torque_nm` before replay sampling.
 - `GpsAdvanceS`: positive values advance GPS position/course channels; the
   same value is emitted as `RawTimeOffsetS` for
   `plot_correlation_position_overlay`.

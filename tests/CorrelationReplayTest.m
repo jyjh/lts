@@ -65,6 +65,26 @@ verifyEqual(testCase, input.packVoltageV, 305, 'AbsTol', 1e-12);
 verifyEqual(testCase, input.packCurrentA, 5, 'AbsTol', 1e-12);
 end
 
+function testReplayProfileDelaysMotorTorqueCommand(testCase)
+profile = lts.correlation.CorrelationReplayProfile( ...
+    'Time', [0; 1; 2], ...
+    'Throttle', [0; 0; 0], ...
+    'Brake', [0; 0; 0], ...
+    'Steer', [0; 0; 0], ...
+    'Speed', [10; 10; 10], ...
+    'RegenTorqueNm', [0; -10; -20], ...
+    'MotorTorqueCommandNm', [0; 10; 20]);
+
+shifted = profile.withMotorTorqueCommandDelay(0.5);
+
+verifyEqual(testCase, shifted.motorTorqueCommandNm, [0; 5; 15], 'AbsTol', 1e-12);
+verifyEqual(testCase, shifted.regenTorqueNm, [0; -5; -15], 'AbsTol', 1e-12);
+verifyEqual(testCase, profile.motorTorqueCommandNm, [0; 10; 20], 'AbsTol', 1e-12);
+input = shifted.sampleByTime(1);
+verifyEqual(testCase, input.motorTorqueCommandNm, 5, 'AbsTol', 1e-12);
+verifyEqual(testCase, input.regenTorqueNm, -5, 'AbsTol', 1e-12);
+end
+
 function testReplayProfileReadsOptionalCorrelationColumns(testCase)
 fileName = [tempname '.csv'];
 cleanup = onCleanup(@() deleteIfExists(fileName)); %#ok<NASGU>
@@ -489,7 +509,7 @@ T = table( ...
     'motor_rpm', 'pack_voltage_v', 'pack_current_a'});
 writetable(T, replayFile);
 fid = fopen(configFile, 'w');
-fprintf(fid, '{"offsets":{"PackPowerAdvanceS":0.01,"GpsAdvanceS":0.12}}');
+fprintf(fid, '{"offsets":{"PackPowerAdvanceS":0.01,"MotorTorqueCommandDelayS":0.01,"GpsAdvanceS":0.12}}');
 fclose(fid);
 
 [stateLog, ~, outputs] = lts.app.run_correlation( ...
@@ -509,6 +529,7 @@ verifyEqual(testCase, outputs.powertrainMode, 'motor_torque_command');
 verifyEqual(testCase, outputs.correlationConfig, configFile);
 verifyTrue(testCase, outputs.limitMotorTorqueByPackPower);
 verifyEqual(testCase, outputs.packPowerAdvanceS, 0.01, 'AbsTol', 1e-12);
+verifyEqual(testCase, outputs.motorTorqueCommandDelayS, 0.01, 'AbsTol', 1e-12);
 verifyEqual(testCase, outputs.gpsAdvanceS, 0.12, 'AbsTol', 1e-12);
 verifyEqual(testCase, outputs.surfaceMu, 1.20, 'AbsTol', 1e-12);
 verifyTrue(testCase, outputs.useLoggedYawRate);
@@ -535,6 +556,7 @@ verifyLessThan(testCase, max(stateLog.motorTorque), 100);
 
 verifyFalse(testCase, uncappedOutputs.limitMotorTorqueByPackPower);
 verifyEqual(testCase, uncappedOutputs.packPowerAdvanceS, 0.02, 'AbsTol', 1e-12);
+verifyEqual(testCase, uncappedOutputs.motorTorqueCommandDelayS, 0.01, 'AbsTol', 1e-12);
 verifyEqual(testCase, uncappedOutputs.gpsAdvanceS, 0.12, 'AbsTol', 1e-12);
 verifyFalse(testCase, any(uncappedStateLog.motorTorquePowerLimitActive));
 verifyEqual(testCase, uncappedStateLog.motorTorque, ...

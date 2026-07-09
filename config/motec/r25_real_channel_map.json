@@ -169,6 +169,7 @@
           "label": "r25_steering_sensor_ratio_4p856_inverted",
           "names": ["Steering.Angle", "Steering Angle", "Steering"],
           "scale": 0.257,
+          "offset": -0.026589,
           "source_unit_scale": {
             "rad": 1.0,
             "deg": 0.017453292519943295

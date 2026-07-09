@@ -40,7 +40,7 @@ defaultOutput = fullfile(repoRoot, 'exports', 'weight_savings_skidpad.png');
 
 parser = inputParser;
 parser.FunctionName = 'weight_savings_skidpad';
-parser.addParameter('MassRangeKg', [180 340], @validateMassRange);
+parser.addParameter('MassRangeKg', [180 280], @validateMassRange);
 parser.addParameter('MassStepKg', 0.5, @validatePositiveScalar);
 parser.addParameter('EnvelopeSlipAnglesDeg', 0:0.1:14, @validateSlipAngles);
 parser.addParameter('EnvelopeLoadsN', 100:10:2500, @validateNormalLoads);

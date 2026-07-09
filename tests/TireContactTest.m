@@ -18,7 +18,7 @@ verifyLessThan(testCase, abs(corner.slipRatio), 0.05);
 verifyLessThan(testCase, abs(corner.angularVelocity * corner.wheelRadius - longSpeed), 1.0);
 end
 
-function testLockedWheelStaysLockedWhenBrakeTorqueExceedsRoadTorque(testCase)
+function testLargeBrakeTorqueCanIntegrateWheelSpeedThroughZero(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;
 Fz = 1000;
@@ -28,7 +28,7 @@ largeBrakeTorque = 2000;
 corner.angularVelocity = 0;
 tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 0, largeBrakeTorque, 0.001);
 
-verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
+verifyLessThan(testCase, corner.angularVelocity, 0);
 verifyLessThanOrEqual(testCase, corner.slipRatio, -0.95);
 end
 
@@ -107,16 +107,24 @@ verifyEqual(testCase, corner.slipRatio, 0, 'AbsTol', 1e-12);
 verifyLessThan(testCase, abs(corner.Fx), 100);
 end
 
-function testZeroSpeedWheelBrakingUsesRoadLongitudinalSpeed(testCase)
+function testZeroSpeedWheelBrakingFollowsTorqueBalance(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
 corner.angularVelocity = 0;
 corner.Fx = -1000;
+R = corner.wheelRadius;
+dt = 0.001;
+I = 0.5;
+brakeTorque = 500;
+longSpeed = 20;
+expectedOmega = (-brakeTorque - corner.Fx * R ...
+    - tire.rollingResistanceCoeff * corner.normalForce * R) / I * dt;
 
-tire.updateWheelDynamics(corner, 0, 500, 0.001, 0.5, 20);
+tire.updateWheelDynamics(corner, 0, brakeTorque, dt, I, longSpeed);
 
-verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
+verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
 function testPassiveWheelCanRollNegativeWithReverseLocalRoadSpeed(testCase)
@@ -132,17 +140,25 @@ tire.updateWheelDynamics(corner, 0, 0, 0.001, 0.5, longSpeed);
 verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
-function testBrakeLocksReverseRollingWheelAtZero(testCase)
+function testReverseRoadSpeedBrakeTorqueFollowsTorqueBalance(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
 corner.angularVelocity = 0;
 longSpeed = -7;
+dt = 0.001;
+I = 0.5;
+brakeTorque = 2000;
 
 tire.updateCorner(corner, 1000, 0, 1, 0, 1.2, 0, longSpeed, true, 'steady');
-tire.updateWheelDynamics(corner, 0, 2000, 0.001, 0.5, longSpeed);
+fxBefore = corner.Fx;
+R = corner.wheelRadius;
+expectedOmega = (brakeTorque - fxBefore * R ...
+    + tire.rollingResistanceCoeff * corner.normalForce * R) / I * dt;
+tire.updateWheelDynamics(corner, 0, brakeTorque, dt, I, longSpeed);
 
-verifyEqual(testCase, corner.angularVelocity, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, corner.angularVelocity, 0);
 end
 
 function tire = createPacejkaTire()

@@ -166,7 +166,7 @@ classdef CorrelationAppSupport
             end
         end
 
-        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS)
+        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
@@ -175,6 +175,9 @@ classdef CorrelationAppSupport
             end
             if nargin < 9 || isempty(packPowerAdvanceS)
                 packPowerAdvanceS = 0;
+            end
+            if nargin < 10 || isempty(motorTorqueCommandDelayS)
+                motorTorqueCommandDelayS = 0;
             end
             powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
             packCapText = 'disabled';
@@ -189,6 +192,7 @@ classdef CorrelationAppSupport
             fprintf('Powertrain mode: %s\n', char(powertrainMode));
             fprintf('Pack power torque cap: %s\n', packCapText);
             fprintf('Pack power channel advance: %.3f s\n', double(packPowerAdvanceS));
+            fprintf('Motor torque command delay: %.3f s\n', double(motorTorqueCommandDelayS));
             lts.correlation.CorrelationAppSupport.printReplayRanges(profile);
             lts.correlation.CorrelationAppSupport.validatePressureBrakeMode(profile, vehicle, brakeMode);
             lts.correlation.CorrelationAppSupport.validatePowertrainCommandMode( ...

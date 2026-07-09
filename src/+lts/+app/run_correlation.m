@@ -22,6 +22,7 @@ end
 parser = inputParser;
 providedOptionNames = lower(string(varargin(1:2:end)));
 hasPackPowerAdvanceOption = any(providedOptionNames == "packpoweradvances");
+hasMotorTorqueCommandDelayOption = any(providedOptionNames == "motortorquecommanddelays");
 parser.addParameter('MoTeCFile', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('ReplayCsv', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('Lap', [], @(x) isempty(x) || isnumeric(x) || ischar(x) || isstring(x));
@@ -37,6 +38,8 @@ parser.addParameter('BrakeMode', 'ratio', @(x) ischar(x) || isstring(x));
 parser.addParameter('PowertrainMode', 'throttle', @(x) ischar(x) || isstring(x));
 parser.addParameter('LimitMotorTorqueByPackPower', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('PackPowerAdvanceS', 0, ...
+    @(x) isnumeric(x) && isscalar(x) && isfinite(x));
+parser.addParameter('MotorTorqueCommandDelayS', 0, ...
     @(x) isnumeric(x) && isscalar(x) && isfinite(x));
 parser.addParameter('Dt', 0.001, @(x) isnumeric(x) && isscalar(x) && x > 0);
 parser.addParameter('TelemetryMode', 'full', ...
@@ -69,6 +72,10 @@ if ~hasPackPowerAdvanceOption
     opts.PackPowerAdvanceS = lts.correlation.CorrelationAppSupport.correlationConfigScalar( ...
         correlationConfig, 'PackPowerAdvanceS', opts.PackPowerAdvanceS);
 end
+if ~hasMotorTorqueCommandDelayOption
+    opts.MotorTorqueCommandDelayS = lts.correlation.CorrelationAppSupport.correlationConfigScalar( ...
+        correlationConfig, 'MotorTorqueCommandDelayS', opts.MotorTorqueCommandDelayS);
+end
 
 if isempty(opts.ReplayCsv) && isempty(opts.MoTeCFile)
     error('run_correlation:MissingInput', ...
@@ -98,6 +105,7 @@ end
 
 profile = lts.correlation.CorrelationReplayProfile.fromCsv(outputs.replayCsv);
 profile = profile.withPackPowerAdvance(opts.PackPowerAdvanceS);
+profile = profile.withMotorTorqueCommandDelay(opts.MotorTorqueCommandDelayS);
 surfaceMu = opts.SurfaceMu;
 if isempty(surfaceMu) || ~isfinite(surfaceMu) || surfaceMu <= 0
     surfaceMu = lts.correlation.CorrelationAppSupport.vehicleCorrelationSurfaceMu(config);
@@ -111,6 +119,7 @@ outputs.brakeMode = char(opts.BrakeMode);
 outputs.powertrainMode = char(opts.PowertrainMode);
 outputs.limitMotorTorqueByPackPower = logical(opts.LimitMotorTorqueByPackPower);
 outputs.packPowerAdvanceS = double(opts.PackPowerAdvanceS);
+outputs.motorTorqueCommandDelayS = double(opts.MotorTorqueCommandDelayS);
 outputs.gpsAdvanceS = lts.correlation.CorrelationAppSupport.correlationConfigScalar( ...
     correlationConfig, 'GpsAdvanceS', 0);
 useLoggedYawRate = lts.correlation.CorrelationAppSupport.vehicleCorrelationFlag( ...
@@ -136,7 +145,7 @@ vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt);
 lts.correlation.CorrelationAppSupport.preflight( ...
     profile, track, vehicle, surfaceMu, outputs.extractManifest, ...
     opts.BrakeMode, opts.PowertrainMode, opts.LimitMotorTorqueByPackPower, ...
-    opts.PackPowerAdvanceS);
+    opts.PackPowerAdvanceS, opts.MotorTorqueCommandDelayS);
 initialState = lts.correlation.CorrelationStateInitializer.fromReplayProfile( ...
     profile, [], vehicle, ...
     'UseLoggedPosition', opts.UseLoggedPosition, ...

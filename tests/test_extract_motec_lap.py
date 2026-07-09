@@ -195,6 +195,7 @@ class ExtractMotecLapTest(unittest.TestCase):
                     "label": "steering_sensor",
                     "names": ["Steering.Angle"],
                     "scale": 0.25,
+                    "offset": -np.deg2rad(1.0),
                     "source_unit_scale": {"deg": np.pi / 180.0},
                 },
             ],
@@ -209,7 +210,8 @@ class ExtractMotecLapTest(unittest.TestCase):
         self.assertEqual(sim_signal["source_label"], "sim_road_wheel")
         np.testing.assert_allclose(sim_signal["values"], [0.2, 0.4])
         self.assertEqual(real_signal["source_label"], "steering_sensor")
-        np.testing.assert_allclose(real_signal["values"], np.deg2rad([5.0, 10.0]))
+        np.testing.assert_allclose(real_signal["values"], np.deg2rad([4.0, 9.0]))
+        self.assertAlmostEqual(real_signal["offset_applied"], -np.deg2rad(1.0))
 
     def test_r25_speed_derives_from_valid_front_wheel_speed_median(self):
         data = FakeData(
