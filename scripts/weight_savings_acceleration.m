@@ -1,29 +1,32 @@
-function result = weight_savings_skidpad(tirFile, varargin)
-%WEIGHT_SAVINGS_SKIDPAD Find the point of diminishing returns for weight
-%savings in terms of max sustained skidpad lateral G.
+function result = weight_savings_acceleration(tirFile, varargin)
+%WEIGHT_SAVINGS_ACCELERATION Find the point of diminishing returns for weight
+%savings in terms of grip-limited FSAE 75 m acceleration time.
 %
-%   result = weight_savings_skidpad()
-%   result = weight_savings_skidpad('43105_18x7.5_10_R25B_7.tir')
-%   result = weight_savings_skidpad(tirFile, 'MassRangeKg', [180 340], ...
-%       'CgHeight', 0.256, 'StaticFrontWeight', 0.5095)
+%   result = weight_savings_acceleration()
+%   result = weight_savings_acceleration('43105_18x7.5_10_R25B_7.tir')
+%   result = weight_savings_acceleration(tirFile, 'MassRangeKg', [180 340], ...
+%       'CgHeight', 0.256, 'StaticFrontWeight', 0.5095, 'Wheelbase', 1.528)
 %
-%   Sweeps vehicle mass and, at each mass, solves for the maximum steady-
-%   state skidpad lateral acceleration using a simplified bicycle load-
-%   transfer model fed by the Pacejka tire's peak lateral-force envelope.
-%   Aero downforce is neglected (a clean grip-via-load-sensitivity study).
-%   The diminishing-returns mass is found with the Kneedle elbow (max
-%   perpendicular distance from the chord of the G-vs-mass curve) and
-%   reported together with the marginal gain [milli-g per kg saved].
+%   Sweeps vehicle mass and, at each mass, solves for the grip-limited launch
+%   acceleration of a straight-line RWD car using a bicycle longitudinal
+%   load-transfer model fed by the Pacejka tire's peak longitudinal-force
+%   envelope. Aero drag and downforce are neglected (a clean traction study);
+%   the powertrain cap is optional (default off = pure grip-limited). The 75 m
+%   time follows in closed form, T = sqrt(2*d/ax), because ax is speed-
+%   independent once aero is off. The diminishing-returns mass is found with
+%   the Kneedle elbow on the time-vs-mass curve and reported with the marginal
+%   gain [ms per kg saved].
 %
 %   Defaults target the theoretical tire and R25 measured geometry so the
 %   default call returns a meaningful answer; every parameter is overridable.
 
 defaultTirFile = '43105_18x7.5_10_R25B_7_theoretical.tir';
-optionNames = {'MassRangeKg', 'MassStepKg', 'EnvelopeSlipAnglesDeg', ...
-    'EnvelopeLoadsN', 'SurfaceMu', 'TrackWidth', 'CgHeight', ...
-    'StaticFrontWeight', 'LateralLoadTransferDistribution', ...
-    'ReferenceMassKg', 'CgDropPerKgSavedM', 'CoupledCg', 'OutputFile', ...
-    'SavePlot', 'ShowFigure', 'CloseFigure'};
+optionNames = {'MassRangeKg', 'MassStepKg', 'EnvelopeSlipRatios', ...
+    'EnvelopeLoadsN', 'SurfaceMu', 'Wheelbase', 'CgHeight', ...
+    'StaticFrontWeight', 'DistanceM', 'ReferenceMassKg', ...
+    'CgDropPerKgSavedM', 'CoupledCg', 'UsePowertrainLimit', ...
+    'PowertrainMatFile', 'PowertrainEfficiency', 'MotorRotorInertia', ...
+    'OutputFile', 'SavePlot', 'ShowFigure', 'CloseFigure'};
 
 if nargin < 1 || isempty(tirFile)
     tirFile = defaultTirFile;
@@ -36,23 +39,29 @@ scriptDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(scriptDir);
 addpath(fullfile(repoRoot, 'src'));
 
-defaultOutput = fullfile(repoRoot, 'exports', 'weight_savings_skidpad.png');
+defaultOutput = fullfile(repoRoot, 'exports', ...
+    'weight_savings_acceleration.png');
 
 parser = inputParser;
-parser.FunctionName = 'weight_savings_skidpad';
+parser.FunctionName = 'weight_savings_acceleration';
 parser.addParameter('MassRangeKg', [180 280], @validateMassRange);
 parser.addParameter('MassStepKg', 0.5, @validatePositiveScalar);
-parser.addParameter('EnvelopeSlipAnglesDeg', 0:0.1:14, @validateSlipAngles);
+parser.addParameter('EnvelopeSlipRatios', linspace(0, 1.0, 161), ...
+    @validateSlipRatios);
 parser.addParameter('EnvelopeLoadsN', 100:10:2500, @validateNormalLoads);
 parser.addParameter('SurfaceMu', [], @validateSurfaceMu);
-parser.addParameter('TrackWidth', 1.21, @validatePositiveScalar);
+parser.addParameter('Wheelbase', 1.528, @validatePositiveScalar);
 parser.addParameter('CgHeight', 0.256, @validateNonnegativeScalar);
 parser.addParameter('StaticFrontWeight', 0.5095, @validateUnitScalar);
-parser.addParameter('LateralLoadTransferDistribution', [], ...
-    @validateUnitScalarOrEmpty);
+parser.addParameter('DistanceM', 75.0, @validatePositiveScalar);
 parser.addParameter('ReferenceMassKg', 264, @validateNonnegativeScalar);
 parser.addParameter('CgDropPerKgSavedM', 0.001, @validateNonnegativeScalar);
-parser.addParameter('CoupledCg', true, @validateScalarLogical);
+parser.addParameter('CoupledCg', false, @validateScalarLogical);
+parser.addParameter('UsePowertrainLimit', false, @validateScalarLogical);
+parser.addParameter('PowertrainMatFile', '', @(x) ischar(x) || isstring(x));
+parser.addParameter('PowertrainEfficiency', 0.90, ...
+    @validateUnitScalarOrEmpty);
+parser.addParameter('MotorRotorInertia', 0.07, @validateNonnegativeScalar);
 parser.addParameter('OutputFile', defaultOutput, ...
     @(x) ischar(x) || isstring(x));
 parser.addParameter('SavePlot', true, @validateScalarLogical);
@@ -64,18 +73,18 @@ loadTransfer = loadTransferOptions(opts);
 
 tirFile = char(tirFile);
 massRange = opts.MassRangeKg(:).';
-slipAnglesDeg = opts.EnvelopeSlipAnglesDeg(:).';
+slipRatios = opts.EnvelopeSlipRatios(:).';
 envelopeLoadsN = unique(opts.EnvelopeLoadsN(:), 'sorted').';
 if numel(massRange) ~= 2 || massRange(2) <= massRange(1)
-    error('weight_savings_skidpad:BadMassRange', ...
+    error('weight_savings_acceleration:BadMassRange', ...
         'MassRangeKg must be a two-element vector [min max] with min < max.');
 end
-if isempty(slipAnglesDeg)
-    error('weight_savings_skidpad:EmptySlipAngles', ...
-        'EnvelopeSlipAnglesDeg must contain at least one value.');
+if isempty(slipRatios)
+    error('weight_savings_acceleration:EmptySlipRatios', ...
+        'EnvelopeSlipRatios must contain at least one value.');
 end
 if isempty(envelopeLoadsN)
-    error('weight_savings_skidpad:EmptyLoads', ...
+    error('weight_savings_acceleration:EmptyLoads', ...
         'EnvelopeLoadsN must contain at least one value.');
 end
 
@@ -85,18 +94,28 @@ if isempty(surfaceMu)
     surfaceMu = tire.surfaceMuReference;
 end
 
+powertrain = [];
+if opts.UsePowertrainLimit
+    powertrain = buildPowertrain(opts);
+end
+
 tireFilePath = tire.tireConstants.tirFilePath;
-envelope = buildTireEnvelope(tire, envelopeLoadsN, slipAnglesDeg, surfaceMu);
+envelope = buildLongitudinalEnvelope(tire, envelopeLoadsN, slipRatios, ...
+    surfaceMu);
 massKg = massGrid(massRange, opts.MassStepKg);
-sweep = sweepMass(massKg, envelope, loadTransfer);
+sweep = sweepMass(massKg, envelope, loadTransfer, opts.DistanceM, ...
+    powertrain);
 kneePoint = findKnee(sweep);
 
 % Optional coupled-CG sweep: every kg of mass saved also lowers the CG by
 % CgDropPerKgSavedM (default 1 mm/kg). Anchored at the reference mass so the
-% two curves coincide there and diverge as the car gets lighter. Lower CG ->
-% less load transfer -> more capacity at low mass, so lightness is rewarded
-% more steeply and the diminishing-returns knee moves. Skip entirely when
-% CoupledCg is off (no sweep, no report block, no figure).
+% two curves coincide there and diverge as the car gets lighter. NOTE the
+% sign is opposite to the skidpad case: for RWD grip-limited launch, lowering
+% the CG REDUCES rear-axle load transfer, so the driven axle is less planted
+% and traction FALLS. The coupled curve therefore lies ABOVE the fixed-CG
+% curve in time (worse) at low mass -- the honest trade-off between a low-CG
+% car and a traction-friendly high-CG launch. Skip entirely when CoupledCg
+% is off (no sweep, no report block, no figure).
 sweepCoupled = [];
 kneePointCoupled = emptyKnee();
 coupledCgHeightM = [];
@@ -105,27 +124,29 @@ if opts.CoupledCg
     coupledTransfer.cgHeight = coupledCgHeight(massKg, ...
         loadTransfer.cgHeight, opts.ReferenceMassKg, opts.CgDropPerKgSavedM);
     coupledCgHeightM = coupledTransfer.cgHeight;
-    sweepCoupled = sweepMass(massKg, envelope, coupledTransfer);
+    sweepCoupled = sweepMass(massKg, envelope, coupledTransfer, ...
+        opts.DistanceM, powertrain);
     kneePointCoupled = findKnee(sweepCoupled);
 end
 
 printReport(tireFilePath, surfaceMu, loadTransfer, massKg, sweep, ...
-    kneePoint, opts.ReferenceMassKg, opts.CgDropPerKgSavedM, ...
-    sweepCoupled, kneePointCoupled);
+    kneePoint, opts.ReferenceMassKg, opts.DistanceM, ...
+    opts.CgDropPerKgSavedM, sweepCoupled, kneePointCoupled, powertrain);
 
 visibleState = onOff(opts.ShowFigure, 'on', 'off');
 outputFile = char(opts.OutputFile);
 fig = [];
 figCoupled = [];
 if opts.SavePlot
-    fig = plotCurve(sweep, kneePoint, opts.ReferenceMassKg, tireFilePath, ...
-        surfaceMu, loadTransfer, visibleState);
+    fig = plotCurve(sweep, kneePoint, opts.ReferenceMassKg, opts.DistanceM, ...
+        tireFilePath, surfaceMu, loadTransfer, visibleState, powertrain);
     writeFigureToFile(fig, outputFile);
     if opts.CoupledCg
         coupledFile = coupledOutputFile(outputFile);
         figCoupled = plotCoupledCgCurve(sweep, kneePoint, sweepCoupled, ...
             kneePointCoupled, opts.ReferenceMassKg, opts.CgDropPerKgSavedM, ...
-            tireFilePath, surfaceMu, loadTransfer, visibleState);
+            opts.DistanceM, tireFilePath, surfaceMu, loadTransfer, ...
+            visibleState, powertrain);
         writeFigureToFile(figCoupled, coupledFile);
     end
 end
@@ -134,16 +155,16 @@ result = struct( ...
     'tirFile', tireFilePath, ...
     'surfaceMu', surfaceMu, ...
     'loadTransfer', loadTransfer, ...
+    'distanceM', opts.DistanceM, ...
     'massKg', massKg, ...
-    'sustainedG', sweep.sustainedG, ...
-    'sustainedMps2', sweep.sustainedMps2, ...
-    'lapTimeS', sweep.lapTimeS, ...
+    'launchAxMps2', sweep.launchAxMps2, ...
+    'launchG', sweep.launchG, ...
+    'timeToDistanceS', sweep.timeToDistanceS, ...
     'benefitGPerKgSaved', sweep.benefitGPerKgSaved, ...
     'benefitSPerKgSaved', sweep.benefitSPerKgSaved, ...
     'limitedBy', sweep.limitedBy, ...
-    'cornerLoadsN', sweep.cornerLoadsN, ...
-    'frontCapacityN', sweep.frontCapacityN, ...
-    'rearCapacityN', sweep.rearCapacityN, ...
+    'rearNormalN', sweep.rearNormalN, ...
+    'rearPeakMu', sweep.rearPeakMu, ...
     'envelope', envelope, ...
     'kneePoint', kneePoint, ...
     'outputFile', outputFile, ...
@@ -164,53 +185,59 @@ if opts.CloseFigure && ~isempty(figCoupled)
 end
 end
 
-function cgHeight = coupledCgHeight(massKg, referenceCgHeight, ...
-        referenceMassKg, cgDropPerKgSavedM)
-% Per-kg CG schedule: for every kg of mass saved below ReferenceMassKg the
-% CG drops by CgDropPerKgSavedM (default 1 mm). Anchored at the reference
-% mass so the coupled sweep reproduces the baseline there. CG is not
-% permitted to go negative.
-kgSaved = max(referenceMassKg - massKg(:), 0);
-cgHeight = max(referenceCgHeight - kgSaved .* cgDropPerKgSavedM, 0);
-end
-
-function coupledFile = coupledOutputFile(baseFile)
-% Mirror the base figure path with a _coupled_cg suffix before the extension.
-[folder, name, ext] = fileparts(baseFile);
-coupledFile = fullfile(folder, [name '_coupled_cg' ext]);
-end
-
 function loadTransfer = loadTransferOptions(opts)
-frontLoadTransferDistribution = opts.LateralLoadTransferDistribution;
-if isempty(frontLoadTransferDistribution)
-    frontLoadTransferDistribution = opts.StaticFrontWeight;
-end
-
 loadTransfer = struct( ...
-    'trackWidth', opts.TrackWidth, ...
+    'wheelbase', opts.Wheelbase, ...
     'cgHeight', opts.CgHeight, ...
-    'staticFrontWeight', opts.StaticFrontWeight, ...
-    'frontLoadTransferDistribution', frontLoadTransferDistribution);
+    'staticFrontWeight', opts.StaticFrontWeight);
 end
 
-function envelope = buildTireEnvelope(tire, loadsN, slipAnglesDeg, surfaceMu)
-% Peak lateral force vs normal load from a batched Pacejka sweep over slip
-% angle. peakForce(Fz) = max_alpha |Fy|, with the slip angle that produces it.
-Fy = computeLateralForceGrid(tire, loadsN, slipAnglesDeg, surfaceMu);
-[peakForceN, slipIdx] = max(abs(Fy), [], 2);
+function powertrain = buildPowertrain(opts)
+matFile = char(opts.PowertrainMatFile);
+if isempty(matFile)
+    cfg = lts.vehicles.R25();
+    if isfield(cfg, 'powertrain') && isfield(cfg.powertrain, 'matFile')
+        matFile = cfg.powertrain.matFile;
+    else
+        error('weight_savings_acceleration:NoPowertrainMat', ...
+            ['UsePowertrainLimit is on but no PowertrainMatFile was given ' ...
+             'and lts.vehicles.R25 has no powertrain.matFile.']);
+    end
+    efficiency = cfg.powertrain.efficiency;
+    rotorInertia = lts.util.fieldOr(cfg.powertrain, 'motorRotorInertia', ...
+        opts.MotorRotorInertia);
+else
+    efficiency = opts.PowertrainEfficiency;
+    if isempty(efficiency)
+        efficiency = 0.90;
+    end
+    rotorInertia = opts.MotorRotorInertia;
+end
+powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
+    matFile, efficiency, rotorInertia);
+end
+
+function envelope = buildLongitudinalEnvelope(tire, loadsN, slipRatios, ...
+        surfaceMu)
+% Peak longitudinal force vs normal load from a batched Pacejka sweep over
+% slip ratio (pure longitudinal: alpha = gamma = phit = 0). peakForce(Fz) =
+% max_kappa |Fx|, with the slip ratio that produces it.
+Fx = computeLongitudinalForceGrid(tire, loadsN, slipRatios, surfaceMu);
+[peakForceN, slipIdx] = max(abs(Fx), [], 2);
 peakForceN = peakForceN(:);
-slipAtPeakDeg = slipAnglesDeg(slipIdx).';
+kappaAtPeak = slipRatios(slipIdx).';
 envelope = struct( ...
     'loadsN', loadsN(:), ...
     'peakForceN', peakForceN, ...
-    'slipAtPeakDeg', slipAtPeakDeg, ...
-    'slipAnglesDeg', slipAnglesDeg, ...
-    'lateralForceN', Fy);
+    'kappaAtPeak', kappaAtPeak, ...
+    'slipRatios', slipRatios, ...
+    'longitudinalForceN', Fx);
 end
 
-function Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, surfaceMu)
+function Fx = computeLongitudinalForceGrid(tire, normalLoads, slipRatios, ...
+        surfaceMu)
 normalLoads = normalLoads(:);
-Fy = zeros(numel(normalLoads), numel(slipAnglesDeg));
+Fx = zeros(numel(normalLoads), numel(slipRatios));
 surfaceScale = tireSurfaceScale(tire, surfaceMu);
 active = normalLoads > 0;
 if ~any(active)
@@ -218,58 +245,54 @@ if ~any(active)
 end
 
 activeLoads = normalLoads(active);
-alphas = deg2rad(slipAnglesDeg(:).');
-[loadGrid, alphaGrid] = ndgrid(activeLoads, alphas);
+kappas = slipRatios(:).';
+[loadGrid, kappaGrid] = ndgrid(activeLoads, kappas);
 nRows = numel(loadGrid);
-FyActive = zeros(size(loadGrid));
+FxActive = zeros(size(loadGrid));
 maxRowsPerCall = 100000;
 
 for startIdx = 1:maxRowsPerCall:nRows
     endIdx = min(startIdx + maxRowsPerCall - 1, nRows);
     idx = startIdx:endIdx;
     chunkLoads = loadGrid(idx);
-    chunkAlphas = alphaGrid(idx);
+    chunkKappas = kappaGrid(idx);
     chunkLoads = chunkLoads(:);
-    chunkAlphas = chunkAlphas(:);
+    chunkKappas = chunkKappas(:);
+    % mfeval input columns: [Fz, kappa, alpha, gamma, phit, Vx, P]. Pure
+    % longitudinal -> alpha = gamma = phit = 0. Output column 1 = Fx.
     inputsMF = [ ...
         chunkLoads, ...
+        chunkKappas, ...
         zeros(numel(idx), 1), ...
-        chunkAlphas, ...
         zeros(numel(idx), 1), ...
         zeros(numel(idx), 1), ...
         repmat(tire.tireConstants.refVelocity, numel(idx), 1), ...
         repmat(tire.tireConstants.nomPressure, numel(idx), 1)];
-    % mfeval saturates and warns for very small vertical loads (its internal
-    % lower limit sits near ~100 N). Those samples lie below any realistic
-    % inside-tire load, so silence the expected warning here.
     warnState = warning('off', 'Solver:Limits:Exceeded');
     cleanups = onCleanup(@() warning(warnState));
     outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
     clear cleanups;
-    FyActive(idx) = -outputs(:, 2) * surfaceScale;
+    FxActive(idx) = outputs(:, 1) * surfaceScale;
 end
 
-Fy(active, :) = FyActive;
+Fx(active, :) = FxActive;
 end
 
-function sweep = sweepMass(massKg, envelope, loadTransfer)
-% FSAE skidpad figure-8 constant: lap time T [s] relates to sustained lateral
-% accel a_y [g] as a_y = (5.9527 / T)^2, so T = 5.9527 / sqrt(a_y) for the
-% timed figure-8 run. This 1/sqrt compression is what creates diminishing
-% returns in lap time even though raw G has accelerating returns to lightness.
-FSAE_SKIDPAD_CONST = 5.9527;
-
+function sweep = sweepMass(massKg, envelope, loadTransfer, distanceM, ...
+        powertrain)
+% With aero neglected and a speed-independent grip limit, launch ax is
+% constant over the whole distance, so the 75 m time is the closed form
+% T = sqrt(2*d/ax) (no integration needed). This is the longitudinal twin of
+% the skidpad script's T = 5.9527 / sqrt(a_y): the 1/sqrt(ax) compression is
+% what creates diminishing returns in time even though raw g has accelerating
+% returns to lightness.
 nMass = numel(massKg);
-sustainedG = zeros(nMass, 1);
-sustainedMps2 = zeros(nMass, 1);
-lapTimeS = zeros(nMass, 1);
-cornerLoadsN = zeros(nMass, 4);
-frontCapacityN = zeros(nMass, 1);
-rearCapacityN = zeros(nMass, 1);
+launchAxMps2 = zeros(nMass, 1);
+launchG = zeros(nMass, 1);
+timeToDistanceS = zeros(nMass, 1);
+rearNormalN = zeros(nMass, 1);
+rearPeakMu = zeros(nMass, 1);
 limitedBy = strings(nMass, 1);
-% Resolve the per-sample CG height actually used in the load-transfer model.
-% For a fixed-CG sweep loadTransfer.cgHeight is a scalar (broadcast); for a
-% coupled-CG sweep it is a per-sample vector.
 cgHeightM = loadTransfer.cgHeight;
 if isscalar(cgHeightM)
     cgHeightM = cgHeightM(1) * ones(nMass, 1);
@@ -280,29 +303,24 @@ end
 for i = 1:nMass
     sampleTransfer = loadTransfer;
     sampleTransfer.cgHeight = cgHeightM(i);
-    [sustainedG(i), detail] = solveSkidpad(massKg(i), envelope, sampleTransfer);
-    sustainedMps2(i) = sustainedG(i) * 9.80665;
-    lapTimeS(i) = FSAE_SKIDPAD_CONST / sqrt(max(sustainedG(i), eps));
-    cornerLoadsN(i, :) = detail.cornerLoadsN(:).';
-    frontCapacityN(i) = detail.frontCapacityN;
-    rearCapacityN(i) = detail.rearCapacityN;
+    [launchAxMps2(i), detail] = solveLaunchGrip(massKg(i), envelope, ...
+        sampleTransfer, powertrain);
+    launchG(i) = launchAxMps2(i) / 9.80665;
+    timeToDistanceS(i) = sqrt(2 * distanceM / max(launchAxMps2(i), eps));
+    rearNormalN(i) = detail.rearNormalN;
+    rearPeakMu(i) = detail.rearPeakMu;
     limitedBy(i) = string(detail.limitedBy);
 end
 
 if nMass >= 2
     % Marginal benefit of removing 1 kg, reported as a positive quantity.
-    % Sign depends on whether the metric is "higher-is-better" (G) or
-    % "lower-is-better" (lap time):
-    %   - G:        heavier -> less G, so dG/dm < 0; gain per kg = -dG/dm.
-    %   - lap time: heavier -> more time, so dT/dm > 0; time saved = +dT/dm.
-    % Lap time is where diminishing returns actually live: the 1/sqrt(G)
-    % compression in T means each kg saved shaves less time off as the car
-    % gets lighter. Raw G itself has ACCELERATING returns to lightness (tire
-    % mu rises as load falls), so its curvature points the wrong way for
-    % diminishing returns; lap time is the honest metric.
-    dTdm = gradient(lapTimeS, massKg);
+    %   - launch g: heavier -> less g, so dG/dm < 0; gain per kg = -dG/dm.
+    %   - time:     heavier -> more time, so dT/dm > 0; time saved = +dT/dm.
+    % Time is where diminishing returns live: the 1/sqrt(ax) compression in T
+    % means each kg saved shaves less time off as the car gets lighter.
+    dTdm = gradient(timeToDistanceS, massKg);
     benefitSPerKgSaved = smoothMarginal(dTdm, nMass);
-    dGdKg = gradient(sustainedG, massKg);
+    dGdKg = gradient(launchG, massKg);
     benefitGPerKgSaved = -smoothMarginal(dGdKg, nMass);
 else
     benefitSPerKgSaved = NaN(nMass, 1);
@@ -311,130 +329,102 @@ end
 
 sweep = struct( ...
     'massKg', massKg, ...
-    'sustainedG', sustainedG, ...
-    'sustainedMps2', sustainedMps2, ...
-    'lapTimeS', lapTimeS, ...
+    'launchAxMps2', launchAxMps2, ...
+    'launchG', launchG, ...
+    'timeToDistanceS', timeToDistanceS, ...
     'benefitGPerKgSaved', benefitGPerKgSaved, ...
     'benefitSPerKgSaved', benefitSPerKgSaved, ...
     'limitedBy', limitedBy, ...
-    'cornerLoadsN', cornerLoadsN, ...
-    'frontCapacityN', frontCapacityN, ...
-    'rearCapacityN', rearCapacityN, ...
+    'rearNormalN', rearNormalN, ...
+    'rearPeakMu', rearPeakMu, ...
     'cgHeightM', cgHeightM);
 end
 
-function out = smoothMarginal(derivative, nMass)
-% Numerical derivative of a near-constant curve is float-noise dominated.
-% Centered moving average + coarse round to suppress spurious oscillation.
-out = movingAverage(derivative, max(5, ceil(nMass / 20)));
-out = round(out, 6);
-end
-
-function [ayG, detail] = solveSkidpad(massKg, envelope, loadTransfer)
-% Bisection root-find on capacityG(m, ay) - ay = 0. The peak-force envelope
-% is monotonically increasing in ay (more load transfer -> more outside
-% capacity) while the demand ay rises linearly, so a unique crossing exists.
-maxEqualLoadMu = max(envelope.peakForceN ./ max(envelope.loadsN, eps));
-upper = max(0.5, 1.5 * maxEqualLoadMu);
-while skidpadResidual(upper, massKg, envelope, loadTransfer) > 0 ...
-        && upper < 5
-    upper = upper * 1.5;
-end
-
-lower = 0;
-for iter = 1:50 %#ok<NASGU>
-    mid = 0.5 * (lower + upper);
-    residual = skidpadResidual(mid, massKg, envelope, loadTransfer);
-    if residual >= 0
-        lower = mid;
-    else
-        upper = mid;
-    end
-end
-
-ayG = lower;
-detail = capacityAtAy(massKg, ayG, envelope, loadTransfer);
-end
-
-function residual = skidpadResidual(ayG, massKg, envelope, loadTransfer)
-detail = capacityAtAy(massKg, ayG, envelope, loadTransfer);
-residual = detail.capacityG - ayG;
-end
-
-function detail = capacityAtAy(massKg, ayG, envelope, loadTransfer)
+function [axMps2, detail] = solveLaunchGrip(massKg, envelope, loadTransfer, ...
+        powertrain)
+% Fixed-point solve for grip-limited launch acceleration (aero neglected).
+% Rear load depends on ax (load transfer) which depends on rear load (grip),
+% so iterate to convergence -- same scheme as theoretical_acceleration_75m.m
+% but with aero and rolling resistance stripped and the powertrain cap
+% optional. Returns ax [m/s^2] and the operating-point detail.
 g = 9.80665;
-cornerLoads = bicycleCornerLoads(massKg, ayG, loadTransfer);
-cornerCapacity = tireCapacityForLoads(cornerLoads, envelope);
+ax = 0;
+rearNormalN = 0;
+rearPeakMu = 0;
+FtractionRear = 0;
+Fmotor = Inf;
+Fdrive = 0;
 
-frontCapacity = cornerCapacity(1) + cornerCapacity(2);
-rearCapacity = cornerCapacity(3) + cornerCapacity(4);
-frontFraction = loadTransfer.staticFrontWeight;
-rearFraction = 1 - frontFraction;
-frontLimitedTotal = frontCapacity / max(frontFraction, eps);
-rearLimitedTotal = rearCapacity / max(rearFraction, eps);
+for iter = 1:12 %#ok<NASGU>
+    rearNormalN = bicycleRearLoad(massKg, ax, loadTransfer);
+    rearPerTire = rearNormalN / 2;
+    rearPeakMu = peakMuForLoad(rearPerTire, envelope);
+    FtractionRear = rearPeakMu * rearNormalN;
 
-if frontLimitedTotal <= rearLimitedTotal
-    totalCapacity = frontLimitedTotal;
-    limitedBy = 'front';
-else
-    totalCapacity = rearLimitedTotal;
-    limitedBy = 'rear';
+    if ~isempty(powertrain)
+        Fmotor = max(0, powertrain.computeMaxDriveForce(0));
+    else
+        Fmotor = Inf;
+    end
+
+    Fdrive = min(Fmotor, FtractionRear);
+    axNew = Fdrive / massKg;
+    if abs(axNew - ax) < 1e-5
+        ax = axNew;
+        break;
+    end
+    ax = 0.6 * ax + 0.4 * axNew;
 end
 
-capacityG = totalCapacity / max(massKg * g, eps);
+axMps2 = ax;
+if isfinite(Fmotor) && Fmotor < FtractionRear - 1e-6
+    limitedBy = 'power';
+else
+    limitedBy = 'grip';
+end
 
 detail = struct( ...
-    'capacityG', capacityG, ...
-    'totalCapacityN', totalCapacity, ...
-    'frontCapacityN', frontCapacity, ...
-    'rearCapacityN', rearCapacity, ...
-    'cornerCapacityN', cornerCapacity, ...
-    'cornerLoadsN', cornerLoads, ...
+    'rearNormalN', rearNormalN, ...
+    'rearPeakMu', rearPeakMu, ...
+    'FtractionRear', FtractionRear, ...
+    'Fmotor', Fmotor, ...
+    'Fdrive', Fdrive, ...
     'limitedBy', limitedBy);
 end
 
-function loads = bicycleCornerLoads(massKg, ayG, loadTransfer)
-% Simplified steady-state lateral load transfer (bicycle model). Corner
-% order is [frontInside; frontOutside; rearInside; rearOutside]. Inside
-% loads are floored at zero so inside-tire-lift does not generate negative
+function rearNormal = bicycleRearLoad(massKg, axMps2, loadTransfer)
+% Rear-axle normal load under longitudinal load transfer (bicycle model,
+% RWD). Positive ax (acceleration) transfers load onto the rear (driven)
+% axle. Floored at 0 so an unphysical operating point cannot produce negative
 % capacity through extrapolation.
 g = 9.80665;
 W = massKg * g;
-frontAxleStatic = W * loadTransfer.staticFrontWeight;
-rearAxleStatic = W * (1 - loadTransfer.staticFrontWeight);
-totalTransfer = W * ayG * loadTransfer.cgHeight / loadTransfer.trackWidth;
-frontTransfer = totalTransfer * loadTransfer.frontLoadTransferDistribution;
-rearTransfer = totalTransfer * (1 - loadTransfer.frontLoadTransferDistribution);
-
-frontInside = max((frontAxleStatic - frontTransfer) / 2, 0);
-frontOutside = frontAxleStatic - frontInside;
-rearInside = max((rearAxleStatic - rearTransfer) / 2, 0);
-rearOutside = rearAxleStatic - rearInside;
-loads = [frontInside; frontOutside; rearInside; rearOutside];
+rearStatic = W * (1 - loadTransfer.staticFrontWeight);
+totalTransfer = massKg * axMps2 * loadTransfer.cgHeight / ...
+    loadTransfer.wheelbase;
+rearNormal = max(rearStatic + totalTransfer, 0);
 end
 
-function capacity = tireCapacityForLoads(loads, envelope)
-capacity = zeros(size(loads));
-loadsGrid = envelope.loadsN;
-peakForce = envelope.peakForceN;
-for i = 1:numel(loads)
-    Fz = loads(i);
-    if Fz <= 0
-        capacity(i) = 0;
-        continue;
-    end
-    capacity(i) = max(interp1(loadsGrid, peakForce, Fz, ...
-        'linear', 'extrap'), 0);
+function mu = peakMuForLoad(loadPerTire, envelope)
+% Peak longitudinal mu at a given per-tire normal load, interpolated from the
+% envelope. Per-tire because the envelope peakForceN is per tire; the caller
+% multiplies back by total axle load.
+if loadPerTire <= 0
+    mu = 0;
+    return;
 end
+peakForce = max(interp1(envelope.loadsN, envelope.peakForceN, loadPerTire, ...
+    'linear', 'extrap'), 0);
+mu = peakForce / max(loadPerTire, eps);
 end
 
 function knee = findKnee(sweep)
-% Kneedle elbow on the LAP-TIME-vs-mass curve (endpoints excluded). Lap time
-% is the honest diminishing-returns metric: the 1/sqrt(G) compression in T
-% means each kg saved shaves less lap time off as the car gets lighter,
-% whereas raw G itself has accelerating returns to lightness.
+% Kneedle elbow on the TIME-vs-mass curve (endpoints excluded). Time is the
+% honest diminishing-returns metric: the 1/sqrt(ax) compression means each kg
+% saved shaves less time off as the car gets lighter, whereas raw launch g
+% itself has accelerating returns to lightness.
 mass = sweep.massKg(:);
-lapTime = sweep.lapTimeS(:);
+eventTime = sweep.timeToDistanceS(:);
 
 if isempty(mass)
     knee = emptyKnee();
@@ -445,7 +435,7 @@ elseif numel(mass) < 3
 end
 
 x = normalizeRange(mass);
-y = normalizeRange(lapTime);
+y = normalizeRange(eventTime);
 p1 = [x(1), y(1)];
 p2 = [x(end), y(end)];
 lineVec = p2 - p1;
@@ -486,9 +476,9 @@ knee = struct( ...
     'method', method, ...
     'index', idx, ...
     'massKg', mass(idx), ...
-    'accelG', sweep.sustainedG(idx), ...
-    'accelMps2', sweep.sustainedMps2(idx), ...
-    'lapTimeS', sweep.lapTimeS(idx), ...
+    'launchG', sweep.launchG(idx), ...
+    'launchAxMps2', sweep.launchAxMps2(idx), ...
+    'timeToDistanceS', sweep.timeToDistanceS(idx), ...
     'benefitSPerKgSaved', benefitS, ...
     'benefitGPerKgSaved', benefitG);
 end
@@ -498,9 +488,9 @@ knee = struct( ...
     'method', 'empty', ...
     'index', NaN, ...
     'massKg', NaN, ...
-    'accelG', NaN, ...
-    'accelMps2', NaN, ...
-    'lapTimeS', NaN, ...
+    'launchG', NaN, ...
+    'launchAxMps2', NaN, ...
+    'timeToDistanceS', NaN, ...
     'benefitSPerKgSaved', NaN, ...
     'benefitGPerKgSaved', NaN);
 end
@@ -534,11 +524,10 @@ end
 
 function out = curveLinearity(massKg, signal)
 % Fit a quadratic to (mass, signal) and report the quadratic coefficient and
-% a linear R^2. The quadratic sign tells us the curvature direction: for a
-% G-vs-mass sweep, c >= 0 means ACCELERATING returns to lightness (lighter
-% pays off progressively more per kg); for a lap-time sweep, c >= 0 means
-% DIMINISHING returns (each kg saved shaves less time off as the car gets
-% lighter). The curvature is the honest signal here, not the knee pick.
+% a linear R^2. For a launch-g sweep, c >= 0 means ACCELERATING returns to
+% lightness (lighter pays off progressively more per kg); for a time sweep,
+% c >= 0 means DIMINISHING returns (each kg saved shaves less time off as the
+% car gets lighter).
 mass = massKg(:);
 sig = signal(:);
 out = struct('quadCoeff', NaN, 'linearFitR2', NaN);
@@ -581,75 +570,86 @@ for i = 1:n
 end
 end
 
+function out = smoothMarginal(derivative, nMass)
+% Numerical derivative of a near-constant curve is float-noise dominated.
+% Centered moving average + coarse round to suppress spurious oscillation.
+out = movingAverage(derivative, max(5, ceil(nMass / 20)));
+out = round(out, 6);
+end
+
 function printReport(tireFilePath, surfaceMu, loadTransfer, massKg, sweep, ...
-        knee, referenceMassKg, cgDropPerKgSavedM, sweepCoupled, kneeCoupled)
+        knee, referenceMassKg, distanceM, cgDropPerKgSavedM, sweepCoupled, ...
+        kneeCoupled, powertrain)
 [~, tireName, tireExt] = fileparts(tireFilePath);
-fprintf('\n=== Weight Savings Skidpad (bicycle model, aero neglected) ===\n');
+fprintf('\n=== Weight Savings Acceleration (grip-limited, RWD, aero neglected) ===\n');
 fprintf('Tire file:           %s%s\n', tireName, tireExt);
 fprintf('Surface mu:          %.3f\n', surfaceMu);
-fprintf('Geometry:            track %.3f m, CG %.3f m, static front %.1f%%, front LLTD %.1f%%\n', ...
-    loadTransfer.trackWidth, loadTransfer.cgHeight, ...
-    100 * loadTransfer.staticFrontWeight, ...
-    100 * loadTransfer.frontLoadTransferDistribution);
-fprintf('Skidpad metric:      FSAE figure-8, T = 5.9527 / sqrt(a_y)\n');
+fprintf('Geometry:            wheelbase %.3f m, CG %.3f m, static front %.1f%%\n', ...
+    loadTransfer.wheelbase, loadTransfer.cgHeight, ...
+    100 * loadTransfer.staticFrontWeight);
+fprintf('Event:               FSAE acceleration, %.1f m, T = sqrt(2*d/ax)\n', ...
+    distanceM);
+fprintf('Limiter:             %s\n', limitModeLabel(powertrain));
 fprintf('Mass sweep:          %.1f to %.1f kg (%d points)\n', ...
     min(massKg), max(massKg), numel(massKg));
 
 [refIdx, refLimit] = indexAtMass(referenceMassKg, massKg, sweep);
 if isfinite(refIdx)
-    fprintf('Reference mass:      %.1f kg -> %.3f g, %.3f s lap, limited by %s\n', ...
-        referenceMassKg, sweep.sustainedG(refIdx), ...
-        sweep.lapTimeS(refIdx), refLimit);
+    fprintf('Reference mass:      %.1f kg -> %.3f g, %.3f s, limited by %s\n', ...
+        referenceMassKg, sweep.launchG(refIdx), ...
+        sweep.timeToDistanceS(refIdx), refLimit);
 end
 
-% The headline answer is in LAP TIME, where diminishing returns are real:
-% the 1/sqrt(G) compression means each kg saved shaves less time off as the
-% car gets lighter. Raw G itself has ACCELERATING returns (tire mu rises as
-% load falls), so the G curve bends the wrong way for diminishing returns.
-fprintf('>> Diminishing-return mass (lap-time knee): %.1f kg', knee.massKg);
-if isfinite(knee.lapTimeS)
-    fprintf(' (%.3f s lap, %.3f g', knee.lapTimeS, knee.accelG);
+% The headline answer is in TIME, where diminishing returns are real: the
+% 1/sqrt(ax) compression means each kg saved shaves less time off as the car
+% gets lighter. Raw launch g has ACCELERATING returns (tire mu rises as load
+% falls), so the g curve bends the wrong way for diminishing returns.
+fprintf('>> Diminishing-return mass (time knee): %.1f kg', knee.massKg);
+if isfinite(knee.timeToDistanceS)
+    fprintf(' (%.3f s, %.3f g', knee.timeToDistanceS, knee.launchG);
 end
 if isfinite(knee.benefitSPerKgSaved)
     fprintf(', %.4f s/kg saved', knee.benefitSPerKgSaved);
 end
 fprintf(', %s)\n', knee.method);
 
-gCurv = curveLinearity(massKg, sweep.sustainedG);
-tCurv = curveLinearity(massKg, sweep.lapTimeS);
-fprintf('   G curve:    quad coeff %+.3e  (>=0 = accelerating returns, <0 = diminishing)\n', gCurv.quadCoeff);
-fprintf('   Lap-time:   quad coeff %+.3e  (>=0 = diminishing returns as car gets lighter)\n', tCurv.quadCoeff);
+gCurv = curveLinearity(massKg, sweep.launchG);
+tCurv = curveLinearity(massKg, sweep.timeToDistanceS);
+fprintf('   g curve:    quad coeff %+.3e  (>=0 = accelerating returns, <0 = diminishing)\n', gCurv.quadCoeff);
+fprintf('   Time:       quad coeff %+.3e  (>=0 = diminishing returns as car gets lighter)\n', tCurv.quadCoeff);
 if gCurv.quadCoeff >= 0 && tCurv.quadCoeff >= 0
-    fprintf('   Raw G gives accelerating returns to lightness; lap time shows diminishing returns\n');
+    fprintf('   Raw g gives accelerating returns to lightness; time shows diminishing returns\n');
     fprintf('   (each kg saved shaves less time off as the car gets lighter) but the elbow is gentle.\n');
 elseif tCurv.quadCoeff < 0
-    fprintf('   Lap-time curve is concave; knee marks the diminishing-returns elbow.\n');
+    fprintf('   Time curve is concave; knee marks the diminishing-returns elbow.\n');
 end
 
 endpts = [1, numel(massKg)];
 for k = 1:numel(endpts)
     i = endpts(k);
     fprintf('   At %.0f kg: %.3f g, %.3f s', massKg(i), ...
-        sweep.sustainedG(i), sweep.lapTimeS(i));
+        sweep.launchG(i), sweep.timeToDistanceS(i));
     if isfinite(sweep.benefitSPerKgSaved(i))
         fprintf(', %.4f s/kg', sweep.benefitSPerKgSaved(i));
     end
     fprintf(' (%s)\n', sweep.limitedBy(i));
 end
-fprintf('Aero downforce is neglected; only tire load sensitivity couples mass to grip.\n');
+fprintf('Aero downforce and drag are neglected; only tire load sensitivity couples mass to grip.\n');
 
 % --- Optional coupled-CG sweep: 1 mm of CG drop per kg saved, anchored at
-% the reference mass. Lower CG means less load transfer, so each kg of mass
-% saved also buys back grip via reduced weight transfer. The diminishing-
-% returns knee shifts because lightness is now rewarded more steeply. Skipped
-% entirely when CoupledCg is off. ---
+% the reference mass. NOTE the sign flip vs skidpad: for RWD launch, lowering
+% the CG reduces rear load transfer, so the driven axle is LESS planted and
+% peak traction DROPS. The coupled curve is therefore WORSE (slower) than the
+% fixed-CG curve at low mass -- the honest trade-off between a low CG and a
+% traction-friendly launch. Skipped entirely when CoupledCg is off. ---
 if ~isempty(sweepCoupled)
 fprintf('\n--- Coupled CG (%.1f mm drop per kg saved, anchored at %.1f kg) ---\n', ...
     1000 * cgDropPerKgSavedM, referenceMassKg);
 if isfinite(kneeCoupled.massKg)
     fprintf('>> Coupled diminishing-return mass: %.1f kg', kneeCoupled.massKg);
-    if isfinite(kneeCoupled.lapTimeS)
-        fprintf(' (%.3f s lap, %.3f g', kneeCoupled.lapTimeS, kneeCoupled.accelG);
+    if isfinite(kneeCoupled.timeToDistanceS)
+        fprintf(' (%.3f s, %.3f g', kneeCoupled.timeToDistanceS, ...
+            kneeCoupled.launchG);
     end
     if isfinite(kneeCoupled.benefitSPerKgSaved)
         fprintf(', %.4f s/kg saved', kneeCoupled.benefitSPerKgSaved);
@@ -671,20 +671,28 @@ if isfinite(knee.massKg) && isfinite(kneeCoupled.massKg)
             abs(deltaKg), knee.massKg, kneeCoupled.massKg);
     end
 end
-tCurvCoupled = curveLinearity(massKg, sweepCoupled.lapTimeS);
-fprintf('   Coupled lap-time: quad coeff %+.3e  (>=0 = diminishing returns as car gets lighter)\n', ...
+tCurvCoupled = curveLinearity(massKg, sweepCoupled.timeToDistanceS);
+fprintf('   Coupled time: quad coeff %+.3e  (>=0 = diminishing returns as car gets lighter)\n', ...
     tCurvCoupled.quadCoeff);
 endpts = [1, numel(massKg)];
 for k = 1:numel(endpts)
     i = endpts(k);
     fprintf('   Coupled at %.0f kg (CG %.0f mm): %.3f g, %.3f s', ...
         massKg(i), 1000 * sweepCoupled.cgHeightM(i), ...
-        sweepCoupled.sustainedG(i), sweepCoupled.lapTimeS(i));
+        sweepCoupled.launchG(i), sweepCoupled.timeToDistanceS(i));
     if isfinite(sweepCoupled.benefitSPerKgSaved(i))
         fprintf(', %.4f s/kg', sweepCoupled.benefitSPerKgSaved(i));
     end
     fprintf(' (%s)\n', sweepCoupled.limitedBy(i));
 end
+end
+end
+
+function label = limitModeLabel(powertrain)
+if isempty(powertrain)
+    label = 'grip-limited (powertrain cap off)';
+else
+    label = 'grip- or power-limited (powertrain cap on)';
 end
 end
 
@@ -699,9 +707,9 @@ idx = found;
 limit = char(sweep.limitedBy(idx));
 end
 
-function fig = plotCurve(sweep, knee, referenceMassKg, tireFilePath, ...
-        surfaceMu, loadTransfer, visibleState)
-fig = figure('Name', 'Weight savings diminishing returns (lap time)', ...
+function fig = plotCurve(sweep, knee, referenceMassKg, distanceM, ...
+        tireFilePath, surfaceMu, loadTransfer, visibleState, powertrain)
+fig = figure('Name', 'Weight savings diminishing returns (acceleration)', ...
     'Color', 'w', 'Visible', visibleState);
 fig.Position = [120 60 1120 900];
 set(fig, ...
@@ -714,18 +722,18 @@ set(fig, ...
 
 layout = tiledlayout(fig, 3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
 mass = sweep.massKg;
-accel = sweep.sustainedG;
-lapTime = sweep.lapTimeS;
+launchG = sweep.launchG;
+eventTime = sweep.timeToDistanceS;
 benefitMsPerKg = 1000 * sweep.benefitSPerKgSaved;
 blue = [0.07 0.29 0.67];
 green = [0.10 0.50 0.28];
 kneeColor = [0.80 0.12 0.10];
 refColor = [0.45 0.45 0.45];
 
-% --- Tile 1: sustained G vs mass (accelerating returns to lightness) ---
+% --- Tile 1: launch g vs mass (accelerating returns to lightness) ---
 axAccel = nexttile(layout);
-plot(axAccel, mass, accel, 'Color', blue, 'LineWidth', 1.8, ...
-    'DisplayName', 'Sustained a_y');
+plot(axAccel, mass, launchG, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', 'Launch a_x');
 hold(axAccel, 'on');
 if isfinite(referenceMassKg)
     xline(axAccel, referenceMassKg, ':', 'Color', refColor, ...
@@ -734,44 +742,44 @@ end
 if isfinite(knee.massKg)
     xline(axAccel, knee.massKg, '--', 'Color', kneeColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
-    plot(axAccel, knee.massKg, knee.accelG, 'o', 'MarkerSize', 8, ...
+    plot(axAccel, knee.massKg, knee.launchG, 'o', 'MarkerSize', 8, ...
         'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
         'MarkerEdgeColor', 'w', 'HandleVisibility', 'off');
 end
 hold(axAccel, 'off');
 styleAxis(axAccel);
 grid(axAccel, 'on');
-ylabel(axAccel, 'Sustained a_y [g]');
-title(axAccel, 'Skidpad G vs mass (convex: lighter pays off progressively more per kg)');
+ylabel(axAccel, 'Launch a_x [g]');
+title(axAccel, 'Grip-limited launch g vs mass (convex: lighter pays off progressively more per kg)');
 legend(axAccel, 'Location', 'best');
 
-% --- Tile 2: lap time vs mass (where diminishing returns live) ---
-axLap = nexttile(layout);
-plot(axLap, mass, lapTime, 'Color', blue, 'LineWidth', 1.8, ...
-    'DisplayName', 'Lap time');
-hold(axLap, 'on');
+% --- Tile 2: 75 m time vs mass (where diminishing returns live) ---
+axTime = nexttile(layout);
+plot(axTime, mass, eventTime, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', sprintf('%.0f m time', distanceM));
+hold(axTime, 'on');
 if isfinite(referenceMassKg)
-    xline(axLap, referenceMassKg, ':', 'Color', refColor, ...
+    xline(axTime, referenceMassKg, ':', 'Color', refColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
 end
-if isfinite(knee.massKg) && isfinite(knee.lapTimeS)
-    xline(axLap, knee.massKg, '--', 'Color', kneeColor, ...
+if isfinite(knee.massKg) && isfinite(knee.timeToDistanceS)
+    xline(axTime, knee.massKg, '--', 'Color', kneeColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
-    plot(axLap, knee.massKg, knee.lapTimeS, 'o', 'MarkerSize', 8, ...
+    plot(axTime, knee.massKg, knee.timeToDistanceS, 'o', 'MarkerSize', 8, ...
         'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
         'MarkerEdgeColor', 'w', 'DisplayName', 'Diminishing-returns knee');
 end
-hold(axLap, 'off');
-styleAxis(axLap);
-grid(axLap, 'on');
-ylabel(axLap, 'FSAE skidpad lap time [s]');
-title(axLap, 'Lap time vs mass (concave: each kg saved shaves less time off as car gets lighter)');
-legend(axLap, 'Location', 'best');
+hold(axTime, 'off');
+styleAxis(axTime);
+grid(axTime, 'on');
+ylabel(axTime, sprintf('Time to %.0f m [s]', distanceM));
+title(axTime, 'Acceleration time vs mass (concave: each kg saved shaves less time off as car gets lighter)');
+legend(axTime, 'Location', 'best');
 
-% --- Tile 3: marginal lap-time benefit per kg saved (the key panel) ---
+% --- Tile 3: marginal time benefit per kg saved (the key panel) ---
 axBenefit = nexttile(layout);
 plot(axBenefit, mass, benefitMsPerKg, 'Color', green, 'LineWidth', 1.6, ...
-    'DisplayName', 'Marginal lap-time gain');
+    'DisplayName', 'Marginal time gain');
 hold(axBenefit, 'on');
 yline(axBenefit, 0, ':', 'Color', refColor, 'HandleVisibility', 'off');
 if isfinite(referenceMassKg)
@@ -791,28 +799,29 @@ styleAxis(axBenefit);
 grid(axBenefit, 'on');
 xlabel(axBenefit, 'Vehicle mass [kg]');
 ylabel(axBenefit, 'Gain [ms / kg saved]');
-title(axBenefit, 'Marginal lap-time gain per kg removed (falls as car gets lighter)');
+title(axBenefit, 'Marginal time gain per kg removed (falls as car gets lighter)');
 legend(axBenefit, 'Location', 'best');
 
-linkaxes([axAccel, axLap, axBenefit], 'x');
+linkaxes([axAccel, axTime, axBenefit], 'x');
 [~, tireName, tireExt] = fileparts(tireFilePath);
 plotTitle = sgtitle(sprintf( ...
-    ['Weight savings vs FSAE skidpad lap time | %s%s | surface mu %.3f | ' ...
-     'track %.2f m, CG %.2f m, front %.0f%%, LLTD %.0f%%'], ...
-    tireName, tireExt, surfaceMu, loadTransfer.trackWidth, ...
-    loadTransfer.cgHeight, 100 * loadTransfer.staticFrontWeight, ...
-    100 * loadTransfer.frontLoadTransferDistribution), ...
-    'Interpreter', 'none');
+    ['Weight savings vs FSAE acceleration | %s%s | surface mu %.3f | %s | ' ...
+     'wheelbase %.2f m, CG %.2f m, front %.0f%%'], ...
+    tireName, tireExt, surfaceMu, limitModeLabel(powertrain), ...
+    loadTransfer.wheelbase, loadTransfer.cgHeight, ...
+    100 * loadTransfer.staticFrontWeight), 'Interpreter', 'none');
 set(plotTitle, 'Color', 'k', 'FontWeight', 'bold');
 end
 
 function fig = plotCoupledCgCurve(sweep, knee, sweepCoupled, kneeCoupled, ...
-        referenceMassKg, cgDropPerKgSavedM, tireFilePath, surfaceMu, ...
-        loadTransfer, visibleState)
+        referenceMassKg, cgDropPerKgSavedM, distanceM, tireFilePath, ...
+        surfaceMu, loadTransfer, visibleState, powertrain)
 % Comparison figure: fixed CG vs coupled CG (CG drops 1 mm per kg saved,
 % anchored at the reference mass). Same three panels as plotCurve, with both
-% sweeps overlaid so the extra grip from reduced load transfer is visible.
-fig = figure('Name', 'Weight savings: fixed CG vs coupled CG (lap time)', ...
+% sweeps overlaid. The coupled curve sits ABOVE the fixed-CG curve in time
+% (worse) at low mass because lowering the CG reduces the rearward load
+% transfer that plants the driven axle -- the opposite sign to skidpad.
+fig = figure('Name', 'Weight savings: fixed CG vs coupled CG (acceleration)', ...
     'Color', 'w', 'Visible', visibleState);
 fig.Position = [120 60 1120 900];
 set(fig, ...
@@ -825,10 +834,10 @@ set(fig, ...
 
 layout = tiledlayout(fig, 3, 1, 'TileSpacing', 'compact', 'Padding', 'loose');
 mass = sweep.massKg;
-accel = sweep.sustainedG;
-accelCoupled = sweepCoupled.sustainedG;
-lapTime = sweep.lapTimeS;
-lapTimeCoupled = sweepCoupled.lapTimeS;
+launchG = sweep.launchG;
+launchGCoupled = sweepCoupled.launchG;
+eventTime = sweep.timeToDistanceS;
+eventTimeCoupled = sweepCoupled.timeToDistanceS;
 benefitMsPerKg = 1000 * sweep.benefitSPerKgSaved;
 benefitMsPerKgCoupled = 1000 * sweepCoupled.benefitSPerKgSaved;
 blue = [0.07 0.29 0.67];
@@ -839,24 +848,24 @@ kneeColor = [0.80 0.12 0.10];
 kneeCoupledColor = [0.55 0.20 0.65];
 refColor = [0.45 0.45 0.45];
 
-% --- Tile 1: sustained G vs mass ---
+% --- Tile 1: launch g vs mass ---
 axAccel = nexttile(layout);
-plot(axAccel, mass, accel, 'Color', blue, 'LineWidth', 1.8, ...
-    'DisplayName', 'Sustained a_y (fixed CG)');
+plot(axAccel, mass, launchG, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', 'Launch a_x (fixed CG)');
 hold(axAccel, 'on');
-plot(axAccel, mass, accelCoupled, 'Color', orange, 'LineWidth', 1.8, ...
-    'DisplayName', 'Sustained a_y (CG -1 mm/kg)');
+plot(axAccel, mass, launchGCoupled, 'Color', orange, 'LineWidth', 1.8, ...
+    'DisplayName', 'Launch a_x (CG -1 mm/kg)');
 if isfinite(referenceMassKg)
     xline(axAccel, referenceMassKg, ':', 'Color', refColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
 end
 if isfinite(knee.massKg)
-    plot(axAccel, knee.massKg, knee.accelG, 'o', 'MarkerSize', 8, ...
+    plot(axAccel, knee.massKg, knee.launchG, 'o', 'MarkerSize', 8, ...
         'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
         'MarkerEdgeColor', 'w', 'DisplayName', 'Fixed-CG knee');
 end
 if isfinite(kneeCoupled.massKg)
-    plot(axAccel, kneeCoupled.massKg, kneeCoupled.accelG, 's', ...
+    plot(axAccel, kneeCoupled.massKg, kneeCoupled.launchG, 's', ...
         'MarkerSize', 8, 'LineWidth', 1.5, ...
         'MarkerFaceColor', kneeCoupledColor, 'MarkerEdgeColor', 'w', ...
         'DisplayName', 'Coupled-CG knee');
@@ -864,40 +873,40 @@ end
 hold(axAccel, 'off');
 styleAxis(axAccel);
 grid(axAccel, 'on');
-ylabel(axAccel, 'Sustained a_y [g]');
-title(axAccel, 'Skidpad G vs mass (lower CG from mass loss steepens the gain)');
+ylabel(axAccel, 'Launch a_x [g]');
+title(axAccel, 'Launch g vs mass (lower CG reduces rear load transfer, hurts traction)');
 legend(axAccel, 'Location', 'best');
 
-% --- Tile 2: lap time vs mass ---
-axLap = nexttile(layout);
-plot(axLap, mass, lapTime, 'Color', blue, 'LineWidth', 1.8, ...
-    'DisplayName', 'Lap time (fixed CG)');
-hold(axLap, 'on');
-plot(axLap, mass, lapTimeCoupled, 'Color', orange, 'LineWidth', 1.8, ...
-    'DisplayName', 'Lap time (CG -1 mm/kg)');
+% --- Tile 2: time vs mass ---
+axTime = nexttile(layout);
+plot(axTime, mass, eventTime, 'Color', blue, 'LineWidth', 1.8, ...
+    'DisplayName', sprintf('Time (fixed CG)'));
+hold(axTime, 'on');
+plot(axTime, mass, eventTimeCoupled, 'Color', orange, 'LineWidth', 1.8, ...
+    'DisplayName', sprintf('Time (CG -1 mm/kg)'));
 if isfinite(referenceMassKg)
-    xline(axLap, referenceMassKg, ':', 'Color', refColor, ...
+    xline(axTime, referenceMassKg, ':', 'Color', refColor, ...
         'LineWidth', 1.1, 'HandleVisibility', 'off');
 end
-if isfinite(knee.massKg) && isfinite(knee.lapTimeS)
-    plot(axLap, knee.massKg, knee.lapTimeS, 'o', 'MarkerSize', 8, ...
+if isfinite(knee.massKg) && isfinite(knee.timeToDistanceS)
+    plot(axTime, knee.massKg, knee.timeToDistanceS, 'o', 'MarkerSize', 8, ...
         'LineWidth', 1.5, 'MarkerFaceColor', kneeColor, ...
         'MarkerEdgeColor', 'w', 'DisplayName', 'Fixed-CG knee');
 end
-if isfinite(kneeCoupled.massKg) && isfinite(kneeCoupled.lapTimeS)
-    plot(axLap, kneeCoupled.massKg, kneeCoupled.lapTimeS, 's', ...
+if isfinite(kneeCoupled.massKg) && isfinite(kneeCoupled.timeToDistanceS)
+    plot(axTime, kneeCoupled.massKg, kneeCoupled.timeToDistanceS, 's', ...
         'MarkerSize', 8, 'LineWidth', 1.5, ...
         'MarkerFaceColor', kneeCoupledColor, 'MarkerEdgeColor', 'w', ...
         'DisplayName', 'Coupled-CG knee');
 end
-hold(axLap, 'off');
-styleAxis(axLap);
-grid(axLap, 'on');
-ylabel(axLap, 'FSAE skidpad lap time [s]');
-title(axLap, 'Lap time vs mass (coupled CG buys back grip at low mass)');
-legend(axLap, 'Location', 'best');
+hold(axTime, 'off');
+styleAxis(axTime);
+grid(axTime, 'on');
+ylabel(axTime, sprintf('Time to %.0f m [s]', distanceM));
+title(axTime, 'Time vs mass (coupled CG is slower at low mass: less rear planting)');
+legend(axTime, 'Location', 'best');
 
-% --- Tile 3: marginal lap-time benefit per kg saved ---
+% --- Tile 3: marginal time benefit per kg saved ---
 axBenefit = nexttile(layout);
 plot(axBenefit, mass, benefitMsPerKg, 'Color', green, 'LineWidth', 1.6, ...
     'DisplayName', 'Marginal gain (fixed CG)');
@@ -926,21 +935,36 @@ styleAxis(axBenefit);
 grid(axBenefit, 'on');
 xlabel(axBenefit, 'Vehicle mass [kg]');
 ylabel(axBenefit, 'Gain [ms / kg saved]');
-title(axBenefit, 'Marginal lap-time gain per kg removed (coupled CG stays higher at low mass)');
+title(axBenefit, 'Marginal time gain per kg removed (coupled CG stays below fixed CG at low mass)');
 legend(axBenefit, 'Location', 'best');
 
-linkaxes([axAccel, axLap, axBenefit], 'x');
+linkaxes([axAccel, axTime, axBenefit], 'x');
 [~, tireName, tireExt] = fileparts(tireFilePath);
 plotTitle = sgtitle(sprintf( ...
-    ['Weight savings vs skidpad: fixed CG vs coupled CG (-%.1f mm/kg, ' ...
-     'anchored at %.0f kg) | %s%s | surface mu %.3f | track %.2f m, ' ...
-     'base CG %.2f m, front %.0f%%, LLTD %.0f%%'], ...
-    1000 * cgDropPerKgSavedM, referenceMassKg, tireName, tireExt, ...
-    surfaceMu, loadTransfer.trackWidth, loadTransfer.cgHeight, ...
-    100 * loadTransfer.staticFrontWeight, ...
-    100 * loadTransfer.frontLoadTransferDistribution), ...
+    ['Weight savings vs acceleration: fixed CG vs coupled CG (-%.1f mm/kg, ' ...
+     'anchored at %.0f kg) | %s%s | surface mu %.3f | %s | wheelbase %.2f ' ...
+     'm, base CG %.2f m, front %.0f%%'], ...
+    1000 * cgDropPerKgSavedM, referenceMassKg, tireName, tireExt, surfaceMu, ...
+    limitModeLabel(powertrain), loadTransfer.wheelbase, ...
+    loadTransfer.cgHeight, 100 * loadTransfer.staticFrontWeight), ...
     'Interpreter', 'none');
 set(plotTitle, 'Color', 'k', 'FontWeight', 'bold');
+end
+
+function cgHeight = coupledCgHeight(massKg, referenceCgHeight, ...
+        referenceMassKg, cgDropPerKgSavedM)
+% Per-kg CG schedule: for every kg of mass saved below ReferenceMassKg the
+% CG drops by CgDropPerKgSavedM (default 1 mm). Anchored at the reference
+% mass so the coupled sweep reproduces the baseline there. CG is not
+% permitted to go negative.
+kgSaved = max(referenceMassKg - massKg(:), 0);
+cgHeight = max(referenceCgHeight - kgSaved .* cgDropPerKgSavedM, 0);
+end
+
+function coupledFile = coupledOutputFile(baseFile)
+% Mirror the base figure path with a _coupled_cg suffix before the extension.
+[folder, name, ext] = fileparts(baseFile);
+coupledFile = fullfile(folder, [name '_coupled_cg' ext]);
 end
 
 function styleAxis(ax)
@@ -991,9 +1015,10 @@ validateattributes(value, {'numeric'}, ...
 tf = true;
 end
 
-function tf = validateSlipAngles(value)
+function tf = validateSlipRatios(value)
 validateattributes(value, {'numeric'}, ...
-    {'vector', 'real', 'finite'}, mfilename, 'EnvelopeSlipAnglesDeg');
+    {'vector', 'real', 'finite', 'nonnegative'}, mfilename, ...
+    'EnvelopeSlipRatios');
 tf = true;
 end
 

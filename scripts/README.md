@@ -41,7 +41,39 @@ the top to switch vehicle configs.
   genuine diminishing returns). Plots three panels (sustained G, lap time,
   marginal lap-time benefit per kg saved). Defaults to the theoretical tire
   and R25 geometry (`CgHeight` 0.256 m, `StaticFrontWeight` 0.5095,
-  `ReferenceMassKg` 264). Saves `exports/weight_savings_skidpad.png`.
+  `ReferenceMassKg` 264). Saves `exports/weight_savings_skidpad.png`, plus
+  `exports/weight_savings_skidpad_coupled_cg.png` comparing the fixed-CG sweep
+  against a coupled-CG sweep where every kg saved also drops the CG 1 mm
+  (anchored at the reference mass): lower CG means less load transfer, so the
+  marginal grip gain stays higher further down the mass range and the knee
+  shifts lighter. The coupled-CG analysis (sweep, report block, figure) is
+  gated by `'CoupledCg', false` (default `true`).
+- **`weight_savings_acceleration.m`** — the longitudinal twin of
+  `weight_savings_skidpad.m`. Sweeps vehicle mass and finds the point of
+  diminishing returns for weight savings in terms of grip-limited FSAE 75 m
+  acceleration time, using a simplified steady-state bicycle longitudinal
+  load-transfer model (RWD, aero neglected, powertrain cap optional and off by
+  default) fed by the active `.tir` file's peak longitudinal-force envelope
+  (pure longitudinal: slip ratio swept, slip angle zero). At each mass the
+  launch acceleration `a_x` is solved by fixed-point iteration on the
+  rear-axle traction equation `a_x = μx(N_rear)·N_rear/m`, with
+  `N_rear = W·(1-w_f) + m·a_x·h_cg/L`. Because the grip limit is speed-
+  independent once aero is off, the 75 m time is the closed form
+  `T = sqrt(2·d/a_x)` — the `1/sqrt(a_x)` compression that creates diminishing
+  returns, mirroring the skidpad's `1/sqrt(a_y)`. The diminishing-returns mass
+  is the Kneedle elbow on the time-vs-mass curve (raw launch g itself has
+  *accelerating* returns to lightness; time is the honest metric). Plots three
+  panels (launch g, 75 m time, marginal time benefit per kg saved). Defaults
+  to the theoretical tire and R25 geometry (`Wheelbase` 1.528 m, `CgHeight`
+  0.256 m, `StaticFrontWeight` 0.5095, `ReferenceMassKg` 264, `DistanceM` 75).
+  Saves `exports/weight_savings_acceleration.png`, plus
+  `exports/weight_savings_acceleration_coupled_cg.png` comparing the fixed-CG
+  sweep against a coupled-CG sweep (CG drops 1 mm per kg saved). Note the sign
+  is *opposite* to skidpad: for RWD grip-limited launch, lowering the CG
+  reduces rear-axle load transfer, so the driven axle is less planted and the
+  coupled curve is *slower* (worse) at low mass — the honest trade-off between
+  a low-CG car and a traction-friendly launch. The coupled-CG analysis is
+  gated by `'CoupledCg', false` (default `true`).
 - **`investigate_lateral_g.m`** — correlation sanity report for lateral
   acceleration. Compares raw MoTeC lateral accel, speed*yaw-rate, steering
   demand, simulated body/tire Ay, and tire-capacity/utilization. Pass
