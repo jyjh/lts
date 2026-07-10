@@ -17,15 +17,19 @@ LONGVL                       = 10
 VXLOW                        = 1                 
 $-------------------------------------------------------------dimension
 [DIMENSION]
+UNLOADED_RADIUS              = 0.2286            
+WIDTH                        = 15.748            
+RIM_RADIUS                   = 0.127             
+RIM_WIDTH                    = 0.1778            
 $--------------------------------------------------operating conditions
 [OPERATING_CONDITIONS]
-NOMPRES                      = 84000             
+NOMPRES                      = 83000             
 $---------------------------------------------------------------inertia
 [INERTIA]
-MASS                         = kg                
+MASS                         = 3.49              
 $--------------------------------------------------------------vertical
 [VERTICAL]
-FNOMIN                       = 1080              
+FNOMIN                       = 1110              
 $------------------------------------------------------------structural
 [STRUCTURAL]
 $---------------------------------------------------------contact patch
@@ -44,15 +48,15 @@ $--------------------------------------------------scaling coefficients
 [SCALING_COEFFICIENTS]
 LFZO                         = 1                 
 LCX                          = 1                 
-LMUX                         = 0.65                 
+LMUX                         = 1                 
 LEX                          = 1                 
 LKX                          = 1                 
 LHX                          = 1                 
 LVX                          = 1                 
 LCY                          = 1                 
-LMUY                         = 0.65                
+LMUY                         = 1.1                 
 LEY                          = 1                 
-LKY                          = 1                 
+LKY                          = 1.1                 
 LHY                          = 1                 
 LVY                          = 1                 
 LTR                          = 1                 
@@ -69,25 +73,25 @@ LMY                          = 1
 LMP                          = 1                 
 $---------------------------------------------longitudinal coefficients
 [LONGITUDINAL_COEFFICIENTS]
-PCX1                         = 1.5               
-PDX1                         = 2.4722            
-PDX2                         = -0.78691          
-PDX3                         = 15                
-PEX1                         = -2.5811e-13       
-PEX2                         = -0.87477          
-PEX3                         = -0.6              
-PEX4                         = 0.9               
-PKX1                         = 42.8193           
-PKX2                         = -0.0001749        
-PKX3                         = -0.49011          
-PHX1                         = 0.00093775        
-PHX2                         = -0.0013228        
-PVX1                         = -0.02779          
-PVX2                         = 0.089387          
-PPX1                         = -1.0177           
-PPX2                         = -1.3151           
-PPX3                         = -0.2709           
-PPX4                         = 0.81854           
+PCX1                         = 1.9               
+PDX1                         = 2                 
+PDX2                         = -0.01             
+PDX3                         = 10                
+PEX1                         = -1                
+PEX2                         = 0.3               
+PEX3                         = 0                 
+PEX4                         = 0                 
+PKX1                         = 20                
+PKX2                         = 10                
+PKX3                         = 0                 
+PHX1                         = 0                 
+PHX2                         = 0                 
+PVX1                         = 0                 
+PVX2                         = 0                 
+PPX1                         = 0                 
+PPX2                         = 0                 
+PPX3                         = 0                 
+PPX4                         = 0                 
 RBX1                         = 5                 
 RBX2                         = 5                 
 RBX3                         = 0                 
@@ -114,33 +118,33 @@ QSX14                        = 0
 PPMX1                        = 0                 
 $--------------------------------------------------lateral coefficients
 [LATERAL_COEFFICIENTS]
-PCY1                         = 1.5               
-PDY1                         = 2.5764            
-PDY2                         = -0.47966          
-PDY3                         = 1.2505            
-PEY1                         = 0.44562           
-PEY2                         = -0.15927          
-PEY3                         = 0.055312          
-PEY4                         = 0           
-PEY5                         = 0           
-PKY1                         = -34.4974          
-PKY2                         = 1.369             
-PKY3                         = 0.60632           
+PCY1                         = 2                 
+PDY1                         = 0.8               
+PDY2                         = -0.05             
+PDY3                         = 0                 
+PEY1                         = -0.8              
+PEY2                         = -0.6              
+PEY3                         = 0.1               
+PEY4                         = 0                 
+PEY5                         = 0                 
+PKY1                         = -20               
+PKY2                         = 2                 
+PKY3                         = 0                 
 PKY4                         = 2                 
-PKY5                         = 83.7446           
-PKY6                         = -4.1081           
-PKY7                         = -0.79828          
-PHY1                         = 0.0036805         
-PHY2                         = 0.0016442         
-PVY1                         = 0.067909          
-PVY2                         = 0.016368          
-PVY3                         = 0.52062           
-PVY4                         = -3.3053           
-PPY1                         = 0.42092           
-PPY2                         = 1.1945            
-PPY3                         = -0.33642          
-PPY4                         = -0.52307          
-PPY5                         = -1.0699           
+PKY5                         = 0                 
+PKY6                         = 0                 
+PKY7                         = 0                 
+PHY1                         = 0                 
+PHY2                         = 0                 
+PVY1                         = 0                 
+PVY2                         = 0                 
+PVY3                         = 0                 
+PVY4                         = 0                 
+PPY1                         = 0.1               
+PPY2                         = 0.1               
+PPY3                         = 0                 
+PPY4                         = 0                 
+PPY5                         = 0                 
 RBY1                         = 5                 
 RBY2                         = 2                 
 RBY3                         = 0.02              

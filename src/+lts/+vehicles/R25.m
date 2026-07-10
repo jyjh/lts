@@ -156,7 +156,7 @@ function cfg = R25()
     % 18x7.5-10 Hoosier until a matching 16x7.5-10 .tir is available, but
     % wheelRadius follows the 16.0 in tire diameter from the spec sheet.
     cfg.tire = struct( ...
-        'tirFile', '43105_18x7.5_10_R25B_7.tir', ... % [verify vs CSV r14 tire size]
+        'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir', ... % [verify vs CSV r14 tire size]
         'wheelInertia', 0.5, ...         % [not in spec sheet] [kg*m^2]
         'relaxationLength', 0.30, ...    % [not in spec sheet] [m]
         'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
