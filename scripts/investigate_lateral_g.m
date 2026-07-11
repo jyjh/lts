@@ -464,7 +464,13 @@ end
 
 try
     values = track.getSurfaceFriction();
-catch
+catch err
+    % Fall back to the caller's default mu, but surface the failure instead
+    % of swallowing it: getSurfaceFriction is part of the Track interface, so
+    % an error here signals a broken track object, not missing metadata.
+    warning('investigate_lateral_g:SurfaceFrictionUnavailable', ...
+        'Could not read track surface friction; keeping default mu. Cause: %s', ...
+        err.message);
     return;
 end
 

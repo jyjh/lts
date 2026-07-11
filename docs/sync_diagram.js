@@ -44,6 +44,7 @@ function main() {
   const checkMode = process.argv.includes('--check');
   const mmdc = getMmdcCommand();
   let allUpToDate = true;
+  let renderFailed = false;
 
   for (const folder of diagramFolders) {
     const folderPath = path.join(docsDir, folder);
@@ -92,6 +93,7 @@ function main() {
         console.error(`❌ Failed to render ${folder}/${mmdFile}`);
         console.error(err.stderr ? err.stderr.toString() : err.message);
         process.exitCode = 1;
+        renderFailed = true;
       }
     }
   }
@@ -102,7 +104,11 @@ function main() {
   }
 
   if (!checkMode) {
-    console.log('\n✅ All diagrams synced.');
+    if (renderFailed) {
+      console.error('\n❌ Some diagrams failed to render. See errors above.');
+    } else {
+      console.log('\n✅ All diagrams synced.');
+    }
   }
 }
 

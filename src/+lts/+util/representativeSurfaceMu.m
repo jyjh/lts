@@ -14,7 +14,12 @@ try
             mu = median(finiteValues);
         end
     end
-catch
-    % Keep the procedural dry-track default when metadata is unavailable.
+catch err
+    % Keep the procedural dry-track default, but surface the failure. Every
+    % lts.components.Track implements getTrackPoints, so an error here means
+    % the track object misbehaved rather than that metadata is simply absent.
+    warning('lts_util_representativeSurfaceMu:SurfaceMuUnavailable', ...
+        'Could not read track surface friction; using default mu=%.2f. Cause: %s', ...
+        mu, err.message);
 end
 end
