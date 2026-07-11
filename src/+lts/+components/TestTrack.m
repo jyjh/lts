@@ -268,8 +268,8 @@ classdef TestTrack < lts.components.WaypointTrack
             % Segment 2: smooth slalom. The envelope ramps the sine wave in
             % and out so heading is continuous at the straight sections.
             u = (0:ds:slalomLen)';
-            rampIn = min(max(u / rampLen, 0), 1);
-            rampOut = min(max((slalomLen - u) / rampLen, 0), 1);
+            rampIn = lts.util.saturate(u / rampLen);
+            rampOut = lts.util.saturate((slalomLen - u) / rampLen);
             smoothIn = rampIn.^2 .* (3 - 2 * rampIn);
             smoothOut = rampOut.^2 .* (3 - 2 * rampOut);
             envelope = smoothIn .* smoothOut;

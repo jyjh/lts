@@ -269,15 +269,15 @@ classdef DriverModel < handle
             steeringCorrection = steeringCorrection + ...
                 obj.computeEdgeSteeringCorrection(ref);
             steer = plannedSteer + steeringCorrection;
-            input.steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
+            input.steer = lts.util.clamp(steer, -obj.maxSteeringAngle, obj.maxSteeringAngle);
             input.targetLateralError = targetLateralError;
 
             correctionUse = abs(steeringCorrection) / max(obj.maxSteeringAngle, eps);
-            correctionUse = max(0, min(1, correctionUse));
+            correctionUse = lts.util.saturate(correctionUse);
             if correctionUse > obj.correctionSlowdownThreshold
                 slowdownUse = (correctionUse - obj.correctionSlowdownThreshold) / ...
                     max(1 - obj.correctionSlowdownThreshold, eps);
-                slowdownUse = max(0, min(1, slowdownUse));
+                slowdownUse = lts.util.saturate(slowdownUse);
                 input.throttle = input.throttle * (1 - 0.40 * slowdownUse);
                 input.brake = max(input.brake, obj.correctionBrakeCommand * slowdownUse);
             end
@@ -287,14 +287,14 @@ classdef DriverModel < handle
                 if margin < obj.edgeSlowdownMargin
                     edgeUse = (obj.edgeSlowdownMargin - margin) / ...
                         max(obj.edgeSlowdownMargin, eps);
-                    edgeUse = max(0, min(1, edgeUse));
+                    edgeUse = lts.util.saturate(edgeUse);
                     input.throttle = input.throttle * (1 - 0.85 * edgeUse);
                     input.brake = max(input.brake, obj.edgeBrakeCommand * edgeUse);
                 end
             end
 
-            input.throttle = max(0, min(1, input.throttle));
-            input.brake = max(0, min(1, input.brake));
+            input.throttle = lts.util.saturate(input.throttle);
+            input.brake = lts.util.saturate(input.brake);
             if state.speed < obj.launchSpeedThreshold && ...
                     obj.isAtOrBelowTargetSpeed(state.speed, input)
                 input.brake = 0;
@@ -328,7 +328,7 @@ classdef DriverModel < handle
             end
 
             slipUse = (maxRearSlip - slipTarget) / max(slipCutoff - slipTarget, eps);
-            slipUse = max(0, min(1, slipUse));
+            slipUse = lts.util.saturate(slipUse);
             input.throttle = input.throttle * (1 - slipUse);
         end
 
@@ -484,8 +484,8 @@ classdef DriverModel < handle
         end
 
         function value = filterSamePedalReduction(obj, pedalName, previousValue, targetValue)
-            targetValue = max(0, min(1, targetValue));
-            previousValue = max(0, min(1, previousValue));
+            targetValue = lts.util.saturate(targetValue);
+            previousValue = lts.util.saturate(previousValue);
 
             if targetValue >= previousValue
                 obj.clearPendingPedalReduction(pedalName);
@@ -563,8 +563,8 @@ classdef DriverModel < handle
         end
 
         function [throttle, brake] = resolvePedalTargets(~, throttle, brake)
-            throttle = max(0, min(1, throttle));
-            brake = max(0, min(1, brake));
+            throttle = lts.util.saturate(throttle);
+            brake = lts.util.saturate(brake);
 
             if brake > 0
                 throttle = 0;
@@ -581,7 +581,7 @@ classdef DriverModel < handle
         end
 
         function steer = clampSteer(obj, steer)
-            steer = max(-obj.maxSteeringAngle, min(obj.maxSteeringAngle, steer));
+            steer = lts.util.clamp(steer, -obj.maxSteeringAngle, obj.maxSteeringAngle);
         end
 
         function steer = slewSteeringCommand(obj, previousSteer, targetSteer)
@@ -593,7 +593,7 @@ classdef DriverModel < handle
             maxDelta = obj.maxSteeringAngle * obj.inputDt / ...
                 max(obj.steeringRampTime, eps);
             delta = targetSteer - previousSteer;
-            delta = max(-maxDelta, min(maxDelta, delta));
+            delta = lts.util.clamp(delta, -maxDelta, maxDelta);
             steer = obj.clampSteer(previousSteer + delta);
         end
 
@@ -605,9 +605,9 @@ classdef DriverModel < handle
 
             maxDelta = obj.inputDt / rampTime;
             delta = targetValue - previousValue;
-            delta = max(-maxDelta, min(maxDelta, delta));
+            delta = lts.util.clamp(delta, -maxDelta, maxDelta);
             value = previousValue + delta;
-            value = max(0, min(1, value));
+            value = lts.util.saturate(value);
         end
 
         function targetLateralError = computeTargetLateralError(obj, ref)
@@ -656,7 +656,7 @@ classdef DriverModel < handle
                 cornerS = arcLen(idx);
             end
             phase = (cornerS - segmentStartS) / segmentLength;
-            phase = max(0, min(1, phase));
+            phase = lts.util.saturate(phase);
             apexPhaseClamped = obj.getClampedApexPhase();
 
             if phase <= apexPhaseClamped
@@ -687,7 +687,7 @@ classdef DriverModel < handle
 
             edgeUse = (obj.edgeSteeringMargin - margin) / ...
                 max(obj.edgeSteeringMargin, eps);
-            edgeUse = max(0, min(1, edgeUse));
+            edgeUse = lts.util.saturate(edgeUse);
 
             % Positive lateral error is left of the reference line, so a
             % negative correction steers back right; negative error is the
@@ -909,7 +909,7 @@ classdef DriverModel < handle
             rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
             frontMu = max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0);
             rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
-            brakeBiasFront = max(0, min(1, vm.brakeBiasFront));
+            brakeBiasFront = lts.util.saturate(vm.brakeBiasFront);
             brakeBiasRear = 1 - brakeBiasFront;
             brakeGripLimit = inf;
             if brakeBiasFront > eps
@@ -935,7 +935,7 @@ classdef DriverModel < handle
                 F_drive_full = max(0, vm.powertrain.computeMaxDriveForce( ...
                     max(state.speed, 0)));
             end
-            driveUsage = max(0, min(1, obj.driveUsage));
+            driveUsage = lts.util.saturate(obj.driveUsage);
             F_traction_rear = driveUsage * rearMu * rearNormalLoad;
             F_drive_full = min(F_drive_full, F_traction_rear);
 
@@ -1011,7 +1011,7 @@ classdef DriverModel < handle
             %   (computePedals) produces gradual [0,1] brake commands. Kept for
             %   any callers that want a direct speed-error -> brake mapping.
             brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = max(0, min(1, brake));
+            brake = lts.util.saturate(brake);
         end
 
         function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
@@ -1060,7 +1060,7 @@ classdef DriverModel < handle
             segmentEndS = arcLen(segmentEnd);
             segmentLength = max(segmentEndS - segmentStartS, eps);
             phase = (s - segmentStartS) / segmentLength;
-            phase = max(0, min(1, phase));
+            phase = lts.util.saturate(phase);
 
             if obj.isSteadyCircleControl()
                 steeringUsageFrac = 1;
@@ -1080,9 +1080,9 @@ classdef DriverModel < handle
         end
 
         function scale = computeLongitudinalCommandScale(obj, steeringUsageFrac)
-            lateralUse = max(0, min(1, abs(steeringUsageFrac)));
+            lateralUse = lts.util.saturate(abs(steeringUsageFrac));
             ellipseScale = sqrt(max(0, 1 - lateralUse^2));
-            reserve = max(0, min(1, obj.minLongitudinalCommandScale));
+            reserve = lts.util.saturate(obj.minLongitudinalCommandScale);
             scale = reserve + (1 - reserve) * ellipseScale;
         end
 
@@ -1168,7 +1168,7 @@ classdef DriverModel < handle
         end
 
         function apexPhaseClamped = getClampedApexPhase(obj)
-            apexPhaseClamped = max(0.05, min(0.95, obj.apexPhase));
+            apexPhaseClamped = lts.util.clamp(obj.apexPhase, 0.05, 0.95);
         end
     end
 end

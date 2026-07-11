@@ -130,8 +130,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             
             % Store inputs
             cornerState.normalForce = normalLoad;
-            ssAlpha = max(-0.3, min(0.3, slipAngle));   % steady-state (kinematic) target
-            ssKappa = max(-1, min(1, slipRatio));
+            ssAlpha = lts.util.clamp(slipAngle, -0.3, 0.3);   % steady-state (kinematic) target
+            ssKappa = lts.util.clamp(slipRatio, -1, 1);
 
             % Apply first-order contact-patch relaxation to obtain the
             % transient (force-producing) slip. With relaxationLength = 0
@@ -339,7 +339,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             end
             
             % Clamp to [-1, 1]
-            kappa = max(-1, min(1, kappa));
+            kappa = lts.util.clamp(kappa, -1, 1);
         end
         
         function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia, longitudinalSpeed)
@@ -424,7 +424,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             R = max(cornerState.wheelRadius, eps);
             I = max(obj.wheelInertia, eps);
             dt = max(dt, 0);
-            slipAngle = max(-0.3, min(0.3, slipAngle));
+            slipAngle = lts.util.clamp(slipAngle, -0.3, 0.3);
 
             finalFx = 0;
             finalFy = 0;
@@ -520,9 +520,9 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             relaxationMode = obj.resolveRelaxationMode(dt, relaxationMode);
 
             Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
-            ssAlpha = max(-0.3, min(0.3, ...
-                [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR]));
-            ssKappa = max(-1, min(1, [kappa_FL; kappa_FR; kappa_RL; kappa_RR]));
+            ssAlpha = lts.util.clamp(...
+                [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR], -0.3, 0.3);
+            ssKappa = lts.util.clamp([kappa_FL; kappa_FR; kappa_RL; kappa_RR], -1, 1);
             gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
             longSpeed = longSpeeds(:);
             surfaceScale = obj.expandSurfaceScale(surfaceMu, 4);
@@ -563,7 +563,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 alpha = ssAlpha - (ssAlpha - previousAlpha) .* decay;
                 kappa = ssKappa - (ssKappa - previousKappa) .* decay;
                 alpha = obj.evaluationSlipAngle(alpha);
-                kappa = max(-1, min(1, kappa));
+                kappa = lts.util.clamp(kappa, -1, 1);
             end
             for i = 1:4
                 states{i}.normalForce = Fz(i);
@@ -712,7 +712,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             kappa = ssKappa - (ssKappa - cornerState.slipRatio) * decay;
 
             alpha = obj.evaluationSlipAngle(alpha);
-            kappa = max(-1, min(1, kappa));
+            kappa = lts.util.clamp(kappa, -1, 1);
         end
 
         function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)
@@ -790,7 +790,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             else
                 kappa = rawKappa;
             end
-            kappa = max(-1, min(1, kappa));
+            kappa = lts.util.clamp(kappa, -1, 1);
         end
 
         function brakeSign = computeBrakeTorqueSign(~, omega, longitudinalSpeed, driveTorque)
@@ -824,8 +824,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 computePeakMu = true;
             end
 
-            alpha = max(-0.3, min(0.3, alpha));
-            kappa = max(-1, min(1, kappa));
+            alpha = lts.util.clamp(alpha, -0.3, 0.3);
+            kappa = lts.util.clamp(kappa, -1, 1);
             P = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
             Vx = obj.computeMFevalSpeed(longitudinalSpeed);
@@ -908,7 +908,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if isempty(scale) || ~isfinite(scale) || scale <= 0
                 scale = 1.0;
             end
-            alphaEval = max(-0.3, min(0.3, alpha .* scale));
+            alphaEval = lts.util.clamp(alpha .* scale, -0.3, 0.3);
         end
 
         function scale = computeSurfaceScale(obj, surfaceMu)

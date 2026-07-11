@@ -127,13 +127,13 @@ classdef DriverInputPlanner
             end
             obj.cachedRollingResistanceCoeff = max(obj.cachedRollingResistanceCoeff, 0);
             obj.edgeSlowdownMargin = max(0, obj.edgeSlowdownMargin);
-            obj.racingLineApexPhase = max(0.1, min(0.9, obj.racingLineApexPhase));
-            obj.cachedCorneringUsage = max(0, min(1, obj.cachedCorneringUsage));
-            obj.cachedBrakingUsage = max(0, min(1, obj.cachedBrakingUsage));
-            obj.cachedDriveUsage = max(0, min(1, obj.cachedDriveUsage));
-            obj.cachedTrailBrakeReserve = max(0, min(1, obj.cachedTrailBrakeReserve));
-            obj.cachedTractionCircleReserve = max(0, min(1, obj.cachedTractionCircleReserve));
-            obj.cachedCorneringGripMargin = max(1e-3, min(1, obj.cachedCorneringGripMargin));
+            obj.racingLineApexPhase = lts.util.clamp(obj.racingLineApexPhase, 0.1, 0.9);
+            obj.cachedCorneringUsage = lts.util.saturate(obj.cachedCorneringUsage);
+            obj.cachedBrakingUsage = lts.util.saturate(obj.cachedBrakingUsage);
+            obj.cachedDriveUsage = lts.util.saturate(obj.cachedDriveUsage);
+            obj.cachedTrailBrakeReserve = lts.util.saturate(obj.cachedTrailBrakeReserve);
+            obj.cachedTractionCircleReserve = lts.util.saturate(obj.cachedTractionCircleReserve);
+            obj.cachedCorneringGripMargin = lts.util.clamp(obj.cachedCorneringGripMargin, 1e-3, 1);
         end
 
         function profile = buildOpenLoopProfile(obj, initialState, trackData)
@@ -225,7 +225,7 @@ classdef DriverInputPlanner
 
             maxSteer = obj.maxSteeringAngle;
             steerRef = atan(vm.wheelbase * line.lineCurvature(:));
-            steerRef = max(-maxSteer, min(maxSteer, steerRef));
+            steerRef = lts.util.clamp(steerRef, -maxSteer, maxSteer);
 
             % Physics-based pedal map: each planned accel maps to partial
             % throttle, coast, or gradual brake based on the actual force
@@ -296,8 +296,8 @@ classdef DriverInputPlanner
                 'lineS', obj.interpProfileField(profile, 'lineS', idx0, idx1, frac, NaN), ...
                 'speedError', NaN);
 
-            input.throttle = max(0, min(1, input.throttle));
-            input.brake = max(0, min(1, input.brake));
+            input.throttle = lts.util.saturate(input.throttle);
+            input.brake = lts.util.saturate(input.brake);
 
             if nargin >= 4 && isfinite(actualSpeed)
                 input.speedError = actualSpeed - input.targetSpeed;
@@ -357,8 +357,8 @@ classdef DriverInputPlanner
                 end
             end
 
-            input.throttle = max(0, min(1, input.throttle));
-            input.brake = max(0, min(1, input.brake));
+            input.throttle = lts.util.saturate(input.throttle);
+            input.brake = lts.util.saturate(input.brake);
         end
 
         function line = buildRacingLine(obj, trackData)
@@ -412,7 +412,7 @@ classdef DriverInputPlanner
 
             targetOffset = obj.smoothByDistance( ...
                 targetOffset, centerS, obj.racingLineOffsetSmoothDistance);
-            targetOffset = max(-offsetLimit, min(offsetLimit, targetOffset));
+            targetOffset = lts.util.clamp(targetOffset, -offsetLimit, offsetLimit);
 
             heading = unwrap(centerHeading);
             normalX = -sin(heading);
@@ -478,7 +478,7 @@ classdef DriverInputPlanner
 
         function offset = racingLineOffsetAtPhase(obj, phase, turnSign, offsetLimit)
             apexPhase = obj.racingLineApexPhase;
-            phase = max(0, min(1, phase(:)));
+            phase = lts.util.saturate(phase(:));
             offset = zeros(size(phase));
 
             entry = phase <= apexPhase;
@@ -576,7 +576,7 @@ classdef DriverInputPlanner
                 frac = 0;
             else
                 frac = (s - sProfile(idx0)) / ds;
-                frac = max(0, min(1, frac));
+                frac = lts.util.saturate(frac);
             end
         end
 
@@ -667,8 +667,8 @@ classdef DriverInputPlanner
             margin = corneringGripMargin;
             latUse = min(ay / ayMax / margin, 1);
             ellipse = sqrt(max(0, 1 - latUse^2));
-            driveScale = max(0, min(1, tractionReserve)) + (1 - max(0, min(1, tractionReserve))) * ellipse;
-            brakeScale = max(0, min(1, trailBrakeReserve)) + (1 - max(0, min(1, trailBrakeReserve))) * ellipse;
+            driveScale = lts.util.saturate(tractionReserve) + (1 - lts.util.saturate(tractionReserve)) * ellipse;
+            brakeScale = lts.util.saturate(trailBrakeReserve) + (1 - lts.util.saturate(trailBrakeReserve)) * ellipse;
 
             % --- Forward drive capability (speed- and load-dependent) ---
             % Full-throttle wheel force from the powertrain map, capped by the
@@ -769,7 +769,7 @@ classdef DriverInputPlanner
                 else
                     % Hydraulic brake fills the gap beyond coast, gradually.
                     brake = (requiredDecel - coastDecel) / brakeForceAccel;
-                    brake = max(0, min(1, brake));
+                    brake = lts.util.saturate(brake);
                 end
             elseif F_drive_full <= 0
                 % No tractive capability recorded (e.g. at/over rev limit) but
@@ -778,7 +778,7 @@ classdef DriverInputPlanner
                 throttle = 1;
             else
                 throttle = F_req / F_drive_full;
-                throttle = max(0, min(1, throttle));
+                throttle = lts.util.saturate(throttle);
                 % Negligible throttle (below a few % of full) -> coast.
                 if throttle < coastFraction
                     throttle = 0;

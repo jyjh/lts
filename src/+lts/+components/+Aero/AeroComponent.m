@@ -88,7 +88,7 @@ classdef (Abstract) AeroComponent
             end
 
             frontFrac = (b + xi) / wb;
-            frontFrac = max(0, min(1, frontFrac));
+            frontFrac = lts.util.saturate(frontFrac);
 
             forces.Fz_front = F_downforce * frontFrac;
             forces.Fz_rear = F_downforce * (1 - frontFrac);

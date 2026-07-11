@@ -1192,7 +1192,7 @@ classdef Simulator < handle
             elseif trackLen > 0
                 progress = state.s / trackLen;
             end
-            progress = max(0, min(1, progress));
+            progress = lts.util.saturate(progress);
         end
 
         function text = replayProgressText(~, input)
@@ -1315,7 +1315,7 @@ classdef Simulator < handle
                     isfinite(vm.powertrain.regenEfficiency)
                 efficiency = vm.powertrain.regenEfficiency;
             end
-            efficiency = max(0, min(1, efficiency));
+            efficiency = lts.util.saturate(efficiency);
         end
 
         function motorTorqueRequestNm = selectDirectMotorTorqueRequest(~, motorTorqueCommandNm, input)
@@ -1753,8 +1753,8 @@ classdef Simulator < handle
                 input.steer = 0;
             end
 
-            input.throttle = max(0, min(1, input.throttle));
-            input.brake = max(0, min(1, input.brake));
+            input.throttle = lts.util.saturate(input.throttle);
+            input.brake = lts.util.saturate(input.brake);
 
             if obj.enforcePedalExclusivity
                 if input.brake > 0
@@ -1766,7 +1766,7 @@ classdef Simulator < handle
 
             maxSteer = obj.getMaxSteeringAngle();
             if isfinite(maxSteer)
-                input.steer = max(-maxSteer, min(maxSteer, input.steer));
+                input.steer = lts.util.clamp(input.steer, -maxSteer, maxSteer);
             end
             if nargin >= 3 && ~isempty(state)
                 previousSteer = state.steer;
@@ -1774,13 +1774,13 @@ classdef Simulator < handle
                     previousSteer = 0;
                 end
                 if isfinite(maxSteer)
-                    previousSteer = max(-maxSteer, min(maxSteer, previousSteer));
+                    previousSteer = lts.util.clamp(previousSteer, -maxSteer, maxSteer);
                 end
                 rampTime = obj.getSteeringRampTime();
                 if obj.applySteeringSlew && rampTime > 0 && isfinite(rampTime) && isfinite(maxSteer)
                     maxDelta = maxSteer * obj.dt / max(rampTime, eps);
                     delta = input.steer - previousSteer;
-                    delta = max(-maxDelta, min(maxDelta, delta));
+                    delta = lts.util.clamp(delta, -maxDelta, maxDelta);
                     input.steer = previousSteer + delta;
                 end
             end
@@ -2216,7 +2216,7 @@ classdef Simulator < handle
             else
                 kappa = rawKappa;
             end
-            kappa = max(-1, min(1, kappa));
+            kappa = lts.util.clamp(kappa, -1, 1);
         end
 
         function utilization = computeTireUtilization(~, cornerState)

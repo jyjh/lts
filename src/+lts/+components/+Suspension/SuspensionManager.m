@@ -485,7 +485,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             % baseline.
 
             if ~isnan(obj.rollStiffnessOverride)
-                frac = min(1, max(0, obj.rollStiffnessOverride));
+                frac = lts.util.saturate(obj.rollStiffnessOverride);
                 return;
             end
 

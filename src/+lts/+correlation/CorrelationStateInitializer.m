@@ -102,7 +102,7 @@ classdef CorrelationStateInitializer
                 rearArm = lts.correlation.CorrelationStateInitializer.rearAxleArm(vehicleManager);
                 vyEstimate = yawRateSeed * rearArm;
                 maxVy = 0.30 * max(speed, eps);
-                vyEstimate = max(-maxVy, min(maxVy, vyEstimate));
+                vyEstimate = lts.util.clamp(vyEstimate, -maxVy, maxVy);
                 if isfinite(vyEstimate) && abs(vyEstimate) > eps
                     vy = vyEstimate;
                     vx = sqrt(max(speed^2 - vy^2, 0));
@@ -378,7 +378,7 @@ classdef CorrelationStateInitializer
             end
             phi = A \ [rollMomentF; rollMomentR];
             maxRoll = deg2rad(10);
-            phi = max(-maxRoll, min(maxRoll, phi));
+            phi = lts.util.clamp(phi, -maxRoll, maxRoll);
 
             chassis.state.frontRollAngle = phi(1);
             chassis.state.rearRollAngle = phi(2);
@@ -542,7 +542,7 @@ classdef CorrelationStateInitializer
 
         function state = setStateBodySlip(state, beta)
             speed = max(state.speed, 0);
-            beta = max(-0.25, min(0.25, beta));
+            beta = lts.util.clamp(beta, -0.25, 0.25);
             state.vx = speed * cos(beta);
             state.vy = speed * sin(beta);
             state.bodySlipAngle = beta;
@@ -620,7 +620,7 @@ classdef CorrelationStateInitializer
             longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
             latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
             alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
-            alpha = max(-0.3, min(0.3, alpha));
+            alpha = lts.util.clamp(alpha, -0.3, 0.3);
 
             wheelSpeed = tireState.angularVelocity * tireState.wheelRadius;
             kappa = lts.correlation.CorrelationStateInitializer.slipRatioFromWheelSpeed( ...
@@ -671,7 +671,7 @@ classdef CorrelationStateInitializer
         function kappa = slipRatioFromWheelSpeed(wheelSpeed, longSpeed)
             denom = max(abs(wheelSpeed), abs(longSpeed));
             kappa = (wheelSpeed - longSpeed) / max(denom, 1.0);
-            kappa = max(-1, min(1, kappa));
+            kappa = lts.util.clamp(kappa, -1, 1);
         end
 
         function kin = cornerKinematics(vehicleManager, steer)

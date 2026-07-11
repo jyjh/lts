@@ -65,7 +65,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 matFilePath = fullfile(classDir, 'EMRAX228LC Single_3.36.mat');
             end
             if nargin >= 2
-                obj.drivetrainEfficiency = max(0, min(1, drivetrainEfficiency));
+                obj.drivetrainEfficiency = lts.util.saturate(drivetrainEfficiency);
             end
             if nargin >= 3 && ~isempty(motorRotorInertia)
                 obj.motorRotorInertia = max(0, motorRotorInertia);
@@ -175,7 +175,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             % Once wheel dynamics are active, motorRPM comes from the rear
             % wheels through updateStateFromDrivenWheels, so wheelspin and the
             % differential affect the rev limiter.
-            throttle = max(0, min(1, throttle));
+            throttle = lts.util.saturate(throttle);
             effectiveThrottle = obj.applyThrottleDeadband(throttle);
             torqueRequest = obj.mapThrottleToTorqueRequest(effectiveThrottle);
             
@@ -332,7 +332,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 if ~isfinite(threshold)
                     threshold = Inf;
                 end
-                if throttle <= max(0, min(1, threshold))
+                if throttle <= lts.util.saturate(threshold)
                     T = T - motorSign * obj.motoringDragTorque * obj.totalGearRatio;
                 end
             end
@@ -354,7 +354,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             if ~isfinite(eff)
                 eff = obj.drivetrainEfficiency;
             end
-            eff = max(0, min(1, eff));
+            eff = lts.util.saturate(eff);
         end
     end
     
@@ -364,7 +364,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             if ~isfinite(deadband)
                 deadband = 0;
             end
-            deadband = max(0, min(0.99, deadband));
+            deadband = lts.util.clamp(deadband, 0, 0.99);
             if throttle <= deadband
                 effectiveThrottle = 0;
             else
@@ -378,7 +378,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             % rather than output power directly. The RPM map remains the
             % full-throttle capability envelope; this curve shapes how much
             % of that envelope a partial pedal command requests.
-            effectiveThrottle = max(0, min(1, effectiveThrottle));
+            effectiveThrottle = lts.util.saturate(effectiveThrottle);
             x = obj.throttleMapInput(:);
             y = obj.throttleMapOutput(:);
 
@@ -392,7 +392,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             end
 
             torqueRequest = interp1(x, y, effectiveThrottle, 'linear');
-            torqueRequest = max(0, min(1, torqueRequest));
+            torqueRequest = lts.util.saturate(torqueRequest);
         end
 
         function rpm = vehicleSpeedToMotorRPM(obj, speed)
@@ -425,7 +425,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             end
             % Constant power: T(rpm) = T_anchor * rpmFalloffStartRPM / rpm.
             multiplier = obj.rpmFalloffStartRPM / motorRPM;
-            multiplier = max(0, min(1, multiplier));
+            multiplier = lts.util.saturate(multiplier);
         end
         
         function active = isRPMLimitActive(obj, motorRPM)

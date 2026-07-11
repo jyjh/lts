@@ -189,12 +189,12 @@ classdef SuspensionGeometry
             axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
             if strcmp(axle, 'rear')
                 wheelSteer = obj.rearSteerRatio * steerInput;
-                wheelSteer = obj.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+                wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
                 return;
             end
 
             meanSteer = steerInput / max(obj.steeringRatio, eps);
-            meanSteer = obj.clamp(meanSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+            meanSteer = lts.util.clamp(meanSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
             if abs(meanSteer) < eps || obj.ackermann <= 0
                 wheelSteer = meanSteer;
                 return;
@@ -207,7 +207,7 @@ classdef SuspensionGeometry
 
             idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
             idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = obj.clamp(obj.ackermann, 0, 1);
+            ackermannBlend = lts.util.saturate(obj.ackermann);
 
             isLeftSide = strcmp(upper(corner), 'FL');
             isInside = (turnSign > 0 && isLeftSide) || (turnSign < 0 && ~isLeftSide);
@@ -218,20 +218,20 @@ classdef SuspensionGeometry
             end
 
             wheelSteer = turnSign * (absSteer + ackermannBlend * (target - absSteer));
-            wheelSteer = obj.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+            wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
         function wheelSteer = computeWheelSteerFast(obj, isFront, isLeft, steerInput)
             if ~isFront
                 wheelSteer = obj.rearSteerRatio * steerInput;
-                wheelSteer = max(-obj.maxWheelSteerAngle, ...
-                    min(obj.maxWheelSteerAngle, wheelSteer));
+                wheelSteer = lts.util.clamp(wheelSteer, ...
+                    -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
                 return;
             end
 
             meanSteer = steerInput / max(obj.steeringRatio, eps);
-            meanSteer = max(-obj.maxWheelSteerAngle, ...
-                min(obj.maxWheelSteerAngle, meanSteer));
+            meanSteer = lts.util.clamp(meanSteer, ...
+                -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
             if abs(meanSteer) < eps || obj.ackermann <= 0
                 wheelSteer = meanSteer;
                 return;
@@ -244,7 +244,7 @@ classdef SuspensionGeometry
 
             idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
             idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = max(0, min(1, obj.ackermann));
+            ackermannBlend = lts.util.saturate(obj.ackermann);
 
             isInside = (turnSign > 0 && isLeft) || (turnSign < 0 && ~isLeft);
             if isInside
@@ -254,8 +254,8 @@ classdef SuspensionGeometry
             end
 
             wheelSteer = turnSign * (absSteer + ackermannBlend * (target - absSteer));
-            wheelSteer = max(-obj.maxWheelSteerAngle, ...
-                min(obj.maxWheelSteerAngle, wheelSteer));
+            wheelSteer = lts.util.clamp(wheelSteer, ...
+                -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
         function [x, y] = computeWheelPosition(obj, corner)
@@ -500,8 +500,5 @@ classdef SuspensionGeometry
             end
         end
 
-        function value = clamp(value, lower, upper)
-            value = max(lower, min(upper, value));
-        end
     end
 end
