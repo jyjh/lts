@@ -401,7 +401,7 @@ classdef CorrelationReplayProfile
 
         function values = clamp01(~, values)
             values(~isfinite(values)) = 0;
-            values = max(0, min(1, values));
+            values = lts.util.saturate(values);
         end
 
         function input = sampleAt(obj, axis, cache, query)

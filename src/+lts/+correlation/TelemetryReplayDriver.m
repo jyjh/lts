@@ -50,8 +50,8 @@ classdef TelemetryReplayDriver < handle
             if obj.replayDomainIsTime
                 input = obj.profile.sampleByTime(state.time);
                 input.replayDomain = 'time';
-                input.replayProgress = max(0, min(1, ...
-                    input.sourceTime / obj.replayDurationDenom));
+                input.replayProgress = lts.util.saturate(...
+                    input.sourceTime / obj.replayDurationDenom);
             else
                 s = state.s;
                 if nargin >= 3 && isstruct(observation) && ...
@@ -60,8 +60,8 @@ classdef TelemetryReplayDriver < handle
                 end
                 input = obj.profile.sampleByDistance(s);
                 input.replayDomain = 'distance';
-                input.replayProgress = max(0, min(1, ...
-                    input.sourceDistance / obj.replayDistanceDenom));
+                input.replayProgress = lts.util.saturate(...
+                    input.sourceDistance / obj.replayDistanceDenom);
             end
         end
     end

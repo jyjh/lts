@@ -3,7 +3,7 @@ classdef BrakeForcePolicy
 
     methods (Static)
         function brakeForces = compute(input, totalNormalLoad, vehicleManager, brakeMode)
-            brakeCommand = max(0, min(1, lts.util.fieldOr(input, 'brake', 0)));
+            brakeCommand = lts.util.saturate(lts.util.fieldOr(input, 'brake', 0));
             totalNormalLoad = max(0, totalNormalLoad);
             brakeForceCapacity = max(0, vehicleManager.brakeForceCoefficient) * totalNormalLoad;
             mode = lts.simulation.BrakeForcePolicy.validateMode(brakeMode);
@@ -52,7 +52,7 @@ classdef BrakeForcePolicy
                 return;
             end
 
-            brakeBiasFront = max(0, min(1, vehicleManager.brakeBiasFront));
+            brakeBiasFront = lts.util.saturate(vehicleManager.brakeBiasFront);
             brakeForceMag = brakeCommand * brakeForceCapacity;
             brakeForces.frontForce = brakeForceMag * brakeBiasFront;
             brakeForces.rearForce = brakeForceMag * (1 - brakeBiasFront);

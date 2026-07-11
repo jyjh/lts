@@ -113,7 +113,7 @@ classdef AeroManager < lts.components.Aero.AeroComponent
                 
                 % Resolve downforce to axles via moment balance about CG
                 frontFrac = (b + xi) / wb;
-                frontFrac = max(0, min(1, frontFrac));
+                frontFrac = lts.util.saturate(frontFrac);
                 
                 Fz_front = Fz_front + Fi * frontFrac;
                 Fz_rear  = Fz_rear  + Fi * (1 - frontFrac);

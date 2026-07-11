@@ -124,7 +124,7 @@ classdef PowertrainState < handle
             if nargin < 7
                 rpmLimitActive = false;
             end
-            obj.throttle = max(0, min(1, throttle));
+            obj.throttle = lts.util.saturate(throttle);
             obj.motorTorque = motorTorque;
             obj.requestedMotorTorque = motorTorque;
             obj.motorTorquePowerLimitNm = NaN;

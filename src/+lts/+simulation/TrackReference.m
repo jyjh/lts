@@ -240,7 +240,7 @@ classdef TrackReference
             qy = y - p0(:, 2);
             t = (qx .* v(:, 1) + qy .* v(:, 2)) .* invLen2(:);
             t(invLen2(:) <= 0) = 0;
-            t = max(0, min(1, t));
+            t = lts.util.saturate(t);
 
             projX = p0(:, 1) + t .* v(:, 1);
             projY = p0(:, 2) + t .* v(:, 2);
