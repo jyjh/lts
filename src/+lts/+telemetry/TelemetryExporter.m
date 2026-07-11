@@ -126,7 +126,7 @@ classdef TelemetryExporter
             args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--long_comment', parser.Results.LongComment);
             args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--short_comment', parser.Results.ShortComment);
 
-            command = strjoin([{char(parser.Results.PythonCommand)} args], ' ');
+            command = strjoin([{lts.util.shellQuote(parser.Results.PythonCommand)} args], ' ');
             [status, output] = system(command);
             if status ~= 0
                 error('lts_telemetry_TelemetryExporter:MoTeCConversionFailed', ...

@@ -16,7 +16,7 @@
 
 const fs = require('fs');
 const path = require('path');
-const { execSync } = require('child_process');
+const { execFileSync } = require('child_process');
 
 const docsDir = path.join(__dirname);
 
@@ -33,10 +33,10 @@ const diagramFolders = [
  */
 function getMmdcCommand() {
   try {
-    execSync('mmdc --version', { stdio: 'pipe' });
-    return 'mmdc';
+    execFileSync('mmdc', ['--version'], { stdio: 'pipe' });
+    return ['mmdc'];
   } catch {
-    return 'npx --yes @mermaid-js/mermaid-cli';
+    return ['npx', '--yes', '@mermaid-js/mermaid-cli'];
   }
 }
 
@@ -83,8 +83,10 @@ function main() {
       // Generate SVG
       console.log(`🔄 Rendering ${folder}/${mmdFile} → ${svgName}...`);
       try {
-        execSync(
-          `${mmdc} -i "${mmdPath}" -o "${svgPath}" --backgroundColor transparent`,
+        const [mmdcBin, ...mmdcArgs] = mmdc;
+        execFileSync(
+          mmdcBin,
+          [...mmdcArgs, '-i', mmdPath, '-o', svgPath, '--backgroundColor', 'transparent'],
           { stdio: 'pipe', cwd: docsDir }
         );
         console.log(`✅ Generated: ${folder}/${svgName}`);
