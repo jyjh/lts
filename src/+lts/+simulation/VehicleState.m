@@ -209,16 +209,62 @@ classdef VehicleState
             obj.lateralError = lateralError;
             obj.mu = mu;
 
-            obj.pitchAngle = obj.computePitch();
-            obj.rollAngle = obj.computeRoll();
-            obj.rollRate = obj.computeRollRate();
-            obj.frontRollAngle = obj.computeFrontRoll();
-            obj.rearRollAngle  = obj.computeRearRoll();
-            obj.frontRollRate = obj.computeFrontRollRate();
-            obj.rearRollRate  = obj.computeRearRollRate();
-            obj.twistAngle     = obj.computeTwist();
-            obj.twistRate      = obj.computeTwistRate();
-            obj.rideHeight = obj.computeRideHeight();
+            % P3-A: Resolve vm/chassis once and read all attitude fields in a
+            % single branch instead of 10 separate method calls (each of which
+            % repeated the same isempty/isa type checks).
+            vm = obj.vehicleManager;
+            if ~isempty(vm) && ~isempty(vm.chassis) && ...
+                    isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
+                chassis = vm.chassis;
+                obj.pitchAngle = chassis.getPitchAngle();
+                obj.rollAngle  = chassis.getRollAngle();
+                obj.rideHeight = -chassis.getHeave();
+                % Roll rate / twist: available on SimpleChassis and any chassis
+                % that exposes getRollRate / getFrontRollAngle / getTwistAngle.
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getRollRate')
+                    obj.rollRate      = chassis.getRollRate();
+                    obj.frontRollRate = chassis.getFrontRollRate();
+                    obj.rearRollRate  = chassis.getRearRollRate();
+                else
+                    obj.rollRate      = 0;
+                    obj.frontRollRate = 0;
+                    obj.rearRollRate  = 0;
+                end
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getFrontRollAngle')
+                    obj.frontRollAngle = chassis.getFrontRollAngle();
+                    obj.rearRollAngle  = chassis.getRearRollAngle();
+                else
+                    obj.frontRollAngle = obj.rollAngle;
+                    obj.rearRollAngle  = obj.rollAngle;
+                end
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getTwistAngle')
+                    obj.twistAngle = chassis.getTwistAngle();
+                    obj.twistRate  = chassis.getTwistRate();
+                else
+                    obj.twistAngle = obj.frontRollAngle - obj.rearRollAngle;
+                    obj.twistRate  = obj.frontRollRate  - obj.rearRollRate;
+                end
+            else
+                % No chassis: check suspension for pitch; zero everything else.
+                if ~isempty(vm) && ~isempty(vm.suspension) && ...
+                        ismethod(vm.suspension, 'computePitchAngle')
+                    obj.pitchAngle = vm.suspension.computePitchAngle();
+                else
+                    obj.pitchAngle = 0;
+                end
+                obj.rollAngle      = 0;
+                obj.rollRate       = 0;
+                obj.frontRollAngle = 0;
+                obj.rearRollAngle  = 0;
+                obj.frontRollRate  = 0;
+                obj.rearRollRate   = 0;
+                obj.twistAngle     = 0;
+                obj.twistRate      = 0;
+                obj.rideHeight     = 0;
+            end
             obj.time = obj.time + dt;
         end
         

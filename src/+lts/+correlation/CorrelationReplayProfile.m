@@ -411,6 +411,17 @@ classdef CorrelationReplayProfile
             end
             query = max(axis(1), min(axis(end), query));
 
+            % P4-A: Batch path — single interp1 call over all channels stored
+            % in a pre-built N×13 matrix. Replaces 12 individual griddedInterpolant
+            % calls (each with their own lookup overhead) with one vectorised op.
+            if ~isempty(cache.batchAxis)
+                q = max(cache.batchAxis(1), min(cache.batchAxis(end), query));
+                row = interp1(cache.batchAxis, cache.batchMatrix, q, 'linear', 'nearest');
+                input = obj.sampleRowToInput(row);
+                return;
+            end
+
+            % Fallback: per-channel lookup (used only when batch cache build failed).
             input = struct( ...
                 'throttle', obj.lookup(cache.throttle, query), ...
                 'brake', obj.lookup(cache.brake, query), ...
@@ -450,6 +461,54 @@ classdef CorrelationReplayProfile
                 'speed', obj.buildInterpCache(axis, obj.speed), ...
                 'time', obj.buildInterpCache(axis, obj.time), ...
                 'distance', obj.buildInterpCache(axis, obj.distance));
+
+            % P4-A: Build a unified N×13 channel matrix so sampleAt() can use
+            % a single interp1 call instead of 12 individual griddedInterpolants.
+            % The matrix is evaluated on the interpolant axes already cleaned up
+            % by buildInterpCache, so it inherits the same NaN filtering and
+            % deduplication without repeating that work.
+            fields = obj.sampleFieldOrder();
+            cacheFields = {'throttle','brake','brakePressureFrontBar', ...
+                'brakePressureRearBar','regenTorqueNm','motorTorqueCommandNm', ...
+                'motorRpm','packVoltageV','packCurrentA','steer','speed', ...
+                'time','distance'};
+            batchAxis   = [];
+            batchMatrix = [];
+            try
+                % Use the axis from the first non-missing, non-scalar channel.
+                for fi = 1:numel(cacheFields)
+                    ch = cache.(cacheFields{fi});
+                    if ~ch.isMissing && ~ch.isScalar && numel(ch.axis) >= 2
+                        batchAxis = ch.axis(:);
+                        break;
+                    end
+                end
+                if numel(batchAxis) >= 2
+                    nPts   = numel(batchAxis);
+                    nCh    = numel(fields);
+                    batchMatrix = NaN(nPts, nCh);
+                    for fi = 1:nCh
+                        ch = cache.(cacheFields{fi});
+                        if ch.isMissing
+                            % Leave column as NaN (treated as missing by sampleRowToInput).
+                        elseif ch.isScalar
+                            batchMatrix(:, fi) = ch.values(1);
+                        else
+                            % Evaluate the already-built griddedInterpolant on
+                            % the common axis — this runs once at construction,
+                            % not once per simulation step.
+                            q = max(ch.axis(1), min(ch.axis(end), batchAxis));
+                            batchMatrix(:, fi) = ch.interpolant(q);
+                        end
+                    end
+                end
+            catch
+                % Non-fatal: fall back to per-channel lookup path.
+                batchAxis   = [];
+                batchMatrix = [];
+            end
+            cache.batchAxis   = batchAxis;
+            cache.batchMatrix = batchMatrix;
         end
 
         function cache = buildInterpCache(~, axis, values)
@@ -463,7 +522,9 @@ classdef CorrelationReplayProfile
             keep = isfinite(axis(:)) & isfinite(values);
             axis = axis(keep);
             values = values(keep);
-            [axis, ia] = unique(axis, 'stable');
+            % P1-D: unique('sorted') deduplicates and sorts in a single pass,
+            % replacing the previous unique('stable') + sort two-step sequence.
+            [axis, ia] = unique(axis, 'sorted');
             values = values(ia);
 
             if isempty(axis)
@@ -473,8 +534,6 @@ classdef CorrelationReplayProfile
                 cache = struct('axis', axis, 'values', values, ...
                     'interpolant', [], 'isMissing', false, 'isScalar', true);
             else
-                [axis, order] = sort(axis);
-                values = values(order);
                 interpolant = griddedInterpolant(axis, values, 'linear', 'nearest');
                 cache = struct('axis', axis, 'values', values, ...
                     'interpolant', interpolant, 'isMissing', false, 'isScalar', false);

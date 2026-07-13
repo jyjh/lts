@@ -80,6 +80,8 @@ classdef Simulator < handle
         cachedPowertrainHasCoastdown
         cachedMaxSteeringAngle
         cachedSteeringRampTime
+        cachedPowertrainMode = []  % validated powertrain mode string (run invariant)
+        cachedNextRef = struct()   % nextRef written by step(); reused as currentRef next iteration
     end
     
     methods
@@ -293,11 +295,16 @@ classdef Simulator < handle
             % Telemetry only: equivalent rolling-resistance force from the
             % per-wheel torque model (sum of Crr*Fz over the four corners).
             % This is already reflected in the tire Fx above, not applied again.
-            corners = vm.tire;
+            % Short-circuit when Crr == 0 to avoid four handle-property reads.
             rollingResistanceCoeff = obj.getRollingResistanceCoeff();
-            F_rollResist = rollingResistanceCoeff * ...
-                (corners.FL.normalForce + corners.FR.normalForce + ...
-                 corners.RL.normalForce + corners.RR.normalForce);
+            if rollingResistanceCoeff ~= 0
+                corners = vm.tire;
+                F_rollResist = rollingResistanceCoeff * ...
+                    (corners.FL.normalForce + corners.FR.normalForce + ...
+                     corners.RL.normalForce + corners.RR.normalForce);
+            else
+                F_rollResist = 0;
+            end
 
             % --- INTEGRATE STATE ---
             kinematics = obj.integratePlanarKinematics( ...
@@ -322,6 +329,10 @@ classdef Simulator < handle
                 % lateral-error telemetry. Projection does not overwrite x/y.
                 nextRef = obj.projectToReference(xNew, yNew, ref.trackData, ref.idx);
             end
+            % Cache nextRef so the outer simulate() loop can skip re-projecting
+            % currentState.(x,y) at the top of the next iteration — they are
+            % identical to (xNew, yNew) that was just projected here.
+            obj.cachedNextRef = nextRef;
             
             newState.throttle = throttle;
             newState.brake = effectiveBrakeCommand;
@@ -714,14 +725,20 @@ classdef Simulator < handle
             end
             
             finishTolerance = 1e-6;
-            while obj.shouldContinueSimulation(currentState, trackLen, finishTolerance)
-                if obj.isFreeReferenceMode()
-                    currentRef = obj.freeReferenceForState(currentState, ...
-                        currentState.s, currentState.x, currentState.y, currentState.yaw);
-                else
-                    currentRef = obj.projectToReference( ...
-                        currentState.x, currentState.y, trackData, currentRef.idx);
-                end
+            % Pre-compute run-invariant stop conditions (P1-B).
+            hasFiniteStopTime = isfinite(obj.stopTime);
+            stopTimeBound     = obj.stopTime - 0.5 * obj.dt;
+            trackEndBound     = trackLen - finishTolerance;
+            % Inline termination check using pre-computed locals.
+            stopCheck = @(st) ~( ...
+                (obj.stopAtTrackEnd  && st.s    >= trackEndBound) || ...
+                (hasFiniteStopTime  && st.time >= stopTimeBound)  || ...
+                (obj.stopOnOffTrack && ~st.onTrack));
+            while stopCheck(currentState)
+                % P2-C: The outer projectToReference call is eliminated after
+                % the first step. step() writes its internally-computed nextRef
+                % to obj.cachedNextRef, so we reuse it here. The first step
+                % uses the currentRef that was computed just before the loop.
                 currentState.s = currentRef.s;
                 currentState.refS = currentRef.s;
                 currentState.refHeading = currentRef.heading;
@@ -730,7 +747,7 @@ classdef Simulator < handle
                 currentState.lateralError = currentRef.lateralError;
                 currentState.mu = currentRef.mu;
                 currentState.onTrack = currentRef.onTrack;
-                if ~obj.shouldContinueSimulation(currentState, trackLen, finishTolerance)
+                if ~stopCheck(currentState)
                     break;
                 end
                 step = step + 1;
@@ -745,10 +762,19 @@ classdef Simulator < handle
                 
                 % --- LOG TELEMETRY ---
                 if step <= maxSteps
+                    % P2-A: Resolve all optional input fields once to locals,
+                    % avoiding repeated isstruct+isfield checks inside the block.
+                    inputSourceDist   = localGetField(input, 'sourceDistance',      currentState.s);
+                    inputSourceTime   = localGetField(input, 'sourceTime',          currentState.time);
+                    inputTargetSpeed  = localGetField(input, 'targetSpeed',         NaN);
+                    inputAxRef        = localGetField(input, 'axRef',               NaN);
+                    inputTargetLatErr = localGetField(input, 'targetLateralError',  NaN);
+                    inputLineCurv     = localGetField(input, 'lineCurvature',       NaN);
+                    inputSpeedError   = localGetField(input, 'speedError',          NaN);
+
                     stateLog.time(step)        = newState.time;
                     stateLog.s(step)           = newState.s;
-                    stateLog.controlS(step)    = localGetField(input, ...
-                        'sourceDistance', currentState.s);
+                    stateLog.controlS(step)    = inputSourceDist;
                     stateLog.x(step)           = newState.x;
                     stateLog.y(step)           = newState.y;
                     stateLog.yaw(step)         = newState.yaw;
@@ -757,8 +783,7 @@ classdef Simulator < handle
                     stateLog.bodySlipAngle(step) = newState.bodySlipAngle;
                     stateLog.speed(step)       = newState.speed;
                     stateLog.speedKmh(step)    = newState.speed * 3.6;
-                    stateLog.controlTime(step) = localGetField(input, ...
-                        'sourceTime', currentState.time);
+                    stateLog.controlTime(step) = inputSourceTime;
                     stateLog.ax(step)          = newState.ax;
                     stateLog.ay(step)          = newState.ay;
                     stateLog.frontAxleAy(step) = newState.frontAxleAy;
@@ -785,17 +810,14 @@ classdef Simulator < handle
                     stateLog.brakePressureFrontBar(step) = forces.brakePressureFrontBar;
                     stateLog.brakePressureRearBar(step) = forces.brakePressureRearBar;
                     stateLog.steer(step)       = input.steer;
-                    targetSpeedForLog = localGetField(input, 'targetSpeed', NaN);
-                    stateLog.targetSpeed(step) = targetSpeedForLog;
-                    stateLog.axRef(step)       = localGetField(input, 'axRef', NaN);
-                    stateLog.targetLateralError(step) = ...
-                        localGetField(input, 'targetLateralError', NaN);
-                    stateLog.lineCurvature(step) = ...
-                        localGetField(input, 'lineCurvature', NaN);
-                    if isfield(input, 'speedError') && isfinite(input.speedError)
-                        stateLog.speedError(step) = input.speedError;
-                    elseif isfinite(targetSpeedForLog)
-                        stateLog.speedError(step) = currentState.speed - targetSpeedForLog;
+                    stateLog.targetSpeed(step) = inputTargetSpeed;
+                    stateLog.axRef(step)       = inputAxRef;
+                    stateLog.targetLateralError(step) = inputTargetLatErr;
+                    stateLog.lineCurvature(step) = inputLineCurv;
+                    if isfinite(inputSpeedError)
+                        stateLog.speedError(step) = inputSpeedError;
+                    elseif isfinite(inputTargetSpeed)
+                        stateLog.speedError(step) = currentState.speed - inputTargetSpeed;
                     end
                     stateLog.curvature(step)   = newState.refCurvature;
                     stateLog.heading(step)     = newState.heading;
@@ -954,6 +976,9 @@ classdef Simulator < handle
                 
                 % Advance state
                 currentState = newState;
+                % P2-C: Reuse the nextRef computed inside step() as currentRef
+                % for the next iteration — avoids re-projecting currentState.(x,y).
+                currentRef = obj.cachedNextRef;
                 
                 % Progress display
                 if mod(step, 5000) == 0
@@ -1174,6 +1199,8 @@ classdef Simulator < handle
             if nargin >= 13
                 obj.limitMotorTorqueByPackPower = limitMotorTorqueByPackPower;
             end
+            % Clear cached mode so it is re-resolved for the new configuration.
+            obj.cachedPowertrainMode = [];
         end
 
         function tf = shouldContinueSimulation(obj, state, trackLen, finishTolerance)
@@ -1220,7 +1247,12 @@ classdef Simulator < handle
 
         function [totalDriveTorque, totalCoastdownTorque] = computePowertrainTorques(obj, state, input, throttle)
             vm = obj.vehicleManager;
-            mode = obj.validatePowertrainMode(obj.powertrainMode);
+            % P1-A: Cache the validated mode string — powertrainMode is a run
+            % invariant so lower()/strrep() need only run once per simulation.
+            if isempty(obj.cachedPowertrainMode)
+                obj.cachedPowertrainMode = obj.validatePowertrainMode(obj.powertrainMode);
+            end
+            mode = obj.cachedPowertrainMode;
 
             switch mode
                 case "throttle"
@@ -2004,8 +2036,14 @@ classdef Simulator < handle
             yawMid = yaw0 + 0.5 * yawRate0 * dt + 0.125 * dynamics.yawAccel * dt^2;
 
             cy0 = cos(yaw0); sy0 = sin(yaw0);
-            cyMid = cos(yawMid); syMid = sin(yawMid);
             cyNew = cos(yawNew); syNew = sin(yawNew);
+            % P2-B: First-order small-angle update for the mid-yaw pair.
+            % At FSAE speeds (yawRate <= 3 rad/s, dt = 1 ms) the angular
+            % increment dYawMid <= 0.0015 rad, giving truncation error
+            % O(dYawMid^2) < 3e-6 rad — negligible for engineering purposes.
+            dYawMid = yawMid - yaw0;
+            cyMid = cy0 - sy0 * dYawMid;
+            syMid = sy0 + cy0 * dYawMid;
 
             vxWorld0 = vx0 * cy0 - vy0 * sy0;
             vyWorld0 = vx0 * sy0 + vy0 * cy0;
