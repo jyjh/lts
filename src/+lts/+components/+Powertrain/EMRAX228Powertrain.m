@@ -20,7 +20,8 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         state                       % lts.components.Powertrain.PowertrainState
         totalGearRatio = 3        % Final drive ratio [-]
         mapGearRatio = NaN        % Final drive ratio embedded in the MAT map [-]
-        wheelRadius = 0.228        % Effective tire radius [m]
+        wheelRadius = 0.228        % Configured driven-tire rolling radius [m]
+        mapWheelRadius = 0.228     % Radius used to encode MAT tractive force [m]
         drivetrainEfficiency = 0.92  % Motoring drivetrain efficiency [0-1]
         regenEfficiency = NaN        % Optional direct-mode regen drivetrain efficiency [0-1]
         motorRotorInertia = 0.07    % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to wheels
@@ -104,8 +105,9 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             
             validRadius = obj.torqueCurveNm > 0 & rawForce > 0;
             if any(validRadius)
-                obj.wheelRadius = median(obj.torqueCurveNm(validRadius) .* ...
+                obj.mapWheelRadius = median(obj.torqueCurveNm(validRadius) .* ...
                     obj.totalGearRatio ./ rawForce(validRadius));
+                obj.wheelRadius = obj.mapWheelRadius;
             end
             
             gm = data.Gearing_Map;
@@ -168,6 +170,26 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 obj.maxVehicleSpeed = max(obj.speedCurve);
             end
         end
+
+        function obj = setDrivenWheelRadius(obj, radius)
+            % SETDRIVENWHEELRADIUS Synchronize the configured tire radius.
+            %
+            % The MAT file's tractive-force curve was generated with
+            % mapWheelRadius. Keep that radius immutable for force-to-torque
+            % conversion, while using the vehicle's actual rolling radius for
+            % speed/RPM conversion and wheel-force reporting.
+            radius = double(radius);
+            if ~isscalar(radius) || ~isfinite(radius) || radius <= 0
+                error('EMRAX228Powertrain:InvalidWheelRadius', ...
+                    'Driven-wheel radius must be a positive finite scalar.');
+            end
+            obj.wheelRadius = radius;
+            if ~isempty(obj.motorRPMCurve)
+                obj.speedCurve = obj.motorRPMCurve ./ obj.totalGearRatio .* ...
+                    (2 * pi * obj.wheelRadius / 60);
+                obj.maxVehicleSpeed = max(obj.speedCurve);
+            end
+        end
         
         function wheelTorque = computeDriveTorque(obj, speed, throttle)
             % Compute total driven-axle wheel torque from current motor RPM.
@@ -201,8 +223,12 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             
             fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
             
-            equivalentDriveForce = fullThrottleForce * torqueRequest * obj.drivetrainEfficiency;
-            wheelTorque = equivalentDriveForce * obj.wheelRadius;
+            % lookupTractiveForceByRPM is expressed at the radius embedded in
+            % the MAT map. Convert it back to physical axle torque before
+            % applying the configured tire radius anywhere.
+            wheelTorque = fullThrottleForce * obj.mapWheelRadius * ...
+                torqueRequest * obj.drivetrainEfficiency;
+            equivalentDriveForce = wheelTorque / max(obj.wheelRadius, eps);
             if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
                 motorTorque = wheelTorque / ...
                     (obj.totalGearRatio * obj.drivetrainEfficiency);
@@ -236,7 +262,50 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             speed = max(0, speed);
             motorRPM = obj.vehicleSpeedToMotorRPM(speed);
             fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
-            F_drive = max(0, fullThrottleForce * obj.drivetrainEfficiency);
+            wheelTorque = fullThrottleForce * obj.mapWheelRadius * ...
+                obj.drivetrainEfficiency;
+            F_drive = max(0, wheelTorque / max(obj.wheelRadius, eps));
+        end
+
+        function pedal = pedalForTorqueFraction(obj, fraction)
+            % PEDALFORTORQUEFRACTION Invert the configured controller map.
+            %   Returns the pedal command whose post-deadband nonlinear map
+            %   produces the requested motor torque fraction. Zero request
+            %   returns zero pedal; positive requests include the configured
+            %   deadband offset. Flat portions of a valid monotonic map are
+            %   supported and use the lowest pedal that produces an exact
+            %   plateau value.
+            fraction = double(fraction);
+            if ~isscalar(fraction) || ~isfinite(fraction)
+                error('EMRAX228Powertrain:InvalidTorqueFraction', ...
+                    'Requested torque fraction must be a finite scalar.');
+            end
+            fraction = lts.util.saturate(fraction);
+            if fraction <= 0
+                pedal = 0;
+                return;
+            end
+
+            [x, y] = obj.validatedThrottleMap();
+            exactIdx = find(abs(y - fraction) <= 1e-12, 1, 'first');
+            if ~isempty(exactIdx)
+                effectiveThrottle = x(exactIdx);
+            else
+                segment = find(y(1:end-1) < fraction & ...
+                    y(2:end) > fraction, 1, 'first');
+                if isempty(segment)
+                    effectiveThrottle = double(fraction >= y(end));
+                else
+                    blend = (fraction - y(segment)) / ...
+                        (y(segment + 1) - y(segment));
+                    effectiveThrottle = x(segment) + blend * ...
+                        (x(segment + 1) - x(segment));
+                end
+            end
+
+            deadband = obj.validThrottleDeadband();
+            pedal = deadband + (1 - deadband) * effectiveThrottle;
+            pedal = lts.util.saturate(pedal);
         end
         
         function updateStateFromDrivenWheels(obj, drivenWheelAngularVelocity)
@@ -280,12 +349,13 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             % Interpolate max EMRAX motor torque at motor speed [rpm].
             % Derived from the same wheel-force path as computeDriveTorque so
             % telemetry (lts.telemetry.GraphPlotter) and the sim agree on a single source of
-            % truth: T_motor = F_wheel * R / (ratio * efficiency).
+            % truth. The MAT force is upstream of the separately configured
+            % drivetrain efficiency, so T_motor = F_map*R_map/ratio.
             engineSpeed = max(0, engineSpeed);
             fullThrottleForce = obj.lookupTractiveForceByRPM(engineSpeed);
-            if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
-                torque = fullThrottleForce * obj.wheelRadius / ...
-                    (obj.totalGearRatio * obj.drivetrainEfficiency);
+            if obj.totalGearRatio > 0
+                torque = fullThrottleForce * obj.mapWheelRadius / ...
+                    obj.totalGearRatio;
             else
                 torque = 0;
             end
@@ -297,10 +367,9 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
 
         function I = getReflectedRotorInertia(obj)
             % GETREFLECTEDROTORINERTIA Motor rotor inertia reflected to the
-            %   driven wheels [kg*m^2]. A gear ratio couples the rotor to the
-            %   wheels so the effective rotational inertia seen at each wheel
-            %   is I_motor * ratio^2 (per half-shaft). This is added to the
-            %   bare wheel+tire inertia on the driven axle only.
+            %   differential carrier [kg*m^2]. A gear ratio couples the rotor
+            %   to carrier speed, so I_reflected = I_motor * ratio^2. The
+            %   axle solver applies it to common-mode wheel acceleration.
             I = obj.motorRotorInertia * obj.totalGearRatio^2;
         end
 
@@ -339,8 +408,13 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             if obj.regenEnabled && throttle == 0 && vehicleSpeed > 0
                 % Taper regen to zero near rest so it cannot reverse the car.
                 taper = min(1, vehicleSpeed / max(obj.regenEnabledSpeedFloor, eps));
-                T_regen = obj.regenTorqueLimitNm * obj.totalGearRatio * ...
-                    obj.drivetrainEfficiency * taper;
+                % Regen power flows from wheel to motor. Reflecting a
+                % motor-side braking request to the wheel therefore reverses
+                % the loss direction, matching Simulator's direct-command
+                % convention: T_wheel = T_motor*ratio/eta_regen.
+                effectiveRegenEfficiency = obj.getRegenDrivetrainEfficiency();
+                T_regen = obj.regenTorqueLimitNm * obj.totalGearRatio / ...
+                    max(effectiveRegenEfficiency, eps) * taper;
                 T = T - motorSign * T_regen;
             end
         end
@@ -360,11 +434,7 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
     
     methods (Access = private)
         function effectiveThrottle = applyThrottleDeadband(obj, throttle)
-            deadband = obj.throttleDeadband;
-            if ~isfinite(deadband)
-                deadband = 0;
-            end
-            deadband = lts.util.clamp(deadband, 0, 0.99);
+            deadband = obj.validThrottleDeadband();
             if throttle <= deadband
                 effectiveThrottle = 0;
             else
@@ -379,20 +449,35 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             % full-throttle capability envelope; this curve shapes how much
             % of that envelope a partial pedal command requests.
             effectiveThrottle = lts.util.saturate(effectiveThrottle);
+            [x, y] = obj.validatedThrottleMap();
+
+            torqueRequest = interp1(x, y, effectiveThrottle, 'linear');
+            torqueRequest = lts.util.saturate(torqueRequest);
+        end
+
+        function deadband = validThrottleDeadband(obj)
+            deadband = obj.throttleDeadband;
+            if ~isfinite(deadband)
+                deadband = 0;
+            end
+            deadband = lts.util.clamp(deadband, 0, 0.99);
+        end
+
+        function [x, y] = validatedThrottleMap(obj)
             x = obj.throttleMapInput(:);
             y = obj.throttleMapOutput(:);
 
             if isempty(x) || isempty(y) || numel(x) ~= numel(y) || numel(x) < 2 || ...
                     any(~isfinite(x)) || any(~isfinite(y)) || ...
                     any(x < 0) || any(x > 1) || any(y < 0) || any(y > 1) || ...
-                    any(diff(x) <= 0) || abs(x(1)) > 1e-12 || abs(x(end) - 1) > 1e-12
+                    any(diff(x) <= 0) || any(diff(y) < 0) || ...
+                    abs(x(1)) > 1e-12 || abs(x(end) - 1) > 1e-12 || ...
+                    abs(y(1)) > 1e-12 || abs(y(end) - 1) > 1e-12
                 error('EMRAX228Powertrain:InvalidThrottleMap', ...
-                    ['Throttle map input/output must be equal-length finite vectors ' ...
-                    'with strictly increasing input from 0 to 1 and output in [0,1].']);
+                    ['Throttle map input/output must be equal-length finite vectors; ' ...
+                    'input must increase from 0 to 1 and output must be ' ...
+                    'nondecreasing from 0 to 1.']);
             end
-
-            torqueRequest = interp1(x, y, effectiveThrottle, 'linear');
-            torqueRequest = lts.util.saturate(torqueRequest);
         end
 
         function rpm = vehicleSpeedToMotorRPM(obj, speed)

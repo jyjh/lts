@@ -33,7 +33,7 @@ classdef SimpleSuspension
         springRate                   % Heave spring rate [N/m]
         dampingCoeff                 % Compression damping coefficient [N*s/m]
         reboundCoeff                 % Rebound damping coefficient [N*s/m]
-        motionRatio                  % Installation motion ratio [dimensionless]
+        motionRatio                  % Damper travel / wheel travel [-]
         bumpStopLength               % Bump stop engagement length [m]
         bumpStopRate                 % Bump stop stiffness [N/m]
 
@@ -67,7 +67,7 @@ classdef SimpleSuspension
             %   springRate      - Heave spring rate [N/m]
             %   dampingCoeff    - Compression damping [N*s/m]
             %   reboundCoeff    - Rebound damping [N*s/m]
-            %   motionRatio     - Installation motion ratio
+            %   motionRatio     - Damper travel / wheel travel
             %   bumpStopLength  - Bump stop travel before engagement [m]
             %   bumpStopRate    - Bump stop stiffness [N/m]
             %   tireSpringRate  - Vertical tire stiffness [N/m]
@@ -290,8 +290,9 @@ classdef SimpleSuspension
         function wheelRate = getEffectiveWheelRate(obj, cornerState)
             % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
             % Includes bump-stop tangent stiffness when the current dynamic
-            % travel has reached the configured stop. damperPosition and
-            % bumpStopLength are both measured from static ride height.
+            % wheel-domain travel has reached the configured stop.
+            % damperPosition and bumpStopLength are both measured from
+            % static ride height in that same wheel domain.
             if nargin < 2 || isempty(cornerState)
                 cornerState = obj.state;
             end

@@ -222,11 +222,11 @@ classdef DriverModel < handle
 
             [throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
                 axRef, caps.F_drive_full, caps.F_resistance, ...
-                obj.vehicleManager.totalMass, caps.brakeForceAccel);
+                obj.vehicleManager.totalMass, caps.brakeForceAccel, ...
+                obj.vehicleManager.powertrain, longitudinalCommandScale);
 
             % Reduce longitudinal command as steering usage grows (combined
             % grip), preserving the existing traction-ellipse coupling.
-            throttle = throttle * longitudinalCommandScale;
             brake = brake * longitudinalCommandScale;
         end
 

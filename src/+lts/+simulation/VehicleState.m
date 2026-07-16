@@ -85,8 +85,9 @@ classdef VehicleState
         refCurvature = 0
         lateralError = 0
         
-        % Current surface friction coefficient
-        mu          = 1.2
+        % Legacy surface telemetry. Surface-dependent tire-force scaling has
+        % been removed, so this value is always neutral unity.
+        mu          = 1
         
         % Elapsed simulation time [s]
         time        = 0
@@ -121,6 +122,7 @@ classdef VehicleState
             elseif specifiedHeading
                 obj.yaw = obj.heading;
             end
+            obj.mu = 1;
             obj.bodySlipAngle = obj.computeBodySlipAngle();
         end
         
@@ -132,7 +134,7 @@ classdef VehicleState
             %   dt         - time increment [s]
             %   curvature  - track curvature at new position [1/m]
             %   heading    - track heading at new position [rad]
-            %   mu         - surface friction at new position
+            %   mu         - deprecated compatibility input (ignored)
             
             obj.ax = ax;
             obj.ay = ay;
@@ -146,7 +148,7 @@ classdef VehicleState
             obj.curvature = curvature;
             obj.heading = heading;
             obj.yaw = heading;
-            obj.mu = mu;
+            obj.mu = 1;
             obj.refS = obj.s;
             obj.refHeading = heading;
             obj.refCurvature = curvature;
@@ -207,7 +209,7 @@ classdef VehicleState
             obj.refCurvature = refCurvature;
             obj.curvature = refCurvature;
             obj.lateralError = lateralError;
-            obj.mu = mu;
+            obj.mu = 1;
 
             % P3-A: Resolve vm/chassis once and read all attitude fields in a
             % single branch instead of 10 separate method calls (each of which

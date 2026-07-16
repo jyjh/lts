@@ -15,7 +15,7 @@ function cfg = R25_correlation_tuning(cfg)
     % radius with an artificial effective ratio.
     cfg.tire.wheelRadius = 0.2032;
     cfg.powertrain.finalDriveRatio = 3.36;
-    cfg.powertrain.efficiency = 0.8;
+    cfg.powertrain.efficiency = 0.85;
     % Keep the motoring correlation scalar separate from regen. Direct
     % torque-command regen can be capped by logged pack power when
     % LimitMotorTorqueByPackPower is enabled, so only final-drive style losses

@@ -6,6 +6,9 @@ classdef (Abstract) TireModel
     %   - computeLongitudinalForce(normalLoad, slipRatio, mu) → Fx [N]
     %   - getPeakFriction(normalLoad) → peakMu [-]
     %
+    % The mu arguments are retained for source compatibility; the built-in
+    % model derives grip entirely from tire data and ignores surface mu.
+    %
     % Concrete implementations:
     %   - PacejkaTire — supported Pacejka Magic Formula model via MFeval
     

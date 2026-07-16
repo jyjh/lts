@@ -66,16 +66,16 @@ beside the simulated output under `exports/correlation_*`.
 For correlation-only setup changes, keep `lts.vehicles.R25` as the base vehicle and
 pass a tuning overlay with `TuningFile` or `VehicleTuning`. The supplied
 `src/+lts/+vehicles/R25_correlation_tuning.m` overlay currently applies the
-lap5/raw drivetrain and surface assumptions without changing the base car
-definition. Pass `SurfaceMu` to `lts.app.run_correlation` to override the
-track/tuning surface value for a specific replay.
+lap5/raw drivetrain assumptions without changing the base car definition.
+Surface friction is fixed at unity throughout the simulation. The legacy
+`SurfaceMu` replay option remains accepted for compatibility but is ignored.
 
 Correlation replay is a free-space replay: it uses the imported driver inputs
 and initial vehicle state, then lets the physics model produce the path without
 GPS/course alignment, track rebasing, path projection, or track-limit stops.
-The configured track is still loaded as an environment descriptor for surface
-friction and export metadata, but its geometry does not steer or constrain the
-car. Logged yaw rate is used as the initial yaw rate by default when present.
+The configured track is still loaded for export metadata, but its geometry does
+not steer or constrain the car. Logged yaw rate is used as the initial yaw rate
+by default when present.
 Set `correlation.initialTransientWindowS` in a tuning overlay, or pass
 `InitialTransientWindowS` to `lts.app.run_correlation`, to seed yaw rate and
 lateral transient channels from the median of the first N seconds instead of a

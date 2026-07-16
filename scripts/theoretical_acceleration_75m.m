@@ -8,7 +8,7 @@ clear; clc;
 configName = 'baseline';     % Matches src/+lts/+app/run_simulation.m by default
 distanceM = 75.0;            % FSAE acceleration distance [m]
 dsM = 0.05;                  % Integration distance step [m]
-surfaceMu = [];              % [] = raw tire-file reference surface
+surfaceMu = 1.0;             % Fixed: the tire file defines the only surface
 usePowertrainLimit = true;   % false = ideal tire-only acceleration envelope
 includeRotatingInertia = false;
 makePlots = true;
@@ -24,12 +24,7 @@ tire.wheelInertia = cfg.tire.wheelInertia;
 if isfield(cfg.tire, 'relaxationLength')
     tire.relaxationLength = cfg.tire.relaxationLength;
 end
-if isfield(cfg.tire, 'surfaceMuReference')
-    tire.surfaceMuReference = cfg.tire.surfaceMuReference;
-end
-if isempty(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
+tire.surfaceMuReference = 1.0;  % Legacy compatibility field; never a scale
 
 powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
     cfg.powertrain.matFile, ...
@@ -54,7 +49,7 @@ firstPowerIdx = find(run.Fmotor < run.FtractionRear - 1e-6, 1, 'first');
 fprintf('\n=== Theoretical 75 m Acceleration Estimate ===\n');
 fprintf('Config:              lts.vehicles.%s\n', configName);
 fprintf('Tire file:           %s\n', cfg.tire.tirFile);
-fprintf('Surface mu input:    %.3f\n', surfaceMu);
+fprintf('Surface mu (fixed):  %.3f\n', surfaceMu);
 fprintf('Powertrain limit:    %s\n', onOff(usePowertrainLimit));
 fprintf('Rotating inertia:    %s, effective mass %.1f kg (vehicle %.1f kg)\n', ...
     onOff(includeRotatingInertia), massForAccel, cfg.totalMass);
@@ -346,7 +341,7 @@ function addTransitionLine(firstPowerIdx, run)
     ylim(yl);
 end
 
-function [muPeak, kappaPeak] = peakLongitudinalMu(tire, Fz, speed, surfaceMu)
+function [muPeak, kappaPeak] = peakLongitudinalMu(tire, Fz, speed, ~)
     if Fz <= 0
         muPeak = 0;
         kappaPeak = 0;
@@ -361,8 +356,7 @@ function [muPeak, kappaPeak] = peakLongitudinalMu(tire, Fz, speed, surfaceMu)
     Vx = mfevalSpeed(tire, speed);
     FzKey = round(Fz / 10) * 10;
     VxKey = round(Vx * 10) / 10;
-    muKey = round(surfaceMu * 1000) / 1000;
-    key = sprintf('%.0f_%.1f_%.3f', FzKey, VxKey, muKey);
+    key = sprintf('%.0f_%.1f', FzKey, VxKey);
     if isKey(cache, key)
         value = cache(key);
         muPeak = value(1);
@@ -382,8 +376,7 @@ function [muPeak, kappaPeak] = peakLongitudinalMu(tire, Fz, speed, surfaceMu)
         repmat(tire.tireConstants.nomPressure, n, 1)];
     outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
 
-    surfaceScale = max(surfaceMu, 0) / max(tire.surfaceMuReference, eps);
-    Fx = outputs(:, 1) * surfaceScale;
+    Fx = outputs(:, 1);
     [FxPeak, idx] = max(Fx);
     muPeak = max(0, FxPeak / Fz);
     kappaPeak = kappa(idx);

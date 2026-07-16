@@ -54,6 +54,36 @@ verifyTrue(testCase, all(diff(arcLen) > 0));
 verifyEqual(testCase, arcLen(end), 2 * track.getTotalLength(), 'AbsTol', 1e-6);
 end
 
+function testSingleClosedLapIncludesClosureSegment(testCase)
+track = lts.components.TestTrack('skidpad');
+simulator = lts.simulation.Simulator([], [], 0.001);
+
+[points, curvature, mu, heading] = simulator.repeatClosedTrack( ...
+    track.getTrackPoints(), track.getCurvature(), ...
+    track.getSurfaceFriction(), track.getHeading(), 1);
+arcLen = [0; cumsum(sqrt(diff(points(:,1)).^2 + diff(points(:,2)).^2))];
+
+verifyEqual(testCase, points(end, :), points(1, :), 'AbsTol', 1e-12);
+verifyEqual(testCase, numel(curvature), size(points, 1));
+verifyEqual(testCase, numel(mu), size(points, 1));
+verifyEqual(testCase, numel(heading), size(points, 1));
+verifyEqual(testCase, arcLen(end), track.getTotalLength(), 'AbsTol', 1e-6);
+end
+
+function testWaypointTrackAlwaysReportsUnitySurfaceMu(testCase)
+points = [0, 0; 1, 0; 2, 0];
+track = lts.components.WaypointTrack(points, 'Closed', false, ...
+    'Mu', [0.4; 0.8; 1.6]);
+
+verifyEqual(testCase, track.getSurfaceFriction(), ones(3, 1), ...
+    'AbsTol', 0);
+track.Mu = 3;
+verifyEqual(testCase, track.getSurfaceFriction(), ones(3, 1), ...
+    'AbsTol', 0);
+data = track.toStruct();
+verifyEqual(testCase, data.mu, 1, 'AbsTol', 0);
+end
+
 function testTelemetryWindowDropsWarmupAndRezeros(testCase)
 simulator = lts.simulation.Simulator([], [], 0.001);
 stateLog = createStateLog();
@@ -94,12 +124,35 @@ lastwarn('');
 [warnMsg, warnId] = lastwarn();
 
 verifyEqual(testCase, recordedSteps, 0);
-verifyEqual(testCase, lapTime, 0);
+verifyTrue(testCase, isnan(lapTime));
 verifyTrue(testCase, isempty(stateLog.time));
 verifyTrue(testCase, isempty(stateLog.s));
 verifyEqual(testCase, warnId, 'lts_simulation_Simulator:NoRecordedTelemetry');
 verifyTrue(testCase, contains(warnMsg, 'Max simulated s'));
 verifyTrue(testCase, contains(warnMsg, 'minimum track margin'));
+end
+
+function testTelemetryWindowRejectsPartialTimedLap(testCase)
+simulator = lts.simulation.Simulator([], [], 0.001);
+stateLog = struct( ...
+    'time', [1; 2; 3], ...
+    's', [40; 55; 70], ...
+    'controlTime', [0; 1; 2], ...
+    'controlS', [40; 55; 70], ...
+    'refS', [40; 55; 70], ...
+    'speedKmh', [20; 25; 30]);
+
+lastwarn('');
+[stateLog, lapTime, recordedSteps] = simulator.applyTelemetryLapWindow( ...
+    stateLog, 50, 100);
+[warnMsg, warnId] = lastwarn();
+
+verifyEqual(testCase, recordedSteps, 2);
+verifyTrue(testCase, isnan(lapTime));
+verifyEqual(testCase, stateLog.s, [5; 20]);
+verifyEqual(testCase, warnId, ...
+    'lts_simulation_Simulator:IncompleteRecordedTelemetry');
+verifyTrue(testCase, contains(warnMsg, 'no lap time is reported'));
 end
 
 function testProjectToReferenceMatchesWithPrecomputedSegments(testCase)

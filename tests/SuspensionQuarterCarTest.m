@@ -243,9 +243,9 @@ vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
 
 frontNoStop = config.suspension.front.springRate + ...
-    geometry.frontAntiRollBar.getWheelRateStiffness();
+    2 * geometry.frontAntiRollBar.getWheelRateStiffness();
 rearNoStop = config.suspension.rear.springRate + ...
-    geometry.rearAntiRollBar.getWheelRateStiffness();
+    2 * geometry.rearAntiRollBar.getWheelRateStiffness();
 
 [KwF, KwR] = suspension.getAxleRollStiffness();
 verifyEqual(testCase, KwF, frontNoStop, 'AbsTol', 1e-9);
@@ -258,11 +258,53 @@ suspension.frontLeft.state.damperPosition = engagedTravel;
 suspension.rearLeft.state.damperPosition = engagedTravel;
 [KwF, KwR] = suspension.getAxleRollStiffness();
 
-verifyGreaterThan(testCase, KwF, frontNoStop + 0.5 * config.suspension.bumpStopRate);
-verifyGreaterThan(testCase, KwR, rearNoStop + 0.5 * config.suspension.bumpStopRate);
+verifyEqual(testCase, KwF, ...
+    frontNoStop + 0.5 * config.suspension.bumpStopRate, 'AbsTol', 1e-9);
+verifyEqual(testCase, KwR, ...
+    rearNoStop + 0.5 * config.suspension.bumpStopRate, 'AbsTol', 1e-9);
 end
 
-function [vehicle, suspension] = createSuspension(rateScale, frontAntiRollBarRate, rearAntiRollBarRate)
+function testAxleRollStiffnessMatchesAntiRollBarForceMoment(testCase)
+config = lts.vehicles.baseline();
+[vehicle, suspension] = createSuspension(1, 0, 0, config);
+[baseKwF, ~] = suspension.getAxleRollStiffness();
+
+barRate = 1000;
+suspension.frontAntiRollBarWheelRate = barRate;
+[barKwF, ~] = suspension.getAxleRollStiffness();
+verifyEqual(testCase, barKwF - baseKwF, 2 * barRate, 'AbsTol', 1e-12);
+
+phi = 0.02;
+halfTravel = vehicle.trackWidth * phi / 2;
+suspension.frontLeft.state.damperPosition = -halfTravel;
+suspension.frontRight.state.damperPosition = halfTravel;
+barForces = suspension.getAntiRollBarForces();
+actualMoment = (barForces.FR - barForces.FL) * vehicle.trackWidth / 2;
+equivalentMoment = (barKwF - baseKwF) * vehicle.trackWidth^2 / 2 * phi;
+verifyEqual(testCase, actualMoment, equivalentMoment, 'AbsTol', 1e-10);
+end
+
+function testWheelDomainTravelIsNotDividedByMotionRatioTwice(testCase)
+config = lts.vehicles.baseline();
+config.suspension.motionRatio = 0.5;
+config.suspension.geometry.front.motionRatioCurve = [0.5 0.5 0.5];
+config.suspension.geometry.rear.motionRatioCurve = [0.5 0.5 0.5];
+[~, suspension] = createSuspension(1, 0, 0, config);
+suspension.frontLeft.state.damperPosition = 0.01;
+suspension.frontRight.state.damperPosition = 0;
+suspension.frontAntiRollBarWheelRate = 1000;
+
+suspension.updateGeometry(0);
+barForces = suspension.getAntiRollBarForces();
+
+verifyEqual(testCase, suspension.frontLeft.state.wheelTravel, ...
+    0.01, 'AbsTol', 1e-12);
+verifyEqual(testCase, barForces.FL, 10, 'AbsTol', 1e-12);
+verifyEqual(testCase, barForces.FR, -10, 'AbsTol', 1e-12);
+end
+
+function [vehicle, suspension] = createSuspension(rateScale, ...
+        frontAntiRollBarRate, rearAntiRollBarRate, config)
 if nargin < 2
     frontAntiRollBarRate = 0;
 end
@@ -272,7 +314,9 @@ end
 
 % Source geometry + vehicle constants from the baseline config so the
 % fixture stays in sync with the car definition.
-config = lts.vehicles.baseline();
+if nargin < 4 || isempty(config)
+    config = lts.vehicles.baseline();
+end
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;

@@ -20,9 +20,9 @@ def test_resample_preserves_endpoint_count_and_requested_frequency():
     data_log.resample(1000)
 
     channel = data_log.channels["Throttle"]
-    assert len(channel.messages) == 3
-    assert [message.timestamp for message in channel.messages] == [0, 0.001, 0.002]
-    assert [message.value for message in channel.messages] == [0, 10, 20]
+    assert channel.sample_count() == 3
+    assert channel.timestamps.tolist() == [0, 0.001, 0.002]
+    assert channel.sample_values(float).tolist() == [0, 10, 20]
     assert channel.avg_frequency() == 1000
 
 

@@ -142,6 +142,34 @@ verifyEqual(testCase, throttle, F_resistance / F_drive_full, 'RelTol', 1e-9);
 verifyEqual(testCase, brake, 0, 'AbsTol', 1e-12);
 end
 
+function testComputePedalsInvertsNonlinearPowertrainMap(testCase)
+powertrain = lts.components.Powertrain.EMRAX228Powertrain();
+powertrain.throttleDeadband = 0.2;
+powertrain.throttleMapInput = [0, 0.5, 1];
+powertrain.throttleMapOutput = [0, 0.25, 1];
+
+% Required contact-patch force is exactly half of WOT capability.
+[throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
+    0, 1000, 500, 250, 10, powertrain);
+expectedPedal = powertrain.pedalForTorqueFraction(0.5);
+
+verifyEqual(testCase, throttle, expectedPedal, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, throttle, 0.5);
+verifyEqual(testCase, brake, 0, 'AbsTol', 1e-12);
+end
+
+function testComputePedalsAppliesCombinedGripScaleInTorqueSpace(testCase)
+powertrain = lts.components.Powertrain.EMRAX228Powertrain();
+powertrain.throttleMapInput = [0, 0.5, 1];
+powertrain.throttleMapOutput = [0, 0.25, 1];
+
+[throttle, ~] = lts.driver.DriverInputPlanner.computePedals( ...
+    0, 1000, 500, 250, 10, powertrain, 0.5);
+
+verifyEqual(testCase, throttle, ...
+    powertrain.pedalForTorqueFraction(0.25), 'AbsTol', 1e-12);
+end
+
 function testComputePedalsCoastWhenDragCoversDecel(testCase)
 % Required decel is no more than what drag/rolling provide -> coast.
 mass = 256;

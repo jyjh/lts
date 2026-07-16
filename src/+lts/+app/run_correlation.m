@@ -50,6 +50,8 @@ parser.addParameter('ImportFrequency', [], @(x) isempty(x) || (isnumeric(x) && i
 parser.addParameter('StopOnOffTrack', false, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopAtTrackEnd', false, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('StopAtReplayEnd', true, @(x) islogical(x) || isnumeric(x));
+% Deprecated compatibility option. Accepted but ignored; all surfaces use
+% the raw tire model and report Mu=1.
 parser.addParameter('SurfaceMu', NaN, @(x) isempty(x) || (isnumeric(x) && isscalar(x)));
 parser.addParameter('OutputBase', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('PythonCommand', 'python', @(x) ischar(x) || isstring(x));
@@ -106,13 +108,7 @@ end
 profile = lts.correlation.CorrelationReplayProfile.fromCsv(outputs.replayCsv);
 profile = profile.withPackPowerAdvance(opts.PackPowerAdvanceS);
 profile = profile.withMotorTorqueCommandDelay(opts.MotorTorqueCommandDelayS);
-surfaceMu = opts.SurfaceMu;
-if isempty(surfaceMu) || ~isfinite(surfaceMu) || surfaceMu <= 0
-    surfaceMu = lts.correlation.CorrelationAppSupport.vehicleCorrelationSurfaceMu(config);
-end
-if ~isfinite(surfaceMu) || surfaceMu <= 0
-    surfaceMu = lts.util.representativeSurfaceMu(track);
-end
+surfaceMu = 1.0;
 outputs.referenceMode = 'free';
 outputs.surfaceMu = surfaceMu;
 outputs.brakeMode = char(opts.BrakeMode);

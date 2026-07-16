@@ -49,7 +49,8 @@ parser.addParameter('MassStepKg', 0.5, @validatePositiveScalar);
 parser.addParameter('EnvelopeSlipRatios', linspace(0, 1.0, 161), ...
     @validateSlipRatios);
 parser.addParameter('EnvelopeLoadsN', 100:10:2500, @validateNormalLoads);
-parser.addParameter('SurfaceMu', [], @validateSurfaceMu);
+% Retained as an ignored compatibility option; all surfaces are unity.
+parser.addParameter('SurfaceMu', 1.0, @validateSurfaceMu);
 parser.addParameter('Wheelbase', 1.528, @validatePositiveScalar);
 parser.addParameter('CgHeight', 0.256, @validateNonnegativeScalar);
 parser.addParameter('StaticFrontWeight', 0.5095, @validateUnitScalar);
@@ -89,10 +90,7 @@ if isempty(envelopeLoadsN)
 end
 
 tire = lts.components.Tire.PacejkaTire(tirFile);
-surfaceMu = opts.SurfaceMu;
-if isempty(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
+surfaceMu = 1.0;
 
 powertrain = [];
 if opts.UsePowertrainLimit
@@ -235,10 +233,9 @@ envelope = struct( ...
 end
 
 function Fx = computeLongitudinalForceGrid(tire, normalLoads, slipRatios, ...
-        surfaceMu)
+        ~)
 normalLoads = normalLoads(:);
 Fx = zeros(numel(normalLoads), numel(slipRatios));
-surfaceScale = tireSurfaceScale(tire, surfaceMu);
 active = normalLoads > 0;
 if ~any(active)
     return;
@@ -272,7 +269,7 @@ for startIdx = 1:maxRowsPerCall:nRows
     cleanups = onCleanup(@() warning(warnState));
     outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
     clear cleanups;
-    FxActive(idx) = outputs(:, 1) * surfaceScale;
+    FxActive(idx) = outputs(:, 1);
 end
 
 Fx(active, :) = FxActive;
@@ -513,13 +510,6 @@ if valueRange <= eps
 else
     values = (values - min(values)) / valueRange;
 end
-end
-
-function scale = tireSurfaceScale(tire, surfaceMu)
-if isempty(surfaceMu) || ~isfinite(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
-scale = max(surfaceMu, 0) / max(tire.surfaceMuReference, eps);
 end
 
 function out = curveLinearity(massKg, signal)

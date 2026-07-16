@@ -6,6 +6,8 @@ classdef WaypointTrack < lts.components.Track
     properties
         Points
         Width = 3.0
+        % Deprecated compatibility field. Surface friction variability is
+        % intentionally unsupported; getSurfaceFriction always returns one.
         Mu = 1.0
         Closed = true
         Name = 'WaypointTrack'
@@ -32,7 +34,9 @@ classdef WaypointTrack < lts.components.Track
 
             obj.Points = lts.components.Track.cleanPoints(double(ip.Results.points), logical(ip.Results.Closed));
             obj.Width = double(ip.Results.Width);
-            obj.Mu = double(ip.Results.Mu);
+            % Accept legacy Mu input files/callers, but all surfaces use the
+            % same unscaled tire model.
+            obj.Mu = 1.0;
             obj.Closed = logical(ip.Results.Closed);
             obj.Name = char(ip.Results.Name);
             obj.SourceImage = char(ip.Results.SourceImage);
@@ -49,15 +53,7 @@ classdef WaypointTrack < lts.components.Track
 
         function mu = getSurfaceFriction(obj)
             n = size(obj.Points, 1);
-            if isscalar(obj.Mu)
-                mu = repmat(obj.Mu, n, 1);
-            else
-                mu = obj.Mu(:);
-                if numel(mu) ~= n
-                    error('WaypointTrack:InvalidMu', ...
-                        'Mu must be scalar or have one value per waypoint.');
-                end
-            end
+            mu = ones(n, 1);
         end
 
         function length = getTotalLength(obj)
@@ -94,7 +90,7 @@ classdef WaypointTrack < lts.components.Track
             data.name = obj.Name;
             data.points_m = obj.Points;
             data.width_m = obj.Width;
-            data.mu = obj.Mu;
+            data.mu = 1.0;
             data.closed = obj.Closed;
             data.source_image = obj.SourceImage;
             data.length_m = obj.getTotalLength();
@@ -237,7 +233,6 @@ classdef WaypointTrack < lts.components.Track
 
             obj = lts.components.WaypointTrack(points, ...
                 'Width', t.width_m, ...
-                'Mu', t.mu, ...
                 'Closed', t.closed, ...
                 'Name', t.name);
             if isfield(t, 'source_image')

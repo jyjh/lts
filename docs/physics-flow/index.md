@@ -171,7 +171,7 @@ Lateral transfer is split into:
 Anti-roll-bar wheel rate is:
 
 ```text
-K_w_bar = stiffness * motionRatio^2 / leverArm^2
+K_w_bar = torsionalStiffness[N*m/rad] * motionRatio^2 / leverArm^2
 ```
 
 ### 4. Update Powertrain State And Torque
@@ -290,7 +290,8 @@ Forces are evaluated through MFeval combined-slip mode:
 inputsMF = [Fz, kappa, alpha, camber, phit, Vx, pressure]
 ```
 
-The raw `.tir` file is treated as the reference dry surface. Track mu scales forces relative to `surfaceMuReference`.
+MFeval forces are used directly from the raw `.tir` file. Surface friction is
+fixed at `mu = 1`; track/config/replay mu values never scale tire forces.
 
 ### 9. Sum Body Forces And Yaw Moment
 
@@ -346,12 +347,15 @@ heaveForce = Fz_aero_front + Fz_aero_rear
            - C_heave * heaveRate
 ```
 
-Pitch moment includes inertial load transfer and aero pitch moment:
+The aerodynamic resultant reports absolute height above ground. The chassis
+removes drag from the net acceleration before forming the ground-force term,
+then adds the direct drag moment about the CG exactly once:
 
 ```text
-M_pitch = sprungMass * ax * cg_height
+ax_non_aero = ax + F_drag_longitudinal / totalMass
+M_pitch = sprungMass * ax_non_aero * cg_height
         + (Fz_rear*a_rear - Fz_front*a_front)
-        + F_drag * dragHeight
+        + F_drag_longitudinal * (dragHeight - cg_height)
         - K_pitch*pitch
         - C_pitch*pitchRate
 ```
@@ -373,6 +377,12 @@ M_rear_roll = sprungMass*rearWeight*ay_rear*cg_height
              + K_torsion*twist
              + C_torsion*twistRate
 ```
+
+When torsional rigidity is infinite, front and rear roll are solved as one
+exact constrained coordinate. No large penalty stiffness is substituted.
+Suspension-table camber is chassis-relative; the current axle roll angle is
+then rotated into the road frame with opposite signs at the left and right
+tires before the tire model is evaluated.
 
 When `yawAccel = 0`, both axles see the CG lateral acceleration and this collapses to the previous scalar-`ay` behavior. The legacy `rollAngle` telemetry is the average of front and rear roll.
 
@@ -424,7 +434,7 @@ This means correlation overlays answer: "What path and acceleration does this ve
 - The drivetrain is rear-wheel drive.
 - The default aero model is one whole-car resultant, although component aero classes exist.
 - The tire model is Pacejka/MFeval and is the source of grip and load sensitivity.
-- Surface mu scales the tire output relative to the reference tire file; it is not an independent hard friction cap.
+- Surface friction is fixed at unity; track and replay metadata do not scale tire output.
 - Brake commands generate wheel torque; tire slip decides the resulting ground force.
 - The track centerline is not a rail.
 - Road height is flat; vertical dynamics are suspension/tire compliance about a flat road.

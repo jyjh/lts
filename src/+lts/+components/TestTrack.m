@@ -2,7 +2,8 @@ classdef TestTrack < lts.components.WaypointTrack
     % TESTTRACK FSAE-style procedural test tracks for simulation validation.
     %
     % Each preset builds a centerline as Nx2 [x, y] waypoints and stores it on
-    % the inherited WaypointTrack properties (Points, Closed, Mu, Name). All
+    % the inherited WaypointTrack properties (Points, Closed, Mu, Name). Mu is
+    % retained only for compatibility and is always unity. All
     % geometry (curvature, heading, length) is derived on the fly by the
     % WaypointTrack getters using the closed-loop-aware Track helpers, so this
     % class holds no cached geometry of its own.
@@ -344,7 +345,7 @@ classdef TestTrack < lts.components.WaypointTrack
             %   all report the same point count.
             obj.Points = lts.components.Track.cleanPoints(points, closed);
             obj.Closed = closed;
-            obj.Mu = 1.2;
+            obj.Mu = 1.0;
             obj.Name = name;
         end
     end

@@ -27,7 +27,7 @@ classdef FrontWing < lts.components.Aero.AeroComponent
             % Height effect: front wing sensitive to ride height changes
             effectiveZ = obj.computeEffectiveHeight(vehicleState);
             dz = (effectiveZ - obj.zPosition) * 100;  % cm deviation from design height
-            heightFactor = 1 - obj.heightSensitivity * dz / 100;
+            heightFactor = 1 - obj.heightSensitivity * dz;
             
             effectiveClA = obj.ClA * pitchFactor * heightFactor;
             effectiveClA = max(0, effectiveClA);

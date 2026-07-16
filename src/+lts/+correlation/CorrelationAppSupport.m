@@ -167,6 +167,9 @@ classdef CorrelationAppSupport
         end
 
         function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
+            % surfaceMu is a deprecated compatibility input. Correlation
+            % reporting follows the simulator's fixed unity-surface contract.
+            surfaceMu = 1.0;
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
@@ -269,18 +272,9 @@ classdef CorrelationAppSupport
             end
         end
 
-        function mu = vehicleCorrelationSurfaceMu(config)
-            mu = NaN;
-            correlation = lts.correlation.CorrelationAppSupport.vehicleCorrelationStruct(config);
-            if isempty(correlation) || ~isfield(correlation, 'surfaceMu')
-                return;
-            end
-
-            candidate = correlation.surfaceMu;
-            if isnumeric(candidate) && isscalar(candidate) && ...
-                    isfinite(candidate) && candidate > 0
-                mu = double(candidate);
-            end
+        function mu = vehicleCorrelationSurfaceMu(~)
+            % Deprecated compatibility query. Surface scaling was removed.
+            mu = 1.0;
         end
 
         function value = vehicleCorrelationFlag(config, fieldName, defaultValue)

@@ -46,7 +46,7 @@ classdef SuspensionGeometry
         % Steering model. steerInput is treated as road-wheel angle by
         % default to preserve current lts.driver.DriverModel behavior.
         steeringRatio = 1.0
-        ackermann = 0.0                 % 0 = parallel steer, 1 = ideal Ackermann
+        ackermann = 0.0                 % 0 = parallel, 1 = ideal, >1 = over-Ackermann
         maxWheelSteerAngle = 0.6        % [rad]
         rearSteerRatio = 0.0
 
@@ -207,7 +207,10 @@ classdef SuspensionGeometry
 
             idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
             idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = lts.util.saturate(obj.ackermann);
+            ackermannBlend = max(obj.ackermann, 0);
+            if ~isfinite(ackermannBlend)
+                ackermannBlend = 0;
+            end
 
             isLeftSide = strcmp(upper(corner), 'FL');
             isInside = (turnSign > 0 && isLeftSide) || (turnSign < 0 && ~isLeftSide);
@@ -244,7 +247,10 @@ classdef SuspensionGeometry
 
             idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
             idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = lts.util.saturate(obj.ackermann);
+            ackermannBlend = max(obj.ackermann, 0);
+            if ~isfinite(ackermannBlend)
+                ackermannBlend = 0;
+            end
 
             isInside = (turnSign > 0 && isLeft) || (turnSign < 0 && ~isLeft);
             if isInside
