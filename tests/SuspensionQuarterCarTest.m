@@ -211,12 +211,8 @@ expectedTireSpeed = stateLog.omega_FL(2) * stateLog.wheelRadius_FL(2);
 verifyEqual(testCase, data(2, tireSpeedFLCol), expectedTireSpeed, 'AbsTol', 1e-8);
 end
 
-function testStaticBumpStopContributesToRollStiffness(testCase)
+function testDynamicBumpStopContributesToRollStiffness(testCase)
 config = lts.vehicles.R25();
-% This is a bump-stop mechanics test, not an R25 static setup assertion. The
-% spec-matched R25 wheel rate should not sit on its 25.4 mm stops at rest, so
-% force immediate engagement here.
-config.suspension.bumpStopLength = 0;
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = config.totalMass;
 vehicle.wheelbase = config.wheelbase;
@@ -246,11 +242,21 @@ suspension = lts.components.Suspension.SuspensionManager( ...
 vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
 
-[KwF, KwR] = suspension.getAxleRollStiffness();
 frontNoStop = config.suspension.front.springRate + ...
     geometry.frontAntiRollBar.getWheelRateStiffness();
 rearNoStop = config.suspension.rear.springRate + ...
     geometry.rearAntiRollBar.getWheelRateStiffness();
+
+[KwF, KwR] = suspension.getAxleRollStiffness();
+verifyEqual(testCase, KwF, frontNoStop, 'AbsTol', 1e-9);
+verifyEqual(testCase, KwR, rearNoStop, 'AbsTol', 1e-9);
+
+% bumpStopLength is free travel from static ride height. Static spring
+% compression alone must not engage it; dynamic damper travel must cross it.
+engagedTravel = config.suspension.bumpStopLength + 1e-3;
+suspension.frontLeft.state.damperPosition = engagedTravel;
+suspension.rearLeft.state.damperPosition = engagedTravel;
+[KwF, KwR] = suspension.getAxleRollStiffness();
 
 verifyGreaterThan(testCase, KwF, frontNoStop + 0.5 * config.suspension.bumpStopRate);
 verifyGreaterThan(testCase, KwR, rearNoStop + 0.5 * config.suspension.bumpStopRate);

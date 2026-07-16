@@ -619,12 +619,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             motionRatio = max(motionRatio, eps);
             wheelRate = cornerUnit.springRate * motionRatio^2;
 
-            staticCompression = cornerState.staticSuspensionCompression;
-            if ~isfinite(staticCompression)
-                staticCompression = 0;
-            end
             if cornerUnit.bumpStopRate > 0 && ...
-                    staticCompression >= max(cornerUnit.bumpStopLength, 0) - 1e-12
+                    cornerState.damperPosition >= ...
+                    max(cornerUnit.bumpStopLength, 0) - 1e-12
                 wheelRate = wheelRate + cornerUnit.bumpStopRate;
             end
         end

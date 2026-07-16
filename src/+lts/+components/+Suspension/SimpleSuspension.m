@@ -289,8 +289,9 @@ classdef SimpleSuspension
 
         function wheelRate = getEffectiveWheelRate(obj, cornerState)
             % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
-            % Includes bump-stop tangent stiffness when the corner is already
-            % sitting on the stop at static equilibrium.
+            % Includes bump-stop tangent stiffness when the current dynamic
+            % travel has reached the configured stop. damperPosition and
+            % bumpStopLength are both measured from static ride height.
             if nargin < 2 || isempty(cornerState)
                 cornerState = obj.state;
             end
@@ -298,12 +299,8 @@ classdef SimpleSuspension
             MR_eff = obj.getEffectiveMotionRatio(cornerState);
             wheelRate = obj.springRate * MR_eff^2;
 
-            staticCompression = cornerState.staticSuspensionCompression;
-            if ~isfinite(staticCompression)
-                staticCompression = 0;
-            end
             if obj.bumpStopRate > 0 && ...
-                    staticCompression >= max(obj.bumpStopLength, 0) - 1e-12
+                    cornerState.damperPosition >= max(obj.bumpStopLength, 0) - 1e-12
                 wheelRate = wheelRate + obj.bumpStopRate;
             end
         end
@@ -332,11 +329,11 @@ classdef SimpleSuspension
             end
             F_damper = C_eff * suspensionVelocity;
 
-            staticBump = obj.computeBumpStopForce( ...
-                cornerState.staticSuspensionCompression);
-            totalCompression = cornerState.staticSuspensionCompression + ...
-                suspensionDeflection;
-            F_bumpstop = obj.computeBumpStopForce(totalCompression) - staticBump;
+            % Dynamic states are zeroed at static ride height, and the
+            % configured bump-stop length is free jounce travel from that
+            % datum. Do not add static spring compression here; doing so
+            % makes a 25.4 mm jounce stop engage after roughly 13 mm on R25.
+            F_bumpstop = obj.computeBumpStopForce(suspensionDeflection);
 
             F_suspension = cornerState.staticLoad + F_spring + ...
                 F_damper + F_bumpstop;
@@ -350,15 +347,12 @@ classdef SimpleSuspension
             F_tire = max(obj.tireSpringRate * tireDeflection, 0);
         end
 
-        function compression = computeStaticSuspensionCompression(obj, staticLoad, K_eff)
+        function compression = computeStaticSuspensionCompression(~, staticLoad, K_eff)
             K_eff = max(K_eff, eps);
-            bumpStopLength = max(obj.bumpStopLength, 0);
-            if obj.bumpStopRate <= 0 || staticLoad <= K_eff * bumpStopLength
-                compression = staticLoad / K_eff;
-            else
-                compression = (staticLoad + obj.bumpStopRate * bumpStopLength) / ...
-                    (K_eff + obj.bumpStopRate);
-            end
+            % This value is the physical spring compression at static load.
+            % Bump-stop travel is defined relative to that equilibrium, so
+            % the stop cannot contribute to the static-load calculation.
+            compression = staticLoad / K_eff;
         end
 
         function force = computeBumpStopForce(obj, compression)
