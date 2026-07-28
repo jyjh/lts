@@ -78,8 +78,48 @@ not steer or constrain the car. Logged yaw rate is used as the initial yaw rate
 by default when present.
 Set `correlation.initialTransientWindowS` in a tuning overlay, or pass
 `InitialTransientWindowS` to `lts.app.run_correlation`, to seed yaw rate and
-lateral transient channels from the median of the first N seconds instead of a
-single initial sample.
+lateral transient channels from a local linear estimate at the replay boundary
+instead of a single noisy sample. The fit is capped at 50 ms so later transient
+evolution cannot be folded into the initial state. When front and rear
+accelerometers are present, their rigid-body relationship reconstructs CG
+lateral acceleration and initial yaw acceleration.
+Set `correlation.useLoggedWheelSpeeds` in a tuning overlay, or pass
+`UseLoggedWheelSpeeds`, to choose between logged corner speeds and a
+zero-initial-slip wheel-speed state derived from the local contact-patch
+kinematics. The supplied R25 correlation tuning uses the latter because the
+lap5/raw rear channels are not dynamically consistent at the replay boundary.
+The same overlay corrects the R25 steering sensor's known center-region
+nonlinearity with a quadratic transfer curve. It preserves the measured
+road-wheel angle at +/-22 degrees, applies a 0.550 slope and -0.585 degree
+offset at center, fades the offset to zero at both endpoints, and delays the
+corrected command by 0.10 s to match the measured whole-lap yaw response.
+The R25 wheel dynamics use a 13 lb rotating-corner assembly assumption.
+Treating the measured tire as an annulus and conservatively placing the
+remaining assembly mass at the 10-inch rim radius gives 0.13575 kg*m^2 per
+corner, replacing the former 0.50 kg*m^2 placeholder.
+The scaled 43075 tire uses an effective longitudinal stiffness scale
+`LKX=0.31`. This is calibrated against driven-wheel carrier speed reconstructed
+from measured motor RPM, the specified 3.36 final drive, and the physical
+0.2032 m rolling radius; it does not fit the scale-inconsistent RR linear
+channel. Over straight-line throttle samples in the first 10 seconds of lap5,
+the measured carrier slip is 4.76% and the simulation gives 4.79%. Treat 0.31
+as an effective scale for the inherited 43100 coefficients, not as a measured
+standalone 43075 tire property. The geometry-derived 0.255 m relaxation length
+is retained because reducing it to 0.150 m did not materially improve the
+transient correlation.
+Override these
+independently with `SteeringCenterGain`, `SteeringCenterOffsetRad`,
+`SteeringCalibrationEndAngleRad`, and `SteeringDelayS`; a center gain of 1,
+center offset of 0, and delay of 0 disable the correction.
+For the same lap5/raw window, measured shaft torque removes the need for a
+correlation-specific motor-efficiency curve. The overlay uses 2.65 m^2
+effective correlation `CdA`; this includes
+unmodeled rotating/drivetrain losses and does not modify the physical aero
+definition in `lts.vehicles.R25`.
+The measured-shaft-torque replay path does not apply an additional fitted
+torque-proportional drivetrain loss. Wheel/rotor inertia, rolling resistance,
+and aero drag remain active; a shaft-to-axle loss should only be restored when
+it is supported by direct measurement.
 Correlation defaults to time-domain replay and stops at the imported replay
 duration, not the reference track end; use `ReplayDomain`, `StopAtReplayEnd`,
 and `StopAtTrackEnd` to override timing behavior. Console progress and
@@ -90,8 +130,11 @@ If the log has no direct brake pedal channel, the default map derives
 both pressures to bar, sums the front and rear pressure traces, maps the peak
 combined pressure in the imported log/window to `1.0`, and scales the remaining
 samples by the same peak.
-For correlation runs that should use the logged line pressures directly, pass
-`'BrakeMode', 'pressure'`. The extractor also carries
+The supplied R25 correlation tuning defaults to the logged line pressures
+because they preserve the physical front/rear brake balance and avoid a
+lap-window-dependent normalization that over-decelerates the later stops.
+An explicit `'BrakeMode', 'ratio'` or `'BrakeMode', 'pressure'` argument
+overrides the tuning default. The extractor carries
 `brake_pressure_front_bar` and `brake_pressure_rear_bar` into the replay CSV,
 and the simulator converts them through the vehicle's brake-pressure
 calibration instead of the peak-normalized `brake_ratio` path.
@@ -102,6 +145,7 @@ first sample.
 For R25 logs, the extractor also carries `regen_torque_nm` from
 `Throttle Regen Negative Torque Command` / `Throttle Regen Negative Torque C`
 and `motor_torque_command_nm` from `BAMOCAR Channels Calculated Cmd`, plus
+`motor_torque_delivered_nm` from `BAMOCAR Channels Iq`, plus
 `motor_rpm` from `BAMOCAR Channels RPM` and `pack_voltage_v` / `pack_current_a`
 from the BMS. These raw torque channels are stored with unsigned 16-bit
 conventions even though the physical signals are signed; the channel map wraps
@@ -109,6 +153,39 @@ conventions even though the physical signals are signed; the channel map wraps
 `regen_torque_nm` is exported on the negative-torque side for correlation. Pack
 current is treated as positive for discharge/motoring power and negative for
 charging/regen power.
+The raw `BAMOCAR Channels Iq` signal is a unitless integer CAN quantity, not an
+engineering-Apeak channel. Lap-integrated power conservation identifies its
+conversion as `0.5 Arms/count`. For the EMRAX 228 medium-voltage winding,
+delivered torque is therefore computed as
+`Iq * 0.5 Arms/count * 0.48 Nm/Arms = Iq * 0.24 Nm/count`. This gives 94.8%
+shaft-to-DC motoring efficiency over lap5, before the separately modeled
+drivetrain loss. Prefer
+`'PowertrainMode', 'motor_torque_delivered'` for R25 correlation. This mode
+uses the measured signed shaft torque directly, applies only
+`powertrain.deliveredTorqueDrivetrainEfficiency` between the motor shaft and
+driven axle, and deliberately bypasses request-side pack-power and RPM limits.
+The calculated command and pack channels remain in telemetry for validation.
+The R25 extractor also repairs physically impossible regen samples after
+aligning the pack channels 15 ms later than motor torque. This alignment
+minimizes the reconstructed braking impulse; the former 85 ms advance
+minimized the number of flagged samples but injected substantially more
+regen torque. While
+the signed motor command requests regen and the pack is charging, shaft mechanical input power
+cannot be lower than recovered DC power. Iq samples that contradict the
+charging sign or violate that bound beyond 500 W are replaced by the minimum
+shaft torque required at 100% conversion efficiency. This is a conservative
+power-conservation bound: coherent Iq samples remain unchanged, and no fitted
+regen-efficiency multiplier is applied. Repair counts and limits are recorded
+under `postprocessing.delivered_regen_power_repair` in the extraction manifest.
+The always-negative `regen_torque_nm` capability channel is used only when the
+signed motor-command channel is unavailable; it does not by itself indicate
+that regen is active.
+The supplied `R25_correlation_tuning` applies the same idempotent check after
+MATLAB loads a replay profile. Consequently, `run_correlation` repairs both
+newly extracted MoTeC data and older files passed through `ReplayCsv`; the
+returned `outputs.regenRepairSampleCount` and related fields report what was
+changed. This runtime check is enabled only for
+`PowertrainMode='motor_torque_delivered'`.
 By default replay still drives the simulated powertrain from logged throttle.
 Pass `'PowertrainMode', 'motor_torque_command'` to bypass the throttle map and
 EMRAX torque envelope. In that mode, `motor_torque_command_nm` is treated as a

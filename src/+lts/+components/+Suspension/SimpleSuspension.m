@@ -287,6 +287,77 @@ classdef SimpleSuspension
             cornerState.demandedLoad = F_suspension;
         end
 
+        function initializeCornerFromChassis(obj, cornerState, sprungPosition, ...
+                sprungVelocity, antiRollBarForce)
+            % INITIALIZECORNERFROMCHASSIS Set the unsprung state to static
+            % equilibrium for an imposed chassis position. This is used by
+            % correlation warm starts, where integrating from the static-ride
+            % wheel position would inject an avoidable wheel-hop transient.
+            if nargin < 5 || isempty(antiRollBarForce) || ...
+                    ~isfinite(antiRollBarForce)
+                antiRollBarForce = 0;
+            end
+            if nargin < 4 || isempty(sprungVelocity) || ...
+                    ~isfinite(sprungVelocity)
+                sprungVelocity = 0;
+            end
+
+            MR_eff = obj.getEffectiveMotionRatio(cornerState);
+            K_eff = obj.springRate * MR_eff^2;
+            lower = -0.25;
+            upper = 0.25;
+            fLower = obj.chassisEquilibriumResidual( ...
+                cornerState, sprungPosition, sprungVelocity, lower, ...
+                antiRollBarForce, K_eff, MR_eff);
+            fUpper = obj.chassisEquilibriumResidual( ...
+                cornerState, sprungPosition, sprungVelocity, upper, ...
+                antiRollBarForce, K_eff, MR_eff);
+
+            if fLower * fUpper <= 0
+                for idx = 1:60
+                    mid = 0.5 * (lower + upper);
+                    fMid = obj.chassisEquilibriumResidual( ...
+                        cornerState, sprungPosition, sprungVelocity, mid, ...
+                        antiRollBarForce, K_eff, MR_eff);
+                    if fLower * fMid <= 0
+                        upper = mid;
+                        fUpper = fMid; %#ok<NASGU>
+                    else
+                        lower = mid;
+                        fLower = fMid;
+                    end
+                end
+                unsprungPosition = 0.5 * (lower + upper);
+            else
+                % The normal operating range is bracketed above. Retain a
+                % finite, bounded state for pathological configurations.
+                if abs(fLower) < abs(fUpper)
+                    unsprungPosition = lower;
+                else
+                    unsprungPosition = upper;
+                end
+            end
+
+            suspensionDeflection = sprungPosition - unsprungPosition;
+            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
+                cornerState, suspensionDeflection, sprungVelocity, K_eff, MR_eff);
+            F_suspension = F_suspension + antiRollBarForce;
+            F_tire = obj.computeTireNormalForce(cornerState, unsprungPosition);
+
+            cornerState.sprungPosition = sprungPosition;
+            cornerState.sprungVelocity = sprungVelocity;
+            cornerState.unsprungPosition = unsprungPosition;
+            cornerState.unsprungVelocity = 0;
+            cornerState.damperPosition = suspensionDeflection;
+            cornerState.damperVelocity = sprungVelocity;
+            cornerState.tireDeflection = max( ...
+                cornerState.staticTireDeflection + unsprungPosition, 0);
+            cornerState.tireNormalForce = F_tire;
+            cornerState.suspensionForce = F_suspension;
+            cornerState.antiRollBarForce = antiRollBarForce;
+            cornerState.demandedLoad = F_suspension;
+        end
+
         function wheelRate = getEffectiveWheelRate(obj, cornerState)
             % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
             % Includes bump-stop tangent stiffness when the current dynamic
@@ -308,6 +379,17 @@ classdef SimpleSuspension
     end
 
     methods (Access = private)
+        function residual = chassisEquilibriumResidual(obj, cornerState, ...
+                sprungPosition, sprungVelocity, unsprungPosition, ...
+                antiRollBarForce, K_eff, MR_eff)
+            suspensionDeflection = sprungPosition - unsprungPosition;
+            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
+                cornerState, suspensionDeflection, sprungVelocity, K_eff, MR_eff);
+            F_suspension = F_suspension + antiRollBarForce;
+            F_tire = obj.computeTireNormalForce(cornerState, unsprungPosition);
+            residual = F_suspension - F_tire;
+        end
+
         function MR_eff = getEffectiveMotionRatio(obj, cornerState)
             MR_eff = obj.motionRatio;
             if cornerState.motionRatioEffective > 0

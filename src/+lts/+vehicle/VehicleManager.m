@@ -111,6 +111,12 @@ classdef VehicleManager
             powertrain = powertrain.setDrivenWheelRadius(config.tire.wheelRadius);
             powertrain.regenEfficiency = ...
                 lts.util.fieldOr(config.powertrain, 'regenEfficiency', NaN);
+            powertrain.deliveredTorqueDrivetrainEfficiency = ...
+                lts.util.fieldOr(config.powertrain, ...
+                'deliveredTorqueDrivetrainEfficiency', NaN);
+            powertrain = powertrain.setMotoringEfficiencyCurve( ...
+                lts.util.fieldOrDefault(config.powertrain, 'efficiencyRpm', []), ...
+                lts.util.fieldOrDefault(config.powertrain, 'efficiencyValues', []));
             finalDriveRatio = lts.util.fieldOr(config.powertrain, 'finalDriveRatio', NaN);
             if isfinite(finalDriveRatio) && finalDriveRatio > 0
                 powertrain = powertrain.setFinalDriveRatio(finalDriveRatio);
@@ -147,8 +153,16 @@ classdef VehicleManager
             tire = lts.components.Tire.PacejkaTire(config.tire.tirFile);
             tire.wheelInertia = config.tire.wheelInertia;
             tire.relaxationLength = config.tire.relaxationLength;
+            if isfield(config.tire, 'longitudinalRelaxationLength')
+                tire.longitudinalRelaxationLength = ...
+                    config.tire.longitudinalRelaxationLength;
+            end
             if isfield(config.tire, 'lateralStiffnessScale')
                 tire.lateralStiffnessScale = config.tire.lateralStiffnessScale;
+            end
+            if isfield(config.tire, 'lateralStiffnessScaleByCorner')
+                tire.lateralStiffnessScaleByCorner = ...
+                    config.tire.lateralStiffnessScaleByCorner;
             end
             % Legacy surfaceMuReference is deliberately ignored. The tire
             % file is the sole source of grip and all surfaces report Mu=1.

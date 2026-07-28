@@ -43,7 +43,8 @@
       "brake_pressure_front_bar": "Front brake line pressure in bar, carried through for pressure-based correlation braking.",
       "brake_pressure_rear_bar": "Rear brake line pressure in bar, carried through for pressure-based correlation braking.",
       "regen_torque_nm": "Logged throttle regen negative torque command in signed Nm. The raw channel is decoded from unsigned storage and exported negative by convention; it is a regen candidate/command trace and can be nonzero while throttle is active.",
-      "motor_torque_command_nm": "Logged BAMOCAR calculated torque command in signed Nm. The raw channel is decoded from unsigned int16 storage so negative commanded torque appears below zero.",
+      "motor_torque_command_nm": "Logged BAMOCAR calculated torque request in signed command Nm. The raw channel is decoded from unsigned int16 storage; this is a request, not delivered shaft torque.",
+      "motor_torque_delivered_nm": "Delivered EMRAX shaft torque from the unitless BAMOCAR q-axis CAN value: 0.5 Arms/count times the MV-winding torque constant 0.48 Nm/Arms = 0.24 Nm/count.",
       "motor_rpm": "Logged BAMOCAR motor speed in rpm, used to limit direct calculated-command replay against measured pack power without feeding back simulated speed error.",
       "pack_voltage_v": "Logged tractive battery pack voltage in volts, used to sanity-limit direct calculated-command replay against measured DC pack power.",
       "pack_current_a": "Logged tractive battery pack current in amps. Positive current is treated as pack discharge/motoring power and negative current as charging/regen power.",
@@ -172,6 +173,16 @@
       "scale": 0.01,
       "source_unit_scale": {
         "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_torque_delivered_nm": {
+      "names": ["BAMOCAR Channels Iq", "BAMOCAR Iq", "Motor Iq"],
+      "required": false,
+      "default": null,
+      "scale": 0.24,
+      "source_unit_scale": {
+        "A": 1.0,
         "": 1.0
       }
     },

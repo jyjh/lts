@@ -181,6 +181,18 @@ lts.app.run_correlation( ...
     'PowertrainMode', 'motor_torque_command')
 ```
 
+R25 logs also expose BAMOCAR `Iq`. When the normalized replay contains
+`motor_torque_delivered_nm`, prefer the measured shaft-torque path:
+the unitless CAN value is converted with `0.5 Arms/count` and the EMRAX 228 MV
+constant of `0.48 Nm/Arms`, for a combined scale of `0.24 Nm/count`.
+
+```matlab
+lts.app.run_correlation( ...
+    'ReplayCsv', 'exports/correlation_lap5_replay.csv', ...
+    'PowertrainMode', 'motor_torque_delivered', ...
+    'LimitMotorTorqueByPackPower', false)
+```
+
 ## compare_sim_runs.py
 
 Compares two exported simulator telemetry CSVs over the same track and prints a

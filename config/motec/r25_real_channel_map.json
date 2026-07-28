@@ -1,5 +1,15 @@
 {
   "sample_frequency_hz": 1000,
+  "delivered_regen_power_repair": {
+    "enabled": true,
+    "pack_power_advance_s": -0.015,
+    "minimum_charging_power_w": 1000.0,
+    "minimum_motor_speed_rpm": 300.0,
+    "regen_request_threshold_nm": 5.0,
+    "power_tolerance_w": 500.0,
+    "maximum_regen_efficiency": 1.0,
+    "maximum_reconstructed_torque_nm": 170.0
+  },
   "channels": {
     "distance_m": {
       "names": ["Distance", "Lap Distance", "Distance on GPS", "GPS Distance"],
@@ -107,6 +117,16 @@
       "scale": 0.01,
       "source_unit_scale": {
         "Nm": 1.0,
+        "": 1.0
+      }
+    },
+    "motor_torque_delivered_nm": {
+      "names": ["BAMOCAR Channels Iq", "BAMOCAR Iq", "Motor Iq"],
+      "required": false,
+      "default": null,
+      "scale": 0.24,
+      "source_unit_scale": {
+        "A": 1.0,
         "": 1.0
       }
     },

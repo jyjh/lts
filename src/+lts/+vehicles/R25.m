@@ -152,13 +152,52 @@ function cfg = R25()
     %  TIRE
     %  Pacejka Magic Formula (MF 6.1) via MFeval; tirFile lives in +Tire/.
     %  ====================================================================
-    % NOTE: CSV r14 lists '16.0x7.5-10 R20 Hoosier'. The default tirFile below is for an
-    % 18x7.5-10 Hoosier until a matching 16x7.5-10 .tir is available, but
-    % wheelRadius follows the 16.0 in tire diameter from the spec sheet.
+    % CSV r14 lists the Hoosier 43075 16.0x7.5-10 R20. The TIR below starts
+    % from the measured 43100 18.0x6.0-10 R20 coefficients and applies
+    % 43075 geometry plus physically constrained stiffness/trail scales.
+    % wheelRadius is the installed effective rolling radius; the TIR keeps
+    % Hoosier's larger unloaded radius separately.
+    % At equal load and pressure, the 17.7% wider target tread implies a
+    % contact patch about 15% shorter, while its roughly 23% shorter sidewall
+    % raises carcass stiffness. Geometry alone would therefore suggest a
+    % higher scale than the effective value used here. The lap5 driven-wheel
+    % carrier speed provides a direct in-car calibration: motor RPM divided
+    % by the specified 3.36 final drive and multiplied by the 0.2032 m rolling
+    % radius exposes the torque-dependent driven-wheel slip independently of
+    % the scale-inconsistent RR linear channel. LKX=0.67 matches that measured
+    % torque/slip slope and remains an effective correlation scale for the
+    % inherited 43100 coefficients, not a claimed standalone 43075 material
+    % property.
+    % Preserve the geometry-derived 0.255 m lateral relaxation length. The
+    % longitudinal contact-patch response is much shorter: using 0.255 m for
+    % slip ratio adds about 18 ms of force lag at 14 m/s and excites a
+    % nonphysical 14-15 Hz pitch/load oscillation at the corrected LKX.
+    % A separate 0.05 m longitudinal length removes that feedback without
+    % changing lateral response.
+    % LKY=1.05 combines the shorter brush contact length with the dominant
+    % increase in carcass stiffness from the wider tread and shorter sidewall.
+    % Peak-friction scales remain unity because both source and target use
+    % the R20 compound. Pneumatic-trail scaling retains
+    % the shorter target contact length after the smaller R0 is applied.
+    % The complete rotating corner assembly is assumed to weigh 13 lb.
+    % Model the measured tire mass as an annulus between the 10 in rim and
+    % unloaded tire radii. Conservatively place the remaining wheel/rotor
+    % mass at the rim radius as a hoop; this is an upper-bound estimate for
+    % mass that is actually distributed inward toward the hub.
+    wheelAssemblyMassKg = 13 * 0.45359237;
+    tireMassKg = 3.10222;
+    tireUnloadedRadiusM = 0.20574;
+    rimRadiusM = 10 * 0.0254 / 2;
+    tirePolarInertia = 0.5 * tireMassKg * ...
+        (tireUnloadedRadiusM^2 + rimRadiusM^2);
+    remainingAssemblyInertia = ...
+        (wheelAssemblyMassKg - tireMassKg) * rimRadiusM^2;
+    wheelAssemblyInertia = tirePolarInertia + remainingAssemblyInertia;
     cfg.tire = struct( ...
         'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir', ... % [verify vs CSV r14 tire size]
-        'wheelInertia', 0.5, ...         % [not in spec sheet] [kg*m^2]
-        'relaxationLength', 0.30, ...    % [not in spec sheet] [m]
+        'wheelInertia', wheelAssemblyInertia, ... % 0.13575 kg*m^2 from 13 lb assembly
+        'relaxationLength', 0.255, ...   % lateral: 0.30 m * (6.2/7.3) [m]
+        'longitudinalRelaxationLength', 0.05, ... % separate slip-ratio force lag [m]
         'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
         'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]
         'bearingDragCoeff', 0);          % [not in spec sheet]

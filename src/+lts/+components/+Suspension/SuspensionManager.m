@@ -471,6 +471,35 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             loads = obj.applyChassisGeometricTransfer(loads, chassis);
         end
 
+        function loads = initializeCornerLoadsFromChassis(obj, chassis, steer)
+            % INITIALIZECORNERLOADSFROMCHASSIS Put each unsprung mass and tire
+            % spring in equilibrium with an already-seeded chassis attitude.
+            if nargin < 3 || isempty(steer)
+                steer = 0;
+            end
+
+            chassis.computeCornerKinematics();
+            disp = chassis.state.cornerDisplacement;
+            vel = chassis.state.cornerVelocity;
+            arb = obj.getAntiRollBarForces();
+
+            obj.frontLeft.initializeCornerFromChassis( ...
+                obj.frontLeft.state, disp.FL, vel.FL, arb.FL);
+            obj.frontRight.initializeCornerFromChassis( ...
+                obj.frontRight.state, disp.FR, vel.FR, arb.FR);
+            obj.rearLeft.initializeCornerFromChassis( ...
+                obj.rearLeft.state, disp.RL, vel.RL, arb.RL);
+            obj.rearRight.initializeCornerFromChassis( ...
+                obj.rearRight.state, disp.RR, vel.RR, arb.RR);
+            obj.updateGeometry(steer);
+
+            loads.FL = obj.frontLeft.state.tireNormalForce;
+            loads.FR = obj.frontRight.state.tireNormalForce;
+            loads.RL = obj.rearLeft.state.tireNormalForce;
+            loads.RR = obj.rearRight.state.tireNormalForce;
+            loads = obj.applyChassisGeometricTransfer(loads, chassis);
+        end
+
         function frac = deriveFrontRollStiffnessFraction(obj)
             % DERIVEFRONTROLLSTIFFNESSFRACTION Front share [0-1] of the
             % elastic lateral load transfer, derived from actual per-axle

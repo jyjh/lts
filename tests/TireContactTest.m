@@ -223,6 +223,52 @@ tire.updateAllCorners(1000, 1000, 1000, 1000, ...
 verifyEqual(testCase, tire.FL.slipAngle, expectedAlpha, 'AbsTol', 1e-12);
 end
 
+function testLongitudinalRelaxationLengthIsIndependent(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0.30;
+tire.longitudinalRelaxationLength = 0.05;
+dt = 0.01;
+speed = 10;
+targetAlpha = 0.05;
+targetKappa = 0.08;
+expectedAlpha = targetAlpha * ...
+    (1 - exp(-speed * dt / tire.relaxationLength));
+expectedKappa = targetKappa * ...
+    (1 - exp(-speed * dt / tire.longitudinalRelaxationLength));
+
+tire.updateAllCorners(1000, 1000, 1000, 1000, ...
+    targetAlpha, targetAlpha, targetAlpha, targetAlpha, ...
+    targetKappa, targetKappa, targetKappa, targetKappa, ...
+    0, 0, 0, 0, dt, repmat(speed, 4, 1), ...
+    tire.surfaceMuReference, false, 'advance');
+
+verifyEqual(testCase, tire.FL.slipAngle, expectedAlpha, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.slipRatio, expectedKappa, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, tire.FL.slipRatio / targetKappa, ...
+    tire.FL.slipAngle / targetAlpha);
+end
+
+function testPerCornerLateralStiffnessScaleChangesForceNotSlipState(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+tire.lateralStiffnessScaleByCorner = [0.65 0.65 1 1];
+normalLoad = 1000;
+slipAngle = 0.04;
+speed = 15;
+
+tire.updateAllCorners(normalLoad, normalLoad, normalLoad, normalLoad, ...
+    slipAngle, slipAngle, slipAngle, slipAngle, ...
+    0, 0, 0, 0, 0, 0, 0, 0, ...
+    0.001, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+
+verifyEqual(testCase, ...
+    [tire.FL.slipAngle, tire.FR.slipAngle, ...
+     tire.RL.slipAngle, tire.RR.slipAngle], ...
+    repmat(slipAngle, 1, 4), 'AbsTol', 1e-12);
+verifyLessThan(testCase, abs(tire.FL.Fy), abs(tire.RL.Fy));
+verifyLessThan(testCase, abs(tire.FR.Fy), abs(tire.RR.Fy));
+end
+
 function testPassiveWheelCanRollNegativeWithReverseLocalRoadSpeed(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;
@@ -255,6 +301,32 @@ tire.updateWheelDynamics(corner, 0, brakeTorque, dt, I, longSpeed);
 
 verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
 verifyGreaterThan(testCase, corner.angularVelocity, 0);
+end
+
+function testR25ScaledTireRepresents43075GeometryAndPhysicsScales(testCase)
+constants = lts.components.Tire.TireConstants( ...
+    'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir');
+p = constants.params;
+cfg = lts.vehicles.R25();
+
+verifyEqual(testCase, p.UNLOADED_RADIUS, 16.2 * 0.0254 / 2, 'AbsTol', 1e-8);
+verifyEqual(testCase, p.WIDTH, 7.3 * 0.0254, 'AbsTol', 1e-8);
+verifyEqual(testCase, p.RIM_WIDTH, 8.0 * 0.0254, 'AbsTol', 1e-8);
+verifyEqual(testCase, p.MASS1, 3.49 * 8 / 9, 'AbsTol', 1e-5);
+verifyEqual(testCase, p.LMUX, 1, 'AbsTol', 1e-12);
+verifyEqual(testCase, p.LMUY, 1, 'AbsTol', 1e-12);
+verifyEqual(testCase, p.LKX, 0.67, 'AbsTol', 1e-12);
+verifyEqual(testCase, p.LKY, 1.05, 'AbsTol', 1e-12);
+verifyEqual(testCase, p.LTR, 0.95, 'AbsTol', 1e-12);
+assemblyMass = 13 * 0.45359237;
+rimRadius = 10 * 0.0254 / 2;
+expectedInertia = 0.5 * p.MASS1 * ...
+    (p.UNLOADED_RADIUS^2 + rimRadius^2) + ...
+    (assemblyMass - p.MASS1) * rimRadius^2;
+verifyEqual(testCase, cfg.tire.wheelInertia, expectedInertia, 'AbsTol', 1e-12);
+verifyEqual(testCase, cfg.tire.relaxationLength, 0.255, 'AbsTol', 1e-12);
+verifyEqual(testCase, cfg.tire.longitudinalRelaxationLength, ...
+    0.05, 'AbsTol', 1e-12);
 end
 
 function tire = createPacejkaTire()

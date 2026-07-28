@@ -34,18 +34,29 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % (wheel + tire + brake disc rotating assembly)
         wheelInertia = 0.5
 
-        % Tire relaxation length [m]. Models the first-order contact-patch
-        % lag between the kinematic (steady-state) slip and the force-
-        % producing (transient) slip:
+        % Lateral tire relaxation length [m]. Models the first-order
+        % contact-patch lag between kinematic slip angle and force-producing
+        % slip angle:
         %   sigma * d(alpha)/dt + V * alpha = V * alpha_ss
         % Solved in the exact, unconditionally-stable exponential form.
         % 0 disables the transient layer (pure steady-state Magic Formula).
         relaxationLength = 0.30
 
+        % Longitudinal relaxation length [m] for slip ratio. NaN preserves
+        % backward compatibility by using relaxationLength for both states.
+        % A separate value avoids imposing the substantially longer lateral
+        % carcass/contact-patch response on the driven-wheel torque loop.
+        longitudinalRelaxationLength = NaN
+
         % Multiplier on force-evaluation slip angle. This is a correlation
         % knob for cornering-stiffness sensitivity; stored kinematic and
         % relaxed slip states remain in physical radians.
         lateralStiffnessScale = 1.0
+
+        % Optional [FL FR RL RR] multipliers applied after the global scale.
+        % This changes axle cornering stiffness without changing peak grip or
+        % the physical kinematic/relaxed slip states.
+        lateralStiffnessScaleByCorner = [1 1 1 1]
 
         % Rolling-resistance coefficient [-]. Acts as a wheel-resistance
         % torque T_rr = Crr * Fz * R opposing rotation, so a free-rolling
@@ -584,20 +595,38 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                              obj.RL.slipAngle; obj.RR.slipAngle];
             previousKappa = [obj.FL.slipRatio; obj.FR.slipRatio; ...
                              obj.RL.slipRatio; obj.RR.slipRatio];
-            sigma = obj.relaxationLength;
+            sigmaAlpha = obj.relaxationLength;
+            sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
             advanceMode = strcmp(relaxationMode, 'advance');
             holdMode = strcmp(relaxationMode, 'hold');
-            if holdMode && sigma > 0
-                alpha = previousAlpha;
-                kappa = previousKappa;
-            elseif sigma <= 0 || dt <= 0 || strcmp(relaxationMode, 'steady')
+            if holdMode
+                alpha = ssAlpha;
+                kappa = ssKappa;
+                if sigmaAlpha > 0
+                    alpha = previousAlpha;
+                end
+                if sigmaKappa > 0
+                    kappa = previousKappa;
+                end
+            elseif dt <= 0 || strcmp(relaxationMode, 'steady')
                 alpha = ssAlpha;
                 kappa = ssKappa;
             else
                 V_eff = max(abs(longSpeed), 1.0);
-                decay = exp(-V_eff * dt / sigma);
-                alpha = ssAlpha - (ssAlpha - previousAlpha) .* decay;
-                kappa = ssKappa - (ssKappa - previousKappa) .* decay;
+                if sigmaAlpha > 0
+                    decayAlpha = exp(-V_eff * dt / sigmaAlpha);
+                    alpha = ssAlpha - ...
+                        (ssAlpha - previousAlpha) .* decayAlpha;
+                else
+                    alpha = ssAlpha;
+                end
+                if sigmaKappa > 0
+                    decayKappa = exp(-V_eff * dt / sigmaKappa);
+                    kappa = ssKappa - ...
+                        (ssKappa - previousKappa) .* decayKappa;
+                else
+                    kappa = ssKappa;
+                end
                 kappa = obj.clampSlipRatio(kappa);
             end
             % A stopped contact patch has no kinematic longitudinal slip.
@@ -621,7 +650,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if any(active)
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
-                alphaEval = obj.evaluationSlipAngle(alpha);
+                alphaEval = obj.evaluationSlipAnglesByCorner(alpha);
                 alphaEval([2, 4]) = -alphaEval([2, 4]);
                 inputsMF = [Fz(active), kappa(active), alphaEval(active), ...
                     gamma(active), zeros(nActive, 1), ...
@@ -723,39 +752,32 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Solved with the exact, unconditionally-stable exponential form
             %   alpha = alpha_ss - (alpha_ss - alpha_prev) * exp(-V_eff*dt/sigma)
             % which is stable for any dt (explicit Euler would be stiff here).
-            % With relaxationLength = 0 the transient slip equals ss (baseline).
-            sigma = obj.relaxationLength;
+            % Each state has its own physical relaxation length. NaN for the
+            % longitudinal value retains the legacy shared-length behavior.
+            sigmaAlpha = obj.relaxationLength;
+            sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
             clearLongitudinalSlipAtRest = ...
                 abs(longSpeed) <= 1e-9 && abs(ssKappa) <= 1e-12;
             if nargin < 7 || isempty(relaxationMode)
                 relaxationMode = obj.resolveRelaxationMode(dt, '');
             end
-            if sigma <= 0 || dt <= 0
-                if strcmp(relaxationMode, 'hold') && sigma > 0
-                    alpha = cornerState.slipAngle;
-                    kappa = cornerState.slipRatio;
-                    if clearLongitudinalSlipAtRest
-                        kappa = 0;
-                    end
-                    return;
-                end
+            if strcmp(relaxationMode, 'hold')
                 alpha = ssAlpha;
                 kappa = ssKappa;
+                if sigmaAlpha > 0
+                    alpha = cornerState.slipAngle;
+                end
+                if sigmaKappa > 0
+                    kappa = cornerState.slipRatio;
+                end
                 if clearLongitudinalSlipAtRest
                     kappa = 0;
                 end
                 return;
             end
-            if strcmp(relaxationMode, 'steady')
+            if dt <= 0 || strcmp(relaxationMode, 'steady')
                 alpha = ssAlpha;
                 kappa = ssKappa;
-                if clearLongitudinalSlipAtRest
-                    kappa = 0;
-                end
-                return;
-            elseif strcmp(relaxationMode, 'hold')
-                alpha = cornerState.slipAngle;
-                kappa = cornerState.slipRatio;
                 if clearLongitudinalSlipAtRest
                     kappa = 0;
                 end
@@ -765,14 +787,32 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Effective rolling speed for the lag time constant. A floor keeps
             % the transient model well-conditioned near standstill.
             V_eff = max(abs(longSpeed), 1.0);
-            decay = exp(-V_eff * dt / sigma);
-
-            alpha = ssAlpha - (ssAlpha - cornerState.slipAngle) * decay;
-            kappa = ssKappa - (ssKappa - cornerState.slipRatio) * decay;
+            if sigmaAlpha > 0
+                decayAlpha = exp(-V_eff * dt / sigmaAlpha);
+                alpha = ssAlpha - ...
+                    (ssAlpha - cornerState.slipAngle) * decayAlpha;
+            else
+                alpha = ssAlpha;
+            end
+            if sigmaKappa > 0
+                decayKappa = exp(-V_eff * dt / sigmaKappa);
+                kappa = ssKappa - ...
+                    (ssKappa - cornerState.slipRatio) * decayKappa;
+            else
+                kappa = ssKappa;
+            end
 
             kappa = obj.clampSlipRatio(kappa);
             if clearLongitudinalSlipAtRest
                 kappa = 0;
+            end
+        end
+
+        function sigma = resolvedLongitudinalRelaxationLength(obj)
+            sigma = obj.longitudinalRelaxationLength;
+            if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
+                    ~isfinite(sigma) || sigma < 0
+                sigma = obj.relaxationLength;
             end
         end
 
@@ -990,6 +1030,20 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 scale = 1.0;
             end
             alphaEval = lts.util.clamp(alpha .* scale, -0.3, 0.3);
+        end
+
+        function alphaEval = evaluationSlipAnglesByCorner(obj, alpha)
+            alphaEval = obj.evaluationSlipAngle(alpha);
+            scale = obj.lateralStiffnessScaleByCorner;
+            if isempty(scale) || ~isnumeric(scale) || numel(scale) ~= 4 || ...
+                    any(~isfinite(scale)) || any(scale <= 0)
+                scale = ones(4, 1);
+            else
+                scale = scale(:);
+            end
+            if numel(alphaEval) == 4
+                alphaEval = lts.util.clamp(alphaEval(:) .* scale, -0.3, 0.3);
+            end
         end
 
         function kappa = computeKinematicSlipRatio(obj, wheelSpeed, longitudinalSpeed)

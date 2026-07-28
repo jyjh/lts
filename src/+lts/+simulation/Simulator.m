@@ -421,7 +421,7 @@ classdef Simulator < handle
             forces.rollResistance = F_rollResist;
         end
         
-        function [stateLog, lapTime] = simulate(obj, initialState, track)
+        function [stateLog, lapTime] = simulate(obj, initialState, track, varargin)
             % SIMULATE Run the full lap simulation
             %   [stateLog, lapTime] = simulate(initialState, track)
             %
@@ -433,8 +433,14 @@ classdef Simulator < handle
             % laps for closed circuits when requested, calls step(), and
             % records telemetry. The state transition itself lives in step().
             
+            parser = inputParser;
+            parser.addParameter('PreserveInitialComponentState', false, ...
+                @(x) (islogical(x) || isnumeric(x)) && isscalar(x));
+            parser.parse(varargin{:});
+
             vm = obj.vehicleManager;
-            obj.resetForSimulation();
+            obj.resetForSimulation( ...
+                logical(parser.Results.PreserveInitialComponentState));
             
             % Set vehicleManager reference on state so components can access constants
             initialState.vehicleManager = vm;
@@ -1089,6 +1095,12 @@ classdef Simulator < handle
                     ['PowertrainMode "motor_torque_command" requires ' ...
                     'motor_torque_command_nm in the replay profile.']);
             end
+            if obj.powertrainMode == "motor_torque_delivered" && ...
+                    ~profile.hasMotorTorqueDelivered()
+                error('lts_simulation_Simulator:MissingMotorTorqueDelivered', ...
+                    ['PowertrainMode "motor_torque_delivered" requires ' ...
+                    'motor_torque_delivered_nm in the replay profile.']);
+            end
             obj.stopOnOffTrack = logical(parser.Results.StopOnOffTrack);
             obj.stopAtTrackEnd = logical(parser.Results.StopAtTrackEnd);
             obj.referenceMode = lower(string(parser.Results.ReferenceMode));
@@ -1104,7 +1116,13 @@ classdef Simulator < handle
                 obj.stopTime = inf;
             end
 
-            [stateLog, lapTime] = obj.simulate(initialState, track);
+            % CorrelationStateInitializer warm-starts the chassis, suspension,
+            % tire relaxation, wheel-speed, and powertrain component states.
+            % A normal simulate() call resets those components for deterministic
+            % standalone runs; replay must retain them to avoid rebuilding a
+            % mid-corner transient from static equilibrium.
+            [stateLog, lapTime] = obj.simulate(initialState, track, ...
+                'PreserveInitialComponentState', true);
             stateLog = obj.addReplayReferenceChannels(stateLog, profile);
         end
 
@@ -1137,6 +1155,10 @@ classdef Simulator < handle
                 stateLog.replayMotorTorqueCommandNm = localInterpProfileChannel( ...
                     profile.time, profile.motorTorqueCommandNm, queryTime);
             end
+            if profile.hasMotorTorqueDelivered()
+                stateLog.replayMotorTorqueDeliveredNm = localInterpProfileChannel( ...
+                    profile.time, profile.motorTorqueDeliveredNm, queryTime);
+            end
             if profile.hasMotorRpm()
                 stateLog.replayMotorRpm = localInterpProfileChannel( ...
                     profile.time, profile.motorRpm, queryTime);
@@ -1153,6 +1175,32 @@ classdef Simulator < handle
                 profile.time, profile.steer, queryTime);
             stateLog.replaySpeed = localInterpProfileChannel( ...
                 profile.time, profile.speed, queryTime);
+            if profile.hasWheelSpeeds()
+                stateLog.replayWheelSpeedFL = localInterpProfileChannel( ...
+                    profile.time, profile.wheelSpeedFL, queryTime);
+                stateLog.replayWheelSpeedFR = localInterpProfileChannel( ...
+                    profile.time, profile.wheelSpeedFR, queryTime);
+                stateLog.replayWheelSpeedRL = localInterpProfileChannel( ...
+                    profile.time, profile.wheelSpeedRL, queryTime);
+                stateLog.replayWheelSpeedRR = localInterpProfileChannel( ...
+                    profile.time, profile.wheelSpeedRR, queryTime);
+                simulatedFields = { ...
+                    'tireSpeed_FL', 'tireSpeed_FR', ...
+                    'tireSpeed_RL', 'tireSpeed_RR'};
+                replayFields = { ...
+                    'replayWheelSpeedFL', 'replayWheelSpeedFR', ...
+                    'replayWheelSpeedRL', 'replayWheelSpeedRR'};
+                errorFields = { ...
+                    'wheelSpeedErrorFL', 'wheelSpeedErrorFR', ...
+                    'wheelSpeedErrorRL', 'wheelSpeedErrorRR'};
+                for cornerIdx = 1:numel(simulatedFields)
+                    if isfield(stateLog, simulatedFields{cornerIdx})
+                        stateLog.(errorFields{cornerIdx}) = ...
+                            stateLog.(simulatedFields{cornerIdx}) - ...
+                            stateLog.(replayFields{cornerIdx});
+                    end
+                end
+            end
             if profile.hasLatAccel()
                 stateLog.replayLatAccelG = localInterpProfileChannel( ...
                     profile.time, profile.latAccelG, queryTime);
@@ -1291,10 +1339,54 @@ classdef Simulator < handle
                     totalDriveTorque = max(0, wheelTorque);
                     totalCoastdownTorque = min(0, wheelTorque);
 
+                case "motor_torque_delivered"
+                    deliveredMotorTorqueNm = localGetField(input, ...
+                        'motorTorqueDeliveredNm', NaN);
+                    if ~isfinite(deliveredMotorTorqueNm)
+                        error('lts_simulation_Simulator:MissingMotorTorqueDelivered', ...
+                            ['PowertrainMode "motor_torque_delivered" requires a finite ' ...
+                            'motorTorqueDeliveredNm input from the replay profile.']);
+                    end
+                    wheelTorque = obj.applyDeliveredMotorTorque( ...
+                        deliveredMotorTorqueNm, throttle, input);
+                    totalDriveTorque = max(0, wheelTorque);
+                    totalCoastdownTorque = min(0, wheelTorque);
+
                 otherwise
                     error('lts_simulation_Simulator:InvalidPowertrainMode', ...
-                        'PowertrainMode must be "throttle" or "motor_torque_command".');
+                        ['PowertrainMode must be "throttle", "motor_torque_command", ' ...
+                        'or "motor_torque_delivered".']);
             end
+        end
+
+        function wheelTorque = applyDeliveredMotorTorque( ...
+                obj, deliveredMotorTorqueNm, throttle, input)
+            vm = obj.vehicleManager;
+            ratio = vm.powertrain.getTotalGearRatio();
+            efficiency = vm.powertrain.getDrivetrainEfficiency();
+            if ismethod(vm.powertrain, 'getDeliveredTorqueDrivetrainEfficiency')
+                efficiency = vm.powertrain.getDeliveredTorqueDrivetrainEfficiency();
+            end
+            if deliveredMotorTorqueNm >= 0
+                wheelTorque = deliveredMotorTorqueNm * ratio * efficiency;
+            else
+                wheelTorque = deliveredMotorTorqueNm * ratio / max(efficiency, eps);
+            end
+
+            driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
+            requestedMotorTorqueNm = localGetField(input, ...
+                'motorTorqueCommandNm', deliveredMotorTorqueNm);
+            packVoltageV = localGetField(input, 'packVoltageV', NaN);
+            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            vm.powertrain.state.updateOutputs( ...
+                throttle, deliveredMotorTorqueNm, wheelTorque, driveForce, ...
+                efficiency, false);
+            vm.powertrain.state.requestedMotorTorque = requestedMotorTorqueNm;
+            vm.powertrain.state.motorTorquePowerLimitNm = NaN;
+            vm.powertrain.state.motorTorquePowerLimitActive = false;
+            vm.powertrain.state.packVoltageV = packVoltageV;
+            vm.powertrain.state.packCurrentA = packCurrentA;
+            vm.powertrain.state.packPowerW = packVoltageV * packCurrentA;
         end
 
         function wheelTorque = applyMotorTorqueCommand(obj, motorTorqueCommandNm, throttle, input)
@@ -1304,7 +1396,7 @@ classdef Simulator < handle
 
             vm = obj.vehicleManager;
             ratio = vm.powertrain.getTotalGearRatio();
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
+            efficiency = obj.motoringDrivetrainEfficiency(input);
             regenEfficiency = obj.regenDrivetrainEfficiency();
             [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
                 packCurrentA, packPowerW, powerLimitActive] = ...
@@ -1351,6 +1443,20 @@ classdef Simulator < handle
                 efficiency = vm.powertrain.regenEfficiency;
             end
             efficiency = lts.util.saturate(efficiency);
+        end
+
+        function efficiency = motoringDrivetrainEfficiency(obj, input)
+            vm = obj.vehicleManager;
+            efficiency = vm.powertrain.getDrivetrainEfficiency();
+            if ~ismethod(vm.powertrain, 'getMotoringEfficiencyAtRPM')
+                efficiency = lts.util.saturate(efficiency);
+                return;
+            end
+            motorRPM = localGetField(input, 'motorRpm', NaN);
+            if ~isfinite(motorRPM) && ~isempty(vm.powertrain.state)
+                motorRPM = vm.powertrain.state.motorRPM;
+            end
+            efficiency = vm.powertrain.getMotoringEfficiencyAtRPM(motorRPM);
         end
 
         function motorTorqueRequestNm = selectDirectMotorTorqueRequest(~, motorTorqueCommandNm, input)
@@ -1499,9 +1605,15 @@ classdef Simulator < handle
                     mode == "calculated_cmd" || mode == "calculated_command"
                 mode = "motor_torque_command";
             end
-            if mode ~= "throttle" && mode ~= "motor_torque_command"
+            if mode == "motor_iq" || mode == "measured_torque" || ...
+                    mode == "delivered_torque"
+                mode = "motor_torque_delivered";
+            end
+            if mode ~= "throttle" && mode ~= "motor_torque_command" && ...
+                    mode ~= "motor_torque_delivered"
                 error('lts_simulation_Simulator:InvalidPowertrainMode', ...
-                    'PowertrainMode must be "throttle" or "motor_torque_command".');
+                    ['PowertrainMode must be "throttle", "motor_torque_command", ' ...
+                    'or "motor_torque_delivered".']);
             end
         end
 
@@ -1989,10 +2101,13 @@ classdef Simulator < handle
                 vm.chassis, steer, obj.dt);
         end
 
-        function resetForSimulation(obj)
+        function resetForSimulation(obj, preserveInitialComponentState)
             % RESETFORSIMULATION Start each full run from deterministic
             % component state. Continuation workflows should use step()
             % directly; simulate() represents a new run.
+            if nargin < 2
+                preserveInitialComponentState = false;
+            end
             obj.warnedMaxSpeed = false;
             obj.freeSurfaceMu = 1;
             obj.cachedWheelInertia = struct([]);
@@ -2011,7 +2126,7 @@ classdef Simulator < handle
             obj.cachedNextRef = struct();
 
             vm = obj.vehicleManager;
-            if isempty(vm)
+            if isempty(vm) || preserveInitialComponentState
                 return;
             end
 

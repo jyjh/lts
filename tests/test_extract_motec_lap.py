@@ -106,6 +106,7 @@ class ExtractMotecLapTest(unittest.TestCase):
             [
                 FakeChannel("Throttle Regen Negative Torque C", "", 10, [0, 25085, 53378]),
                 FakeChannel("BAMOCAR Channels Calculated Cmd", "", 10, [0, 12158, 53378, 65535, 65536]),
+                FakeChannel("BAMOCAR Channels Iq", "", 10, [0, 100, -200, 300, -400]),
                 FakeChannel("BAMOCAR Channels RPM", "rpm", 10, [0, 1200, 1800, 2000, 2200]),
                 FakeChannel("BMS Channels Pack Voltage", "V", 10, [320, 318, 315, 312, 310]),
                 FakeChannel("BMS Channels Pack Current", "A", 10, [0, 50, -20, -30, 0]),
@@ -125,6 +126,11 @@ class ExtractMotecLapTest(unittest.TestCase):
             "motor_torque_command_nm",
             channel_map["channels"]["motor_torque_command_nm"],
         )
+        delivered = extract_motec_lap.extract_raw_signal(
+            data,
+            "motor_torque_delivered_nm",
+            channel_map["channels"]["motor_torque_delivered_nm"],
+        )
         motor_rpm = extract_motec_lap.extract_raw_signal(
             data,
             "motor_rpm",
@@ -143,6 +149,7 @@ class ExtractMotecLapTest(unittest.TestCase):
 
         self.assertIn("regen_torque_nm", extract_motec_lap.REPLAY_COLUMNS)
         self.assertIn("motor_torque_command_nm", extract_motec_lap.REPLAY_COLUMNS)
+        self.assertIn("motor_torque_delivered_nm", extract_motec_lap.REPLAY_COLUMNS)
         self.assertIn("motor_rpm", extract_motec_lap.REPLAY_COLUMNS)
         self.assertIn("pack_voltage_v", extract_motec_lap.REPLAY_COLUMNS)
         self.assertIn("pack_current_a", extract_motec_lap.REPLAY_COLUMNS)
@@ -150,9 +157,95 @@ class ExtractMotecLapTest(unittest.TestCase):
         self.assertEqual(motor["transform_applied"], "uint16_to_int16")
         np.testing.assert_allclose(regen["values"], [0.0, -250.85, -121.58])
         np.testing.assert_allclose(motor["values"], [0.0, 121.58, -121.58, -0.01, 0.0])
+        np.testing.assert_allclose(
+            delivered["values"],
+            np.asarray([0, 100, -200, 300, -400]) * 0.5 * 0.48,
+        )
         np.testing.assert_allclose(motor_rpm["values"], [0, 1200, 1800, 2000, 2200])
         np.testing.assert_allclose(voltage["values"], [320, 318, 315, 312, 310])
         np.testing.assert_allclose(current["values"], [0, 50, -20, -30, 0])
+
+    def test_invalid_regen_is_repaired_to_power_conserving_torque(self):
+        rpm = 2000.0
+        omega = rpm * 2.0 * np.pi / 60.0
+        table = {
+            "time_s": np.asarray([0.0, 0.01, 0.02, 0.03]),
+            "regen_torque_nm": np.asarray([-100.0, -100.0, -100.0, 0.0]),
+            "motor_torque_command_nm": np.asarray([-90.0, -90.0, -90.0, 0.0]),
+            "motor_torque_delivered_nm": np.asarray([10.0, -20.0, -80.0, 10.0]),
+            "motor_rpm": np.full(4, rpm),
+            "pack_voltage_v": np.full(4, 300.0),
+            "pack_current_a": np.asarray([-40.0, -40.0, -40.0, -40.0]),
+        }
+        config = {
+            "enabled": True,
+            "minimum_charging_power_w": 1000.0,
+            "minimum_motor_speed_rpm": 300.0,
+            "regen_request_threshold_nm": 5.0,
+            "power_tolerance_w": 500.0,
+            "maximum_regen_efficiency": 1.0,
+            "maximum_reconstructed_torque_nm": 170.0,
+        }
+
+        report = extract_motec_lap.repair_power_inconsistent_regen(table, config)
+
+        minimum_torque = -12000.0 / omega
+        np.testing.assert_allclose(
+            table["motor_torque_delivered_nm"],
+            [minimum_torque, minimum_torque, -80.0, 10.0],
+        )
+        self.assertEqual(report["repaired_sample_count"], 2)
+        self.assertEqual(report["sign_contradiction_sample_count"], 1)
+        self.assertEqual(report["remaining_power_deficit_sample_count"], 0)
+
+    def test_regen_repair_respects_pack_channel_advance(self):
+        table = {
+            "time_s": np.asarray([0.0, 0.1, 0.2]),
+            "regen_torque_nm": np.full(3, -100.0),
+            "motor_torque_command_nm": np.full(3, -100.0),
+            "motor_torque_delivered_nm": np.zeros(3),
+            "motor_rpm": np.full(3, 2000.0),
+            "pack_voltage_v": np.full(3, 300.0),
+            "pack_current_a": np.asarray([0.0, 0.0, -40.0]),
+        }
+        config = {
+            "enabled": True,
+            "pack_power_advance_s": 0.1,
+            "minimum_charging_power_w": 1000.0,
+            "power_tolerance_w": 0.0,
+            "maximum_regen_efficiency": 1.0,
+        }
+
+        report = extract_motec_lap.repair_power_inconsistent_regen(table, config)
+
+        self.assertEqual(report["repaired_sample_count"], 2)
+        self.assertEqual(table["motor_torque_delivered_nm"][0], 0.0)
+        self.assertLess(table["motor_torque_delivered_nm"][1], 0.0)
+
+    def test_regen_limit_does_not_override_positive_motor_command(self):
+        table = {
+            "time_s": np.asarray([0.0, 0.01]),
+            "regen_torque_nm": np.full(2, -100.0),
+            "motor_torque_command_nm": np.asarray([20.0, np.nan]),
+            "motor_torque_delivered_nm": np.asarray([15.0, 10.0]),
+            "motor_rpm": np.full(2, 2000.0),
+            "pack_voltage_v": np.full(2, 300.0),
+            "pack_current_a": np.full(2, -40.0),
+        }
+        config = {
+            "enabled": True,
+            "minimum_charging_power_w": 1000.0,
+            "minimum_motor_speed_rpm": 300.0,
+            "regen_request_threshold_nm": 5.0,
+            "power_tolerance_w": 500.0,
+            "maximum_regen_efficiency": 1.0,
+        }
+
+        report = extract_motec_lap.repair_power_inconsistent_regen(table, config)
+
+        self.assertEqual(table["motor_torque_delivered_nm"][0], 15.0)
+        self.assertLess(table["motor_torque_delivered_nm"][1], 0.0)
+        self.assertEqual(report["repaired_sample_count"], 1)
 
     def test_brake_ratio_peak_scales_combined_pressure_trace(self):
         spec = {

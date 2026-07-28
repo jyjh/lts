@@ -5,6 +5,22 @@ function tests = PowertrainDifferentialTest
 tests = functiontests(localfunctions);
 end
 
+function testMotoringEfficiencyCurveInterpolatesAndClampsRPM(testCase)
+pt = lts.components.Powertrain.EMRAX228Powertrain();
+pt = pt.setMotoringEfficiencyCurve([1000 2000 3000], [0.75 0.90 0.80]);
+
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(500), 0.75, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(1500), 0.825, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(-2500), 0.85, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(4000), 0.80, 'AbsTol', 1e-12);
+end
+
+function testEmptyMotoringEfficiencyCurveUsesScalar(testCase)
+pt = lts.components.Powertrain.EMRAX228Powertrain('', 0.87);
+
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(2500), 0.87, 'AbsTol', 1e-12);
+end
+
 function testDefaultLCMapLoadsLowercaseTorqueField(testCase)
 pt = createPowertrain();
 verifyEqual(testCase, pt.totalGearRatio, 3.36, 'RelTol', 1e-12);

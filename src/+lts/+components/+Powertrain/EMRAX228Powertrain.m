@@ -23,6 +23,9 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         wheelRadius = 0.228        % Configured driven-tire rolling radius [m]
         mapWheelRadius = 0.228     % Radius used to encode MAT tractive force [m]
         drivetrainEfficiency = 0.92  % Motoring drivetrain efficiency [0-1]
+        deliveredTorqueDrivetrainEfficiency = NaN % Mechanical-only efficiency for measured shaft torque
+        motoringEfficiencyRpm = []   % Optional motor-speed breakpoints [rpm]
+        motoringEfficiencyValues = [] % Optional efficiency values [0-1]
         regenEfficiency = NaN        % Optional direct-mode regen drivetrain efficiency [0-1]
         motorRotorInertia = 0.07    % Motor rotor inertia [kg*m^2], reflected as I*ratio^2 to wheels
         % --- Coastdown / regen (off-throttle motoring) ---
@@ -203,7 +206,8 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             
             if torqueRequest == 0
                 wheelTorque = 0;
-                obj.state.updateOutputs(throttle, 0, 0, 0, obj.drivetrainEfficiency);
+                efficiency = obj.getMotoringEfficiencyAtRPM(obj.state.motorRPM);
+                obj.state.updateOutputs(throttle, 0, 0, 0, efficiency);
                 return;
             end
             
@@ -213,11 +217,12 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             end
             
             motorRPM = obj.state.motorRPM;
+            efficiency = obj.getMotoringEfficiencyAtRPM(motorRPM);
             rpmLimitActive = obj.isRPMLimitActive(motorRPM);
             if rpmLimitActive
                 wheelTorque = 0;
                 obj.state.updateOutputs(throttle, 0, 0, 0, ...
-                    obj.drivetrainEfficiency, true);
+                    efficiency, true);
                 return;
             end
             
@@ -227,17 +232,17 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             % the MAT map. Convert it back to physical axle torque before
             % applying the configured tire radius anywhere.
             wheelTorque = fullThrottleForce * obj.mapWheelRadius * ...
-                torqueRequest * obj.drivetrainEfficiency;
+                torqueRequest * efficiency;
             equivalentDriveForce = wheelTorque / max(obj.wheelRadius, eps);
-            if obj.totalGearRatio > 0 && obj.drivetrainEfficiency > 0
+            if obj.totalGearRatio > 0 && efficiency > 0
                 motorTorque = wheelTorque / ...
-                    (obj.totalGearRatio * obj.drivetrainEfficiency);
+                    (obj.totalGearRatio * efficiency);
             else
                 motorTorque = 0;
             end
             obj.state.updateOutputs( ...
                 throttle, motorTorque, wheelTorque, equivalentDriveForce, ...
-                obj.drivetrainEfficiency, false);
+                efficiency, false);
         end
 
         function F_drive = computeDriveForce(obj, speed, throttle)
@@ -262,8 +267,9 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             speed = max(0, speed);
             motorRPM = obj.vehicleSpeedToMotorRPM(speed);
             fullThrottleForce = obj.lookupTractiveForceByRPM(motorRPM);
+            efficiency = obj.getMotoringEfficiencyAtRPM(motorRPM);
             wheelTorque = fullThrottleForce * obj.mapWheelRadius * ...
-                obj.drivetrainEfficiency;
+                efficiency;
             F_drive = max(0, wheelTorque / max(obj.wheelRadius, eps));
         end
 
@@ -421,6 +427,49 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
         
         function eff = getDrivetrainEfficiency(obj)
             eff = obj.drivetrainEfficiency;
+        end
+
+        function eff = getDeliveredTorqueDrivetrainEfficiency(obj)
+            eff = obj.deliveredTorqueDrivetrainEfficiency;
+            if ~isfinite(eff)
+                eff = obj.drivetrainEfficiency;
+            end
+            eff = lts.util.saturate(eff);
+        end
+
+        function obj = setMotoringEfficiencyCurve(obj, rpmBreakpoints, efficiencyValues)
+            if isempty(rpmBreakpoints) && isempty(efficiencyValues)
+                obj.motoringEfficiencyRpm = [];
+                obj.motoringEfficiencyValues = [];
+                return;
+            end
+            if ~isnumeric(rpmBreakpoints) || ~isnumeric(efficiencyValues) || ...
+                    ~isvector(rpmBreakpoints) || ~isvector(efficiencyValues) || ...
+                    numel(rpmBreakpoints) < 2 || ...
+                    numel(rpmBreakpoints) ~= numel(efficiencyValues) || ...
+                    any(~isfinite(rpmBreakpoints)) || any(diff(rpmBreakpoints) <= 0) || ...
+                    any(~isfinite(efficiencyValues)) || ...
+                    any(efficiencyValues < 0) || any(efficiencyValues > 1)
+                error('EMRAX228Powertrain:InvalidMotoringEfficiencyCurve', ...
+                    ['Motoring efficiency curve requires equal-length finite vectors, ' ...
+                    'at least two strictly increasing RPM points, and efficiencies in [0,1].']);
+            end
+            obj.motoringEfficiencyRpm = double(rpmBreakpoints(:).');
+            obj.motoringEfficiencyValues = double(efficiencyValues(:).');
+        end
+
+        function eff = getMotoringEfficiencyAtRPM(obj, motorRPM)
+            eff = obj.drivetrainEfficiency;
+            if isempty(obj.motoringEfficiencyRpm) || ...
+                    isempty(obj.motoringEfficiencyValues) || ~isfinite(motorRPM)
+                eff = lts.util.saturate(eff);
+                return;
+            end
+            queryRPM = min(max(abs(double(motorRPM)), ...
+                obj.motoringEfficiencyRpm(1)), obj.motoringEfficiencyRpm(end));
+            eff = interp1(obj.motoringEfficiencyRpm, ...
+                obj.motoringEfficiencyValues, queryRPM, 'linear');
+            eff = lts.util.saturate(eff);
         end
 
         function eff = getRegenDrivetrainEfficiency(obj)
