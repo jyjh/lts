@@ -125,6 +125,56 @@ duration, not the reference track end; use `ReplayDomain`, `StopAtReplayEnd`,
 and `StopAtTrackEnd` to override timing behavior. Console progress and
 control-input plots use the replay stream's source time/distance.
 
+### ML-assisted correlation tuning
+
+`lts.app.tune_correlation` performs surrogate-assisted physical parameter
+identification without replacing the simulator. It splits a normalized replay
+into alternating anchor blocks and predicts 3, 6, and 12 seconds from every
+anchor. All horizons at an anchor stay in the same split, preventing overlap
+between training and validation. It warm-starts the existing replay pipeline
+at every window and scores the GPS trace, GPS-derived speed and body
+accelerations, yaw rate, and valid wheel-speed references. GPS-derived motion
+carries 75% of the objective; wheel speeds remain an independent drivetrain
+diagnostic. An Extra Trees model proposes new bounded physical configurations
+while held-out windows remain unused until the finalist stage.
+
+```matlab
+addpath('src')
+result = lts.app.tune_correlation( ...
+    'MoTeCFile', 'data/lap5_raw.ld', ...
+    'HorizonS', [3 6 12], ...
+    'MaxHours', 8, ...
+    'MaxCandidates', 1200, ...
+    'Workers', 8)
+```
+
+`MoTeCFile` runs the existing MoTeC extraction pipeline automatically. Use
+`Lap` for a lap number or inclusive range when the LD contains multiple laps,
+and optionally override `LdxFile`, `ChannelMap`, or `ImportFrequency`.
+The normalized CSV, extraction manifest, and a hash-verified source descriptor
+are saved in the tuning checkpoint. On resume, changed LD/LDX data or
+extraction settings are rejected instead of being mixed with existing scores.
+`ReplayCsv` remains available when normalized data already exists; do not pass
+both input forms.
+
+When finite latitude and longitude are present, tuning converts them to a
+smoothed local east/north trace and derives vehicle speed, longitudinal
+acceleration, and lateral acceleration from that trace. This GPS-derived body
+motion supersedes wheel-speed-derived vehicle speed and the body accelerometer
+channels for scoring; the original axle accelerometers and wheel-speed channels
+remain available as lower-weight checks. Adjust `GpsSmoothingS` (default
+`0.35`) for the GPS receiver rate, or pass `PreferGpsKinematics=false` to
+retain the legacy channel hierarchy. Mixed horizons default to `[3 6 12]`.
+Changing horizons or GPS preprocessing requires a new checkpoint directory.
+
+The default search space is
+`config/correlation/lap5_ml_parameter_space.json`. Each batch is checkpointed
+under `exports/correlation_tuning_lap5_*`; rerun with the same
+`CheckpointDirectory` to resume. The result folder contains candidate and
+per-window scores, held-out rankings, convergence/importance plots, a hashed
+JSON manifest, and an apply-ready `R25_ml_lap5_tuning.m` overlay. The existing
+`R25.m` and `R25_correlation_tuning.m` files are never rewritten.
+
 If the log has no direct brake pedal channel, the default map derives
 `brake_ratio` from `Brake Pressure Front` and `Brake Pressure Rear`. It converts
 both pressures to bar, sums the front and rear pressure traces, maps the peak

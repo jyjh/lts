@@ -251,6 +251,134 @@ classdef CorrelationReplayProfile
             distance = obj.distance(end) - obj.distance(1);
         end
 
+        function out = window(obj, startTimeS, horizonS)
+            %WINDOW Extract an exact, time-rebased replay segment.
+            %   All public per-sample channels are interpolated onto a common
+            %   axis containing the requested boundaries. Distance is rebased
+            %   alongside time so the segment can be passed directly to the
+            %   existing replay driver and state initializer.
+            if ~isnumeric(startTimeS) || ~isscalar(startTimeS) || ...
+                    ~isfinite(startTimeS)
+                error('lts_correlation_CorrelationReplayProfile:InvalidWindowStart', ...
+                    'Window start must be a finite scalar in seconds.');
+            end
+            if ~isnumeric(horizonS) || ~isscalar(horizonS) || ...
+                    ~isfinite(horizonS) || horizonS <= 0
+                error('lts_correlation_CorrelationReplayProfile:InvalidWindowHorizon', ...
+                    'Window horizon must be a positive finite scalar in seconds.');
+            end
+
+            sourceStart = obj.time(1);
+            sourceEnd = obj.time(end);
+            startTimeS = double(startTimeS);
+            endTimeS = startTimeS + double(horizonS);
+            tolerance = 32 * eps(max(1, max(abs([sourceStart, sourceEnd]))));
+            if startTimeS < sourceStart - tolerance || ...
+                    endTimeS > sourceEnd + tolerance
+                error('lts_correlation_CorrelationReplayProfile:WindowOutsideProfile', ...
+                    ['Requested window [%.6g, %.6g] s is outside replay ' ...
+                    'range [%.6g, %.6g] s.'], ...
+                    startTimeS, endTimeS, sourceStart, sourceEnd);
+            end
+            startTimeS = max(sourceStart, startTimeS);
+            endTimeS = min(sourceEnd, endTimeS);
+
+            interior = obj.time(obj.time > startTimeS & obj.time < endTimeS);
+            queryTime = unique([startTimeS; interior(:); endTimeS], 'stable');
+            if numel(queryTime) < 2
+                error('lts_correlation_CorrelationReplayProfile:WindowTooShort', ...
+                    'Replay window must contain at least two samples.');
+            end
+
+            out = obj;
+            n = numel(obj.time);
+            channelNames = properties(obj);
+            for i = 1:numel(channelNames)
+                name = channelNames{i};
+                values = obj.(name);
+                if isnumeric(values) && isvector(values) && numel(values) == n
+                    out.(name) = obj.interpolateWindowChannel(values(:), queryTime);
+                end
+            end
+            out.time = queryTime - queryTime(1);
+            if ~isempty(out.distance)
+                firstDistance = out.distance(1);
+                if isfinite(firstDistance)
+                    out.distance = out.distance - firstDistance;
+                end
+            end
+            out = out.buildSampleCaches();
+        end
+
+        function [obj, report] = withGpsKinematics(obj, varargin)
+            %WITHGPSKINEMATICS Make GPS position the body-motion authority.
+            % Position is converted to a local east/north frame. Smoothed
+            % derivatives provide vehicle speed and body-frame acceleration;
+            % wheel-speed and axle accelerometer channels remain untouched.
+            parser = inputParser;
+            parser.addParameter('SmoothingWindowS', 0.35, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0);
+            parser.addParameter('MinimumSpeedMps', 1.0, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.parse(varargin{:});
+            report = struct('status', "unavailable", 'sampleCount', 0, ...
+                'smoothingWindowS', double(parser.Results.SmoothingWindowS));
+
+            valid = isfinite(obj.time) & isfinite(obj.gpsLat) & isfinite(obj.gpsLon);
+            if nnz(valid) < 5
+                return;
+            end
+            latitude = obj.interpolateFinite(obj.gpsLat);
+            longitude = obj.interpolateFinite(obj.gpsLon);
+            origin = find(isfinite(latitude) & isfinite(longitude), 1, 'first');
+            if isempty(origin)
+                return;
+            end
+            earthRadiusM = 6371008.8;
+            lat0 = deg2rad(latitude(origin));
+            xEast = earthRadiusM .* deg2rad(longitude - longitude(origin)) .* cos(lat0);
+            yNorth = earthRadiusM .* deg2rad(latitude - latitude(origin));
+
+            dt = median(diff(obj.time(isfinite(obj.time) & [true; diff(obj.time) > 0])));
+            if ~isfinite(dt) || dt <= 0
+                return;
+            end
+            samples = max(3, round(parser.Results.SmoothingWindowS / dt));
+            if mod(samples, 2) == 0
+                samples = samples + 1;
+            end
+            % Preserve the measured GPS trace itself. Differentiate first,
+            % then smooth velocity/acceleration; smoothing position with a
+            % truncated endpoint window halves the initial speed.
+            dxdt = gradient(xEast) ./ gradient(obj.time);
+            dydt = gradient(yNorth) ./ gradient(obj.time);
+            dxdt = movmean(dxdt, samples, 'Endpoints', 'shrink');
+            dydt = movmean(dydt, samples, 'Endpoints', 'shrink');
+            speedGps = hypot(dxdt, dydt);
+            axEast = gradient(dxdt) ./ gradient(obj.time);
+            ayNorth = gradient(dydt) ./ gradient(obj.time);
+            axEast = movmean(axEast, samples, 'Endpoints', 'shrink');
+            ayNorth = movmean(ayNorth, samples, 'Endpoints', 'shrink');
+
+            moving = speedGps >= parser.Results.MinimumSpeedMps;
+            longAccel = nan(size(speedGps));
+            latAccel = nan(size(speedGps));
+            longAccel(moving) = (dxdt(moving) .* axEast(moving) + ...
+                dydt(moving) .* ayNorth(moving)) ./ speedGps(moving);
+            latAccel(moving) = (dxdt(moving) .* ayNorth(moving) - ...
+                dydt(moving) .* axEast(moving)) ./ speedGps(moving);
+
+            obj.x = xEast(:);
+            obj.y = yNorth(:);
+            obj.speed = max(0, speedGps(:));
+            obj.longAccelG = longAccel(:) ./ 9.80665;
+            obj.latAccelG = latAccel(:) ./ 9.80665;
+            obj.distance = cumtrapz(obj.time, obj.speed);
+            obj = obj.buildSampleCaches();
+            report.status = "applied";
+            report.sampleCount = nnz(isfinite(obj.speed));
+        end
+
         function obj = withPackPowerAdvance(obj, advanceS)
             if nargin < 2 || isempty(advanceS)
                 advanceS = 0;
@@ -853,6 +981,35 @@ classdef CorrelationReplayProfile
                 queryTime = max(cache.axis(1), min(cache.axis(end), queryTime(:)));
                 values = cache.interpolant(queryTime);
             end
+        end
+
+        function values = interpolateWindowChannel(obj, sourceValues, queryTime)
+            valid = isfinite(obj.time) & isfinite(sourceValues);
+            if nnz(valid) >= 2
+                values = interp1(obj.time(valid), sourceValues(valid), ...
+                    queryTime, 'linear', NaN);
+            elseif nnz(valid) == 1
+                values = repmat(sourceValues(find(valid, 1)), size(queryTime));
+            else
+                values = nan(size(queryTime));
+            end
+            values = values(:);
+        end
+
+        function values = interpolateFinite(obj, sourceValues)
+            valid = isfinite(obj.time) & isfinite(sourceValues);
+            if nnz(valid) < 2
+                values = nan(size(obj.time));
+                return;
+            end
+            sourceTime = obj.time(valid);
+            sourceValues = sourceValues(valid);
+            [sourceTime, uniqueIndex] = unique(sourceTime, 'stable');
+            sourceValues = sourceValues(uniqueIndex);
+            values = interp1(sourceTime, sourceValues, obj.time, 'linear', NaN);
+            values(obj.time < sourceTime(1)) = sourceValues(1);
+            values(obj.time > sourceTime(end)) = sourceValues(end);
+            values = values(:);
         end
     end
 

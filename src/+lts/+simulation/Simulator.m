@@ -43,6 +43,7 @@ classdef Simulator < handle
         % "lean" records only core lap/state/control/aggregate force channels
         % for profiling and benchmark runs.
         telemetryMode = "full"
+        verbose = true
 
         % Input normalization policy. Normal driver models use mutually
         % exclusive pedals and a simulator-side steering slew limiter.
@@ -715,9 +716,11 @@ classdef Simulator < handle
             end
             
             step = 0;
-            fprintf('Starting simulation...\n');
-            fprintf('Track length: %.1f m\n', trackLen);
-            if warmupLaps > 0
+            if obj.verbose
+                fprintf('Starting simulation...\n');
+                fprintf('Track length: %.1f m\n', trackLen);
+            end
+            if warmupLaps > 0 && obj.verbose
                 fprintf('Telemetry: dropping %d warmup lap(s), recording %d lap(s)\n', ...
                     warmupLaps, recordedLaps);
             end
@@ -867,6 +870,16 @@ classdef Simulator < handle
                     stateLog.rideHeight(step)  = newState.rideHeight;
                     stateLog.aeroFz_front(step) = forces.aeroFz_front;
                     stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
+                    % Wheel linear speeds are part of the correlation tuning
+                    % objective and are cheap to retain in lean telemetry.
+                    stateLog.tireSpeed_FL(step) = abs( ...
+                        vm.tire.FL.angularVelocity * vm.tire.FL.wheelRadius);
+                    stateLog.tireSpeed_FR(step) = abs( ...
+                        vm.tire.FR.angularVelocity * vm.tire.FR.wheelRadius);
+                    stateLog.tireSpeed_RL(step) = abs( ...
+                        vm.tire.RL.angularVelocity * vm.tire.RL.wheelRadius);
+                    stateLog.tireSpeed_RR(step) = abs( ...
+                        vm.tire.RR.angularVelocity * vm.tire.RR.wheelRadius);
                     
                     if ~leanTelemetry
                         % Per-corner suspension telemetry
@@ -957,10 +970,6 @@ classdef Simulator < handle
                         stateLog.omega_FR(step)     = vm.tire.FR.angularVelocity;
                         stateLog.omega_RL(step)     = vm.tire.RL.angularVelocity;
                         stateLog.omega_RR(step)     = vm.tire.RR.angularVelocity;
-                        stateLog.tireSpeed_FL(step) = abs(vm.tire.FL.angularVelocity * vm.tire.FL.wheelRadius);
-                        stateLog.tireSpeed_FR(step) = abs(vm.tire.FR.angularVelocity * vm.tire.FR.wheelRadius);
-                        stateLog.tireSpeed_RL(step) = abs(vm.tire.RL.angularVelocity * vm.tire.RL.wheelRadius);
-                        stateLog.tireSpeed_RR(step) = abs(vm.tire.RR.angularVelocity * vm.tire.RR.wheelRadius);
                         stateLog.tireFx_FL(step)    = vm.tire.FL.Fx;
                         stateLog.tireFx_FR(step)    = vm.tire.FR.Fx;
                         stateLog.tireFx_RL(step)    = vm.tire.RL.Fx;
@@ -979,7 +988,7 @@ classdef Simulator < handle
                 currentRef = obj.cachedNextRef;
                 
                 % Progress display
-                if mod(step, 5000) == 0
+                if obj.verbose && mod(step, 5000) == 0
                     progress = obj.simulationProgress(currentState, input, trackLen);
                     fprintf('  Progress: %5.1f%% | Speed: %5.1f km/h | s: %6.1f m | replay: %s\n', ...
                         progress * 100, currentState.speed * 3.6, ...
@@ -1024,12 +1033,14 @@ classdef Simulator < handle
                 recordedLength = 0;
             end
             
-            fprintf('\n=== Simulation Complete ===\n');
-            fprintf('Lap Time:   %.3f s\n', lapTime);
-            fprintf('Track Length: %.1f m\n', recordedLength);
-            fprintf('Max Speed:  %.1f km/h\n', maxSpeedKmh);
-            fprintf('Steps:      %d simulated, %d recorded\n', ...
-                simulationSteps, recordedSteps);
+            if obj.verbose
+                fprintf('\n=== Simulation Complete ===\n');
+                fprintf('Lap Time:   %.3f s\n', lapTime);
+                fprintf('Track Length: %.1f m\n', recordedLength);
+                fprintf('Max Speed:  %.1f km/h\n', maxSpeedKmh);
+                fprintf('Steps:      %d simulated, %d recorded\n', ...
+                    simulationSteps, recordedSteps);
+            end
         end
 
         function [stateLog, lapTime] = simulateReplay(obj, initialState, track, replayProfile, varargin)
@@ -1809,7 +1820,11 @@ classdef Simulator < handle
                 'twistRate',      zeros(maxSteps, 1), ...
                 'rideHeight',  zeros(maxSteps, 1), ...
                 'aeroFz_front', zeros(maxSteps, 1), ...
-                'aeroFz_rear',  zeros(maxSteps, 1) ...
+                'aeroFz_rear',  zeros(maxSteps, 1), ...
+                'tireSpeed_FL', zeros(maxSteps, 1), ...
+                'tireSpeed_FR', zeros(maxSteps, 1), ...
+                'tireSpeed_RL', zeros(maxSteps, 1), ...
+                'tireSpeed_RR', zeros(maxSteps, 1) ...
             );
         end
 

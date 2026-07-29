@@ -1,5 +1,10 @@
 {
   "sample_frequency_hz": 1000,
+  "gps_kinematics": {
+    "enabled": true,
+    "smoothing_window_s": 0.35,
+    "minimum_speed_mps": 1.0
+  },
   "delivered_regen_power_repair": {
     "enabled": true,
     "pack_power_advance_s": -0.015,

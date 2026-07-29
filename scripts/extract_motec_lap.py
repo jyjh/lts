@@ -678,6 +678,105 @@ def integrate_distance(time_s: np.ndarray, speed_mps: np.ndarray) -> np.ndarray:
     return distance
 
 
+def centered_moving_average(values: np.ndarray, sample_count: int) -> np.ndarray:
+    sample_count = min(len(values), max(1, int(sample_count)))
+    if sample_count % 2 == 0:
+        sample_count = max(1, sample_count - 1)
+    kernel = np.ones(sample_count, dtype=float)
+    finite = np.isfinite(values)
+    numerator = np.convolve(np.where(finite, values, 0.0), kernel, mode="same")
+    denominator = np.convolve(finite.astype(float), kernel, mode="same")
+    result = np.full(np.asarray(values).shape, np.nan)
+    usable = denominator > 0
+    result[usable] = numerator[usable] / denominator[usable]
+    return result
+
+
+def derive_gps_kinematics(
+    table: dict[str, np.ndarray],
+    config: dict | None,
+) -> dict:
+    """Derive local trace, speed, and body accelerations from GPS position."""
+    if not config or not bool(config.get("enabled", False)):
+        return {"status": "disabled", "sample_count": 0}
+    time_s = np.asarray(table.get("time_s", []), dtype=float)
+    latitude = np.asarray(table.get("gps_lat_deg", []), dtype=float)
+    longitude = np.asarray(table.get("gps_lon_deg", []), dtype=float)
+    valid = np.isfinite(time_s) & np.isfinite(latitude) & np.isfinite(longitude)
+    if np.count_nonzero(valid) < 5:
+        return {"status": "unavailable", "sample_count": int(np.count_nonzero(valid))}
+
+    valid_time = time_s[valid]
+    latitude = np.interp(time_s, valid_time, latitude[valid])
+    longitude = np.interp(time_s, valid_time, longitude[valid])
+    origin = int(np.flatnonzero(valid)[0])
+    earth_radius_m = 6371008.8
+    latitude_origin_rad = np.deg2rad(latitude[origin])
+    east_m = (
+        earth_radius_m
+        * np.deg2rad(longitude - longitude[origin])
+        * np.cos(latitude_origin_rad)
+    )
+    north_m = earth_radius_m * np.deg2rad(latitude - latitude[origin])
+
+    positive_dt = np.diff(time_s)
+    positive_dt = positive_dt[np.isfinite(positive_dt) & (positive_dt > 0)]
+    if positive_dt.size == 0:
+        return {"status": "unavailable", "sample_count": 0}
+    smoothing_s = float(config.get("smoothing_window_s", 0.35))
+    sample_count = max(3, int(round(smoothing_s / np.median(positive_dt))))
+    # Preserve the measured trace. Smooth its derivatives rather than the
+    # position itself so endpoint windows do not bias the initial speed.
+    velocity_east = centered_moving_average(
+        np.gradient(east_m, time_s), sample_count
+    )
+    velocity_north = centered_moving_average(
+        np.gradient(north_m, time_s), sample_count
+    )
+    speed_mps = np.hypot(velocity_east, velocity_north)
+    acceleration_east = centered_moving_average(
+        np.gradient(velocity_east, time_s), sample_count
+    )
+    acceleration_north = centered_moving_average(
+        np.gradient(velocity_north, time_s), sample_count
+    )
+
+    minimum_speed = float(config.get("minimum_speed_mps", 1.0))
+    moving = np.isfinite(speed_mps) & (speed_mps >= minimum_speed)
+    long_accel = np.full(speed_mps.shape, np.nan)
+    lat_accel = np.full(speed_mps.shape, np.nan)
+    long_accel[moving] = (
+        velocity_east[moving] * acceleration_east[moving]
+        + velocity_north[moving] * acceleration_north[moving]
+    ) / speed_mps[moving]
+    lat_accel[moving] = (
+        velocity_east[moving] * acceleration_north[moving]
+        - velocity_north[moving] * acceleration_east[moving]
+    ) / speed_mps[moving]
+
+    table["x_m"] = east_m
+    table["y_m"] = north_m
+    table["speed_mps"] = np.maximum(speed_mps, 0.0)
+    table["long_accel_g"] = long_accel / 9.80665
+    table["lat_accel_g"] = lat_accel / 9.80665
+    table["distance_m"] = integrate_distance(time_s, table["speed_mps"])
+    return {
+        "status": "applied",
+        "sample_count": int(np.count_nonzero(np.isfinite(speed_mps))),
+        "smoothing_window_s": smoothing_s,
+        "minimum_speed_mps": minimum_speed,
+        "position_frame": "local_east_north",
+        "overridden_channels": [
+            "x_m",
+            "y_m",
+            "distance_m",
+            "speed_mps",
+            "long_accel_g",
+            "lat_accel_g",
+        ],
+    }
+
+
 def repair_power_inconsistent_regen(
     table: dict[str, np.ndarray],
     config: dict | None,
@@ -922,6 +1021,10 @@ def main() -> int:
         table["distance_m"] = table["distance_m"] - table["distance_m"][0]
 
     postprocessing = {}
+    postprocessing["gps_kinematics"] = derive_gps_kinematics(
+        table,
+        channel_map.get("gps_kinematics"),
+    )
     regen_repair = repair_power_inconsistent_regen(
         table,
         channel_map.get("delivered_regen_power_repair"),

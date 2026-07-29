@@ -449,6 +449,48 @@ class ExtractMotecLapTest(unittest.TestCase):
         np.testing.assert_allclose(rear_long_accel["values"], [-0.2, 0.4])
         np.testing.assert_allclose(long_accel["values"], [-0.1, 0.3])
 
+    def test_gps_kinematics_override_speed_trace_and_body_acceleration(self):
+        time_s = np.arange(0.0, 10.0001, 0.05)
+        earth_radius_m = 6371008.8
+        east_m = 8.0 * time_s + 0.5 * 1.5 * time_s**2
+        latitude = np.ones_like(time_s)
+        longitude = 103.0 + np.rad2deg(
+            east_m / (earth_radius_m * np.cos(np.deg2rad(latitude[0])))
+        )
+        table = {
+            "time_s": time_s,
+            "gps_lat_deg": latitude,
+            "gps_lon_deg": longitude,
+            "speed_mps": np.ones_like(time_s),
+            "distance_m": np.zeros_like(time_s),
+            "x_m": np.full_like(time_s, np.nan),
+            "y_m": np.full_like(time_s, np.nan),
+            "lat_accel_g": np.full_like(time_s, np.nan),
+            "long_accel_g": np.full_like(time_s, np.nan),
+        }
+
+        report = extract_motec_lap.derive_gps_kinematics(
+            table,
+            {
+                "enabled": True,
+                "smoothing_window_s": 0.15,
+                "minimum_speed_mps": 1.0,
+            },
+        )
+
+        interior = (time_s >= 1.0) & (time_s <= 9.0)
+        self.assertEqual(report["status"], "applied")
+        self.assertAlmostEqual(np.median(table["speed_mps"][interior]), 15.5, delta=0.1)
+        self.assertAlmostEqual(
+            np.median(table["long_accel_g"][interior]),
+            1.5 / 9.80665,
+            delta=0.01,
+        )
+        self.assertAlmostEqual(np.median(table["lat_accel_g"][interior]), 0.0, delta=1e-5)
+        midpoint = int(np.flatnonzero(time_s == 5.0)[0])
+        self.assertAlmostEqual(table["x_m"][midpoint], east_m[midpoint], delta=0.2)
+        self.assertGreater(table["distance_m"][-1], 0.0)
+
 
 if __name__ == "__main__":
     unittest.main()
