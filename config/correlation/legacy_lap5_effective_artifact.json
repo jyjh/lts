@@ -1,0 +1,13 @@
+{
+  "schema": "lts.correlation.legacy-effective-artifact.v1",
+  "id": "r25-lap5-effective-legacy",
+  "legacy": true,
+  "productionUseAllowed": false,
+  "source": "lap5/raw replay",
+  "parameters": [
+    {"path":"aero.CdA","value":2.65,"reason":"Absorbed aero, rotating, and drivetrain loss"},
+    {"path":"tire.lateralStiffnessScaleByCorner","value":[0.65,0.65,1.0,1.0],"reason":"Lap-specific yaw response fit"},
+    {"path":"correlation.steeringCenterGain","value":0.55,"reason":"Logger and replay correction"},
+    {"path":"tire.tirFile","value":"Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir","reason":"Contains lap-derived effective LKX"}
+  ]
+}

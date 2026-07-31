@@ -42,6 +42,9 @@ classdef DriverModel < handle
         trailBrakeReserve = 0.30       % Min brake fraction kept at peak lateral grip (trail-braking) [0-1]
         corneringGripMargin = 0.95     % Lateral-grip fraction at which throttle is fully reserved
         apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
+        racingLineOffsetFraction = 0.65 % Track-half-width fraction used by reduced planner
+        racingLineCurvatureSmoothDistance = 6.0 % Racing-line curvature smoothing [m]
+        racingLineOffsetSmoothDistance = 8.0 % Racing-line offset smoothing [m]
         stanleyGain      = 1.5    % Cross-track correction gain
         stanleySoftening = 1.5    % Low-speed softening term [m/s]
         headingGain      = 1.0    % Heading-error steering correction gain

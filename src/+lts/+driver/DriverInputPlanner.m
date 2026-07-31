@@ -110,6 +110,11 @@ classdef DriverInputPlanner
                     obj.cachedTrailBrakeReserve = dm.trailBrakeReserve;
                     obj.cachedTractionCircleReserve = dm.tractionCircleReserve;
                     obj.cachedCorneringGripMargin = dm.corneringGripMargin;
+                    obj.racingLineOffsetFraction = dm.racingLineOffsetFraction;
+                    obj.racingLineCurvatureSmoothDistance = ...
+                        dm.racingLineCurvatureSmoothDistance;
+                    obj.racingLineOffsetSmoothDistance = ...
+                        dm.racingLineOffsetSmoothDistance;
                 else
                     obj.edgeSlowdownMargin = obj.readObjectValue(dm, 'edgeSlowdownMargin', obj.edgeSlowdownMargin);
                     obj.racingLineApexPhase = obj.readObjectValue(dm, 'apexPhase', obj.racingLineApexPhase);

@@ -132,7 +132,7 @@ classdef CorrelationTuningEvaluator
                 'completed_windows', 'total_windows'});
         end
 
-        function result = simulateAndScore(profile, config, track, opts)
+        function [result, stateLog] = simulateAndScore(profile, config, track, opts)
             dt = double(opts.Dt);
             % Vehicle assembly is intentionally verbose for interactive runs;
             % suppress its repeated component inventory inside large searches.

@@ -152,22 +152,11 @@ function cfg = R25()
     %  TIRE
     %  Pacejka Magic Formula (MF 6.1) via MFeval; tirFile lives in +Tire/.
     %  ====================================================================
-    % CSV r14 lists the Hoosier 43075 16.0x7.5-10 R20. The TIR below starts
-    % from the measured 43100 18.0x6.0-10 R20 coefficients and applies
-    % 43075 geometry plus physically constrained stiffness/trail scales.
-    % wheelRadius is the installed effective rolling radius; the TIR keeps
-    % Hoosier's larger unloaded radius separately.
-    % At equal load and pressure, the 17.7% wider target tread implies a
-    % contact patch about 15% shorter, while its roughly 23% shorter sidewall
-    % raises carcass stiffness. Geometry alone would therefore suggest a
-    % higher scale than the effective value used here. The lap5 driven-wheel
-    % carrier speed provides a direct in-car calibration: motor RPM divided
-    % by the specified 3.36 final drive and multiplied by the 0.2032 m rolling
-    % radius exposes the torque-dependent driven-wheel slip independently of
-    % the scale-inconsistent RR linear channel. LKX=0.67 matches that measured
-    % torque/slip slope and remains an effective correlation scale for the
-    % inherited 43100 coefficients, not a claimed standalone 43075 material
-    % property.
+    % CSV r14 lists the Hoosier 43075 16.0x7.5-10 R20, but no independently
+    % measured 43075 TIR is available. Use the measured 43100 source TIR as an
+    % explicit component prior and retain the installed 43075 rolling radius.
+    % The former "- Scaled" file contains a lap-5-derived effective LKX and is
+    % now applied only by R25_correlation_tuning as a legacy diagnostic.
     % Preserve the geometry-derived 0.255 m lateral relaxation length. The
     % longitudinal contact-patch response is much shorter: using 0.255 m for
     % slip ratio adds about 18 ms of force lag at 14 m/s and excites a
@@ -194,7 +183,7 @@ function cfg = R25()
         (wheelAssemblyMassKg - tireMassKg) * rimRadiusM^2;
     wheelAssemblyInertia = tirePolarInertia + remainingAssemblyInertia;
     cfg.tire = struct( ...
-        'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir', ... % [verify vs CSV r14 tire size]
+        'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7.tir', ... % measured source-tire prior; actual 43075 TIR unavailable
         'wheelInertia', wheelAssemblyInertia, ... % 0.13575 kg*m^2 from 13 lb assembly
         'relaxationLength', 0.255, ...   % lateral: 0.30 m * (6.2/7.3) [m]
         'longitudinalRelaxationLength', 0.05, ... % separate slip-ratio force lag [m]

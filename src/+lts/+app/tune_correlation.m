@@ -1,8 +1,8 @@
 function outputs = tune_correlation(varargin)
-%TUNE_CORRELATION Surrogate-assisted physical calibration from replay windows.
+%TUNE_CORRELATION Legacy surrogate replay-fit diagnostic.
 %
 % outputs = lts.app.tune_correlation( ...
-%   'MoTeCFile', 'data/lap5_raw.ld')
+%   'LegacyDiagnostic', true, 'MoTeCFile', 'data/lap5_raw.ld')
 
 repoRoot = lts.util.repoRoot(mfilename('fullpath'));
 defaultChannelMap = fullfile(repoRoot, 'config', 'motec', ...
@@ -12,6 +12,8 @@ if ~exist(defaultChannelMap, 'file')
         'default_channel_map.json');
 end
 parser = inputParser;
+parser.addParameter('LegacyDiagnostic', false, ...
+    @(x) islogical(x) || isnumeric(x));
 parser.addParameter('ReplayCsv', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('MoTeCFile', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('Lap', [], ...
@@ -61,6 +63,12 @@ parser.addParameter('RunFullLap', true, @(x) islogical(x) || isnumeric(x));
 parser.addParameter('GeneratePlots', true, @(x) islogical(x) || isnumeric(x));
 parser.parse(varargin{:});
 opts = parser.Results;
+if ~logical(opts.LegacyDiagnostic)
+    error('tune_correlation:LegacyOptInRequired', ...
+        ['Broad replay fitting is quarantined as a legacy diagnostic. ' ...
+        'Pass LegacyDiagnostic=true explicitly. Generated overlays are not ' ...
+        'accepted by governed design studies.']);
+end
 opts.EvaluationSplit = "train";
 
 opts.MaxCandidates = round(opts.MaxCandidates);
@@ -75,7 +83,7 @@ end
 opts.ParameterSpace = char(opts.ParameterSpace);
 if isempty(opts.CheckpointDirectory)
     stamp = datestr(now, 'yyyymmdd_HHMMSS');
-    opts.CheckpointDirectory = fullfile(repoRoot, 'exports', ...
+    opts.CheckpointDirectory = fullfile(repoRoot, 'exports', 'legacy', ...
         ['correlation_tuning_lap5_' stamp]);
 end
 checkpointDir = char(opts.CheckpointDirectory);
