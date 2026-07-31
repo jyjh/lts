@@ -289,4 +289,64 @@ classdef VehicleConfig
                 'steeringDelayS', 0);
         end
     end
+
+    methods (Static)
+        function config = validate(config)
+            % VALIDATE Sanity-check the vehicle-level scalars of a config.
+            %   config = lts.vehicle.VehicleConfig.validate(config)
+            %   Catches obvious typos (totalMass=0, negative wheelbase, a
+            %   staticFrontWeight outside [0,1], ...) at the build boundary
+            %   instead of letting them surface deep in simulation as a
+            %   divide-by-zero or NaN. Sub-system structs (aero/suspension/
+            %   tire/...) are validated by their own builders. Returns the
+            %   config unchanged on success; errors with typed identifiers.
+            checks = struct( ...
+                'totalMass',     struct('min', eps,     'max', Inf), ...
+                'wheelbase',     struct('min', eps,     'max', Inf), ...
+                'trackWidth',    struct('min', eps,     'max', Inf), ...
+                'cgHeight',      struct('min', 0,       'max', Inf), ...
+                'yawInertia',    struct('min', eps,     'max', Inf), ...
+                'airDensity',    struct('min', 0,       'max', Inf), ...
+                'unsprungMass',  struct('min', 0,       'max', Inf), ...
+                'maxSpeed',      struct('min', 0,       'max', Inf));
+            fields = fieldnames(checks);
+            for i = 1:numel(fields)
+                f = fields{i};
+                value = config.(f);
+                if ~isscalar(value) || ~isnumeric(value) || ~isfinite(value)
+                    error('lts_vehicle_VehicleConfig:InvalidScalar', ...
+                        'VehicleConfig.%s must be a finite scalar (got %s).', ...
+                        f, dispValue(value));
+                end
+                if value < checks.(f).min || value > checks.(f).max
+                    error('lts_vehicle_VehicleConfig:OutOfRange', ...
+                        'VehicleConfig.%s=%g is outside [%g, %g].', ...
+                        f, value, checks.(f).min, checks.(f).max);
+                end
+            end
+            % Distribution/bias fractions must be physical probabilities.
+            fractions = struct('staticFrontWeight', 'front weight distribution', ...
+                'brakeBiasFront', 'brake bias', ...
+                'brakeForceCoefficient', 'brake force coefficient');
+            fNames = fieldnames(fractions);
+            for i = 1:numel(fNames)
+                f = fNames{i};
+                value = config.(f);
+                if ~isscalar(value) || ~isnumeric(value) || ~isfinite(value) || ...
+                        value < 0 || value > 1
+                    error('lts_vehicle_VehicleConfig:InvalidFraction', ...
+                        'VehicleConfig.%s (%s) must be a finite scalar in [0, 1] (got %s).', ...
+                        f, fractions.(f), dispValue(value));
+                end
+            end
+        end
+    end
+end
+
+function s = dispValue(v)
+if isnumeric(v)
+    s = mat2str(v);
+else
+    s = char(string(v));
+end
 end

@@ -12,7 +12,13 @@ classdef DatasetCatalog
                 error('lts_governance_DatasetCatalog:MissingFile', ...
                     'Dataset catalog does not exist: %s', filePath);
             end
-            catalog = jsondecode(fileread(filePath));
+            try
+                catalog = jsondecode(fileread(filePath));
+            catch err
+                error('lts_governance_DatasetCatalog:InvalidJson', ...
+                    'Could not parse dataset catalog "%s": %s', ...
+                    filePath, err.message);
+            end
             catalog = lts.governance.DatasetCatalog.validate(catalog);
             catalog.sourceFile = char(filePath);
         end
@@ -73,19 +79,14 @@ classdef DatasetCatalog
             if nargin < 2 || isempty(rootDirectory)
                 rootDirectory = pwd;
             end
+            canonicalRoot = lts.governance.DatasetCatalog.canonicalize(rootDirectory);
             datasets = catalog.datasets;
             report = repmat(struct('id', "", 'file', "", 'verified', false), ...
                 numel(datasets), 1);
             for i = 1:numel(datasets)
-                file = char(datasets(i).sourceFile);
-                if ~isfile(file)
-                    file = fullfile(rootDirectory, file);
-                end
-                if ~isfile(file)
-                    error('lts_governance_DatasetCatalog:MissingSource', ...
-                        'Dataset "%s" source file does not exist: %s', ...
-                        datasets(i).id, file);
-                end
+                file = lts.governance.DatasetCatalog.resolveContainedPath( ...
+                    char(datasets(i).sourceFile), rootDirectory, canonicalRoot, ...
+                    datasets(i).id);
                 actual = lts.governance.DatasetCatalog.sha256(file);
                 if ~strcmpi(actual, char(datasets(i).sha256))
                     error('lts_governance_DatasetCatalog:HashMismatch', ...
@@ -99,15 +100,10 @@ classdef DatasetCatalog
                         companions = vertcat(companions{:});
                     end
                     for j = 1:numel(companions)
-                        companionFile = char(companions(j).sourceFile);
-                        if ~isfile(companionFile)
-                            companionFile = fullfile(rootDirectory, companionFile);
-                        end
-                        if ~isfile(companionFile)
-                            error('lts_governance_DatasetCatalog:MissingSource', ...
-                                'Dataset "%s" companion does not exist: %s', ...
-                                datasets(i).id, companionFile);
-                        end
+                        companionFile = lts.governance.DatasetCatalog. ...
+                            resolveContainedPath( ...
+                            char(companions(j).sourceFile), rootDirectory, ...
+                            canonicalRoot, datasets(i).id);
                         companionHash = ...
                             lts.governance.DatasetCatalog.sha256(companionFile);
                         if ~strcmpi(companionHash, char(companions(j).sha256))
@@ -148,6 +144,43 @@ classdef DatasetCatalog
             engine.update(bytes);
             raw = typecast(engine.digest(), 'uint8');
             digest = lower(reshape(dec2hex(raw, 2).', 1, []));
+        end
+
+        function c = canonicalize(path)
+            % CANONICALIZE Resolve a path to its canonical absolute form,
+            %   collapsing '.'/'..' and resolving symlinks, via Java so it
+            %   works the same on Windows and POSIX.
+            c = char(java.io.File(path).getCanonicalPath());
+        end
+
+        function file = resolveContainedPath(sourceFile, rootDirectory, ...
+                    canonicalRoot, datasetId)
+            % RESOLVECONTAINEDPATH Resolve a catalog sourceFile against
+            %   rootDirectory and assert the canonical path stays inside it.
+            %   A sourceFile like '../../secret.mat' would otherwise let a
+            %   catalog read (and with loadMatSafe, potentially load) files
+            %   outside the repo. The SHA-256 check authenticates content, not
+            %   path legitimacy, and the hash is itself read from the same
+            %   untrusted JSON, so this confinement check is the real control.
+            file = sourceFile;
+            if ~isfile(file)
+                file = fullfile(rootDirectory, file);
+            end
+            if ~isfile(file)
+                error('lts_governance_DatasetCatalog:MissingSource', ...
+                    'Dataset "%s" source file does not exist: %s', ...
+                    datasetId, file);
+            end
+            canonicalFile = lts.governance.DatasetCatalog.canonicalize(file);
+            if ~startsWith(canonicalFile, [canonicalRoot, filesep]) && ...
+                    ~strcmp(canonicalFile, canonicalRoot)
+                error('lts_governance_DatasetCatalog:PathOutsideRoot', ...
+                    ['Dataset "%s" source file "%s" resolves outside the ' ...
+                    'catalog root directory ("%s"). Source paths must not ' ...
+                    'escape the repository.'], datasetId, sourceFile, ...
+                    canonicalRoot);
+            end
+            file = canonicalFile;
         end
     end
 end

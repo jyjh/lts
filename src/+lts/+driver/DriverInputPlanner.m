@@ -829,9 +829,13 @@ classdef DriverInputPlanner
                 if isnumeric(candidate) && isscalar(candidate) && isfinite(candidate)
                     pedal = lts.util.saturate(candidate);
                 end
-            catch
+            catch err
                 % A third-party/legacy implementation must not make the
-                % planner unusable; fall back to a linear command.
+                % planner unusable; fall back to a linear command. Warn once
+                % so the misconfiguration is not entirely invisible.
+                warning('lts_driver_DriverInputPlanner:PedalMapFailed', ...
+                    'powertrain.pedalForTorqueFraction failed (%s); using linear pedal fallback.', ...
+                    err.identifier);
                 pedal = fraction;
             end
         end

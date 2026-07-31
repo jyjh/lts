@@ -109,6 +109,20 @@ verifyTrue(testCase, isfield(profile, 'targetLateralError'));
 verifyTrue(testCase, isfield(profile, 'lineCurvature'));
 end
 
+function testPlannedProfileStaysFiniteOnSharpCorner(testCase)
+% Regression guard for the backward-speed-profile sqrt guards in
+% DriverModel.computeBackwardSpeedProfile / computeCornerSpeedLimit: a
+% degenerate (<=0) maxLateralAccel or signed maxBrakeAccel must not poison
+% the profile with NaN. Built on the 90turn track which has real curvature.
+[profile, ~, ~] = createPlannedProfile(lts.components.TestTrack('90turn'));
+verifyTrue(testCase, all(isfinite(profile.vTarget)), ...
+    'vTarget must stay finite across the backward speed profile.');
+verifyTrue(testCase, all(isfinite(profile.vLimit)), ...
+    'vLimit must stay finite across the corner-speed limit.');
+verifyTrue(testCase, all(isfinite(profile.axRef)), ...
+    'axRef must stay finite.');
+end
+
 % ============================================================
 % Physics-based pedal map (computePedals) unit tests.
 % Pure function — no lts.vehicle.VehicleManager required. Each test pins one

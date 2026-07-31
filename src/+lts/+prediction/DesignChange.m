@@ -11,7 +11,14 @@ classdef DesignChange
                 error('lts_prediction_DesignChange:MissingFile', ...
                     'Design change file does not exist: %s', filePath);
             end
-            change = lts.prediction.DesignChange.validate(jsondecode(fileread(filePath)));
+            try
+                raw = jsondecode(fileread(filePath));
+            catch err
+                error('lts_prediction_DesignChange:InvalidJson', ...
+                    'Could not parse design change "%s": %s', ...
+                    filePath, err.message);
+            end
+            change = lts.prediction.DesignChange.validate(raw);
         end
 
         function change = validate(change)

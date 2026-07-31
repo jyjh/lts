@@ -62,7 +62,7 @@ See the [physics flow](physics-flow/) for the force equations and timestep data 
 - `SimpleChassis` tracks heave, pitch, and roll from accelerations plus aero pitch moments.
 - `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
-- `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
+- `EMRAX228Powertrain` uses the provided `EMRAX228LC Single_3.36.mat` tractive-force map, applies a constant-power torque rolloff after the map endpoint, and cuts drive force at the hard RPM cap.
 - `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction.
 - `lts.simulation.VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
@@ -90,7 +90,7 @@ Tune the EMRAX powertrain after construction if needed:
 
 ```matlab
 powertrain = lts.components.Powertrain.EMRAX228Powertrain();
-powertrain.rpmFalloffFactor = 2.0;  % steeper torque falloff above the map endpoint
+powertrain.rpmLimitRPM = 6500;  % hard motor RPM cap
 ```
 
 ## Key Files

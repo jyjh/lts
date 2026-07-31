@@ -158,7 +158,11 @@ classdef WaypointTrack < lts.components.Track
 
             requested = lts.components.WaypointTrack.normalizeDirection(ip.Results.Direction);
 
-            S = load(fileName);
+            % Validate the .mat before loading: load() reconstructs saved
+            % objects by running their class constructor / loadobj, which can
+            % execute arbitrary code. fileName is caller-supplied, so screen
+            % it for non-data variables first (defense-in-depth).
+            S = lts.util.loadMatSafe(fileName, 'WaypointTrack');
             if isfield(S, 'track')
                 t = S.track;
             else
@@ -256,6 +260,15 @@ classdef WaypointTrack < lts.components.Track
             else
                 error('WaypointTrack:InvalidCsv', ...
                     'CSV must contain x_m/y_m or x/y columns.');
+            end
+            % Guard against a malformed CSV (non-numeric columns, NaNs, wrong
+            % shape) before winding/geometry consume it: a bad row would
+            % otherwise surface deep in windingFromPoints as an opaque cast.
+            if ~isnumeric(points) || size(points, 2) ~= 2 || ...
+                    any(~isfinite(points), 'all') || size(points, 1) < 2
+                error('WaypointTrack:InvalidPoints', ...
+                    ['Track CSV "%s" did not yield >=2 finite numeric ' ...
+                    '(x, y) rows.'], fileName);
             end
             obj = lts.components.WaypointTrack(points, varargin{:});
         end

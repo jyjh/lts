@@ -125,10 +125,10 @@ track = lts.components.WaypointTrack.loadMat('tracks/<file>.mat', 'Direction', '
 If the override conflicts with the direction stored in the file (for example
 because the file is a **stale copy** that was re-exported the other way), the
 waypoints are reversed — keeping the start/finish point fixed — and a warning is
-emitted. `lts.app.run_simulation` passes `'Direction', 'anticlockwise'` for the
-endurance track and prints the resolved direction at startup, so a wrong or
-stale track is obvious immediately. A file with no direction field at all also
-warns.
+emitted. `lts.app.run_simulation` loads the endurance track without a
+`Direction` override, so the stored `direction` field is honored as-is, and
+prints the resolved direction at startup, so a wrong or stale track is obvious
+immediately. A file with no direction field at all also warns.
 
 **Updating a track.** The exporter writes to its own `examples/` directory; it
 does **not** touch this repo's `tracks/`. After re-running the exporter (with a
@@ -142,7 +142,7 @@ so a re-export silently overwrites the previous output.
 - **Transient chassis platform** — `lts.components.Chassis.SimpleChassis` tracks heave, pitch, and separate front/rear roll DOFs coupled by chassis torsional rigidity for chassis-driven corner loads. Telemetry includes front/rear roll angles and roll rates.
 - **Four-corner transient suspension** — `lts.components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
 - **Table-based suspension and steering geometry** — `lts.components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
-- **EMRAX 228 powertrain** — `lts.components.Powertrain.EMRAX228Powertrain` loads `EMRAX228CC Single_4.5.mat`, tracks motor RPM with `PowertrainState`, applies torque falloff above the data endpoint, and enforces a hard RPM cap.
+- **EMRAX 228 powertrain** — `lts.components.Powertrain.EMRAX228Powertrain` loads `EMRAX228LC Single_3.36.mat`, tracks motor RPM with `PowertrainState`, applies a constant-power torque rolloff above the data endpoint, and enforces a hard RPM cap.
 - **Pacejka tire model** — `lts.components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
 - **Test tracks** — `lts.components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.
 - **MoTeC telemetry export** — `lts.telemetry.TelemetryExporter.exportToMoTeCLog` writes simulation logs as MotecLogGenerator-compatible CSVs and converts them to MoTeC `.ld` files through the MotecLogGenerator submodule.

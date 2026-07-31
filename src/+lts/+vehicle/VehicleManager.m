@@ -64,15 +64,19 @@ classdef VehicleManager
     end
 
     methods (Static)
-        function vehicle = fromConfig(config, track, dt)
+        function vehicle = fromConfig(config, track, dt, varargin)
             % FROMCONFIG Build a fully-wired lts.vehicle.VehicleManager from a lts.vehicle.VehicleConfig
             %
             %   vehicle = lts.vehicle.VehicleManager.fromConfig(config, track)
             %   vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt)
+            %   vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt, 'Verbose', false)
             %
             %   config - lts.vehicle.VehicleConfig describing the car (see lts.vehicles.baseline)
             %   track  - lts.components.Track (test/waypoint track to run)
             %   dt     - timestep [s] for suspension/chassis warmup (default 0.001)
+            %   Verbose - print the component inventory (default true). Set to
+            %             false in sweeps so the build stays quiet without
+            %             resorting to evalc() around this call.
             %
             %   Constructs every subsystem from the config, preserving the
             %   order dependencies and warmup steps of the original
@@ -89,20 +93,34 @@ classdef VehicleManager
             if nargin < 3 || isempty(dt)
                 dt = 0.001;
             end
+            p = inputParser;
+            p.addParameter('Verbose', true, ...
+                @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+            p.parse(varargin{:});
+            verbose = logical(p.Results.Verbose);
 
-            fprintf('=== Building vehicle from config ===\n\n');
+            % Catch obvious config typos (totalMass=0, negative wheelbase,
+            % staticFrontWeight outside [0,1], ...) at the build boundary
+            % rather than surfacing deep in simulation as NaN/divide-by-zero.
+            config = lts.vehicle.VehicleConfig.validate(config);
+
+            if verbose
+                fprintf('=== Building vehicle from config ===\n\n');
+            end
 
             %% ---- Aero ----
             aeroCfg = config.aero;
             aero = lts.components.Aero.WholeCarAero( ...
                 aeroCfg.xPosition, aeroCfg.zPosition, aeroCfg.ClA, aeroCfg.CdA, ...
                 lts.util.fieldOr(aeroCfg, 'pitchSensitivityClA', 0));
-            fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
-            fprintf('  Front aero balance at zero pitch: %.1f%%\n', ...
-                100 * (config.wheelbase * config.staticFrontWeight + ...
-                aero.xPosition) / config.wheelbase);
-            fprintf('\n');
+            if verbose
+                fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
+                    aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+                fprintf('  Front aero balance at zero pitch: %.1f%%\n', ...
+                    100 * (config.wheelbase * config.staticFrontWeight + ...
+                    aero.xPosition) / config.wheelbase);
+                fprintf('\n');
+            end
 
             %% ---- Powertrain ----
             powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
@@ -142,10 +160,12 @@ classdef VehicleManager
                 powertrain.regenEnabledSpeedFloor = ...
                     lts.util.fieldOr(config.powertrain, 'regenEnabledSpeedFloor', 1.0);
             end
-            fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
-                powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
-                powertrain.rpmFalloffStartRPM, powertrain.rpmLimitRPM, ...
-                powertrain.rpmFalloffFactor);
+            if verbose
+                fprintf('Powertrain: EMRAX 228 (Tq=%.0f Nm, FDR=%.1f, falloff %.0f->%.0f rpm, factor=%.2f)\n', ...
+                    powertrain.maxEngineTorque, powertrain.totalGearRatio, ...
+                    powertrain.rpmFalloffStartRPM, powertrain.rpmLimitRPM, ...
+                    powertrain.rpmFalloffFactor);
+            end
 
             %% ---- Tire (Pacejka Magic Formula via MFeval) ----
             %  Requires MFeval toolbox:
@@ -209,8 +229,10 @@ classdef VehicleManager
             suspCfg = config.suspension;
             geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
                 suspCfg.geometry, vehicle);
-            fprintf('Suspension Geometry: Ackermann %.1f%%\n', ...
-                geometry.ackermann * 100);
+            if verbose
+                fprintf('Suspension Geometry: Ackermann %.1f%%\n', ...
+                    geometry.ackermann * 100);
+            end
 
             fa = suspCfg.frontArb;
             frontArb = lts.components.Suspension.AntiRollBar( ...
@@ -220,8 +242,10 @@ classdef VehicleManager
                 ra.stiffness, ra.motionRatio, ra.leverArm, ra.enabled);
             geometry.frontAntiRollBar = frontArb;
             geometry.rearAntiRollBar = rearArb;
-            fprintf('Anti-Roll Bars: front=%.0f N/m, rear=%.0f N/m at the wheel\n', ...
-                frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
+            if verbose
+                fprintf('Anti-Roll Bars: front=%.0f N/m, rear=%.0f N/m at the wheel\n', ...
+                    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
+            end
 
             %% ---- Suspension (needs vehicleManager for geometry) ----
             %  frontRollStiffDist (arg 2) is legacy/deprecated; the split is
@@ -240,9 +264,11 @@ classdef VehicleManager
             suspension.rollStiffnessOverride = suspCfg.rollStiffnessOverride;
             suspension.coupleChassisRollToLoadTransfer = suspCfg.coupleChassisRollToLoadTransfer;
             vehicle.suspension = suspension;
-            fprintf(['Suspension: SuspensionManager ' ...
-                '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m at the wheel)\n'], ...
-                frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
+            if verbose
+                fprintf(['Suspension: SuspensionManager ' ...
+                    '(4-corner transient + geometry + ARB F/R %.0f/%.0f N/m at the wheel)\n'], ...
+                    frontArb.getWheelRateStiffness(), rearArb.getWheelRateStiffness());
+            end
 
             % Warm up suspension to static equilibrium (avoids a startup transient).
             suspension.warmup(vehicle.totalMass, dt);
@@ -270,8 +296,10 @@ classdef VehicleManager
             suspension.chassis = chassis;
             vehicle.suspension = suspension;
             vehicle.chassis = chassis;
-            fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF, torsional rigidity %.0f N*m/deg)\n', ...
-                chassis.torsionalRigidity * pi / 180);
+            if verbose
+                fprintf('Chassis: SimpleChassis (heave/pitch/roll DOF, torsional rigidity %.0f N*m/deg)\n', ...
+                    chassis.torsionalRigidity * pi / 180);
+            end
 
             %% ---- Differential (driven/rear axle) ----
             diffType = config.powertrain.differential.type;
@@ -308,9 +336,11 @@ classdef VehicleManager
                         'Unknown differential type "%s".', diffType);
             end
             vehicle.differential = differential;
-            fprintf('Differential: %s\n', differential.getName());
+            if verbose
+                fprintf('Differential: %s\n', differential.getName());
 
-            fprintf('\n');
+                fprintf('\n');
+            end
         end
 
     end

@@ -806,8 +806,13 @@ classdef CorrelationReplayProfile
                         end
                     end
                 end
-            catch
-                % Non-fatal: fall back to per-channel lookup path.
+            catch err
+                % Non-fatal: fall back to per-channel lookup path, but emit a
+                % one-shot warning so a config/encoding bug is diagnosable
+                % rather than appearing as a silent "no_scorable_channels".
+                warning('lts_correlation_CorrelationReplayProfile:BatchCacheFailed', ...
+                    'Batch sample-cache build failed (%s); falling back to per-channel lookup.', ...
+                    err.identifier);
                 batchAxis   = [];
                 batchMatrix = [];
             end
@@ -1145,7 +1150,10 @@ classdef CorrelationReplayProfile
             end
             try
                 data = readmatrix(filepath, 'NumHeaderLines', 1);
-            catch
+            catch err
+                warning('lts_correlation_CorrelationReplayProfile:ReadMatrixFailed', ...
+                    'Could not read companion matrix "%s" (%s); skipping.', ...
+                    filepath, err.identifier);
                 return;
             end
             if isempty(data) || size(data, 2) < numel(names)

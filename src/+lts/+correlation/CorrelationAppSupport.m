@@ -31,8 +31,10 @@ classdef CorrelationAppSupport
 
         function extractMoTeCLap(opts, replayCsv, manifestFile, repoRoot)
             script = fullfile(repoRoot, 'scripts', 'extract_motec_lap.py');
+            pythonToken = lts.util.validatePythonCommand( ...
+                opts.PythonCommand, 'run_correlation');
             args = { ...
-                char(opts.PythonCommand), script, ...
+                pythonToken, script, ...
                 '--input', char(opts.MoTeCFile), ...
                 '--output', replayCsv, ...
                 '--manifest', manifestFile, ...
@@ -129,6 +131,7 @@ classdef CorrelationAppSupport
             elseif ischar(configSpec) || isstring(configSpec)
                 name = char(configSpec);
                 if contains(name, '.')
+                    lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(name);
                     fn = str2func(name);
                 else
                     fn = str2func(['lts.vehicles.' name]);
@@ -617,14 +620,21 @@ classdef CorrelationAppSupport
             if strcmpi(ext, '.m')
                 packageName = lts.correlation.CorrelationAppSupport.packageNameFromFolder(folder);
                 if ~isempty(packageName)
-                    fn = str2func([packageName '.' baseName]);
+                    resolved = [packageName '.' baseName];
+                    lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(resolved);
+                    fn = str2func(resolved);
                 else
+                    % Only addpath for folders inside the repository src tree.
+                    % A caller-supplied .m outside src would otherwise execute
+                    % arbitrary code via str2func(baseName).
                     if ~isempty(folder)
+                        lts.correlation.CorrelationAppSupport.assertTrustedFolder(folder);
                         addpath(folder);
                     end
                     fn = str2func(baseName);
                 end
             elseif contains(name, '.')
+                lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(name);
                 fn = str2func(name);
             else
                 fn = str2func(['lts.vehicles.' name]);
@@ -661,6 +671,50 @@ classdef CorrelationAppSupport
                 else
                     config.(field) = overrideValue;
                 end
+            end
+        end
+
+        function assertTrustedFunctionName(name)
+            % ASSERTTRUSTEDFUNCTIONNAME Reject caller-supplied function names
+            %   that do not resolve into one of the trusted lts.* packages.
+            %   str2func itself does not execute, but the subsequent fn()
+            %   call does, so confine resolution to the project's own
+            %   package tree instead of allowing arbitrary path/name input.
+            trustedPrefixes = {'lts.vehicles.', 'lts.components.', ...
+                'lts.vehicle.', 'lts.correlation.', 'lts.prediction.', ...
+                'lts.calibration.', 'lts.governance.'};
+            ok = false;
+            for i = 1:numel(trustedPrefixes)
+                if startsWith(name, trustedPrefixes{i})
+                    ok = true;
+                    break;
+                end
+            end
+            if ~ok
+                error('run_correlation:UntrustedFunctionName', ...
+                    ['Vehicle/tuning function "%s" is not in a trusted lts.* ' ...
+                    'package. Resolution is restricted to the project''s own ' ...
+                    'packages to prevent executing arbitrary code.'], name);
+            end
+        end
+
+        function assertTrustedFolder(folder)
+            % ASSERTTRUSTEDFOLDER Allow addpath only for folders inside the
+            %   repository src tree. A caller-supplied .m on disk outside src
+            %   would otherwise execute via str2func(baseName).
+            folder = char(folder);
+            if ~isempty(folder) && ~exist(folder, 'dir')
+                error('run_correlation:UntrustedFolder', ...
+                    'Tuning file folder "%s" does not exist.', folder);
+            end
+            srcRoot = fullfile(lts.util.repoRoot(mfilename('fullpath')), 'src');
+            canonicalFolder = char(java.io.File(folder).getCanonicalPath());
+            canonicalRoot = char(java.io.File(srcRoot).getCanonicalPath());
+            if ~startsWith(canonicalFolder, [canonicalRoot, filesep])
+                error('run_correlation:UntrustedFolder', ...
+                    ['Tuning file folder "%s" is outside the repository src ' ...
+                    'tree; addpath is restricted to prevent executing ' ...
+                    'arbitrary code.'], folder);
             end
         end
     end

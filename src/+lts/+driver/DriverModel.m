@@ -993,7 +993,11 @@ classdef DriverModel < handle
 
             for i = numel(profileSpeed)-1:-1:1
                 ds = max(profileS(i+1) - profileS(i), 0.001);
-                reachableSpeed = sqrt(profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds);
+                % Guard the sqrt argument: a signed/over-large maxBrakeAccel
+                % over a short ds would otherwise yield NaN/complex and poison
+                % the whole backward profile. Mirrors DriverInputPlanner guards.
+                brakeTerm = profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds;
+                reachableSpeed = sqrt(max(brakeTerm, 0));
                 profileSpeed(i) = min(profileSpeed(i), reachableSpeed);
             end
         end
@@ -1004,7 +1008,11 @@ classdef DriverModel < handle
             speedLimit = vm.maxSpeed * ones(size(absKappa));
 
             cornerIdx = absKappa > obj.curvatureTol;
-            speedLimit(cornerIdx) = sqrt(maxLateralAccel ./ absKappa(cornerIdx));
+            % Floor maxLateralAccel at a small positive value: a misconfigured
+            % aero/mu (<=0) would make sqrt of a negative -> NaN, and
+            % min(NaN, maxSpeed) == NaN propagates instead of falling back.
+            lateralAccel = max(maxLateralAccel, 0.1);
+            speedLimit(cornerIdx) = sqrt(lateralAccel ./ absKappa(cornerIdx));
             speedLimit = min(speedLimit, vm.maxSpeed);
         end
 

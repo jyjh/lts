@@ -18,7 +18,7 @@ The current project consumes external data files directly through component cons
 
 | Data | File | Consumed By | Purpose |
 |------|------|-------------|---------|
-| EMRAX 228 map | `src/+lts/+components/+Powertrain/EMRAX228CC Single_4.5.mat` | `lts.components.Powertrain.EMRAX228Powertrain` | Final-drive ratio, motor RPM curve, motor torque, and tractive force |
+| EMRAX 228 map | `src/+lts/+components/+Powertrain/EMRAX228LC Single_3.36.mat` | `lts.components.Powertrain.EMRAX228Powertrain` | Final-drive ratio, motor RPM curve, motor torque, and tractive force |
 | Hoosier tire file | `src/+lts/+components/+Tire/43105_18x7.5_10_R25B_7.tir` | `lts.components.Tire.TireConstants` / `PacejkaTire` | Pacejka Magic Formula coefficients and nominal tire properties |
 | Test track layouts | `lts.components.TestTrack` methods | `lts.simulation.Simulator` / `lts.driver.DriverModel` | Track points, curvature, heading, and surface friction |
 | Real MoTeC lap | `.ld` plus optional `.ldx` | `scripts/extract_motec_lap.py` / `lts.app.run_correlation` | Driver input replay and starting-state extraction for correlation |
@@ -31,7 +31,7 @@ The current project consumes external data files directly through component cons
 - `Gearing_Map.RPM` and `Gearing_Map.Traction` for full-throttle drive-force lookup by motor RPM.
 - `Speed`, `Torque`, and `Tractive_force` for compatibility torque lookup and wheel-radius inference.
 - `rpmFalloffStartRPM` from the last RPM in the map.
-- `rpmFalloffFactor` to shape torque falloff between the map endpoint and `rpmLimitRPM`.
+- Constant-power torque rolloff (`T ∝ rpmFalloffStartRPM / rpm`) between the map endpoint and `rpmLimitRPM`; `rpmFalloffFactor` is deprecated and ignored.
 
 ### Telemetry
 

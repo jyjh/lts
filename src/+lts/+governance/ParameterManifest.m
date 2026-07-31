@@ -13,7 +13,13 @@ classdef ParameterManifest
                 error('lts_governance_ParameterManifest:MissingFile', ...
                     'Parameter manifest does not exist: %s', filePath);
             end
-            manifest = jsondecode(fileread(filePath));
+            try
+                manifest = jsondecode(fileread(filePath));
+            catch err
+                error('lts_governance_ParameterManifest:InvalidJson', ...
+                    'Could not parse parameter manifest "%s": %s', ...
+                    filePath, err.message);
+            end
             manifest = lts.governance.ParameterManifest.validate(manifest);
             manifest.sourceFile = char(filePath);
         end
@@ -113,6 +119,12 @@ classdef ParameterManifest
                 try
                     value = lts.governance.ParameterManifest.getValue(config, p.path);
                 catch
+                    % The path does not resolve on this config. Surface it as
+                    % a warning so a typo'd/malformed manifest path is visible
+                    % rather than silently producing no domain warning.
+                    warning('lts_governance_ParameterManifest:UnresolvedPath', ...
+                        'Parameter "%s" path "%s" does not resolve on the config; skipping domain check.', ...
+                        p.name, p.path);
                     continue;
                 end
                 if isnumeric(value) && isscalar(value) && isfinite(value) && ...

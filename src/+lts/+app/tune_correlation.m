@@ -175,7 +175,11 @@ while height(history) < opts.MaxCandidates && toc(started) < opts.MaxHours * 360
     candidateRows = batch(:, [{'candidate_id'}, parameterNames]);
     batchHistory = [candidateRows, summaries(:, 2:end)];
     history = [history; batchHistory]; %#ok<AGROW>
-    writetable(history, historyFile);
+    % Append only the new rows instead of rewriting the whole growing table
+    % every batch (it approached ~1200 rows, each a full-table serialization).
+    % The in-memory history still accumulates for ranking; on resume the file
+    % is read back in full, so append-only is consistent.
+    localAppendTable(batchHistory, historyFile);
     localAppendTable(details, detailFile);
     fprintf('Correlation tuning: %d/%d candidates, best training score %.6g\n', ...
         height(history), opts.MaxCandidates, min(history.score));
@@ -446,7 +450,8 @@ end
 end
 
 function localRunPython(pythonCommand, script, args)
-command = lts.util.shellJoin([{char(pythonCommand), script}, args]);
+pythonToken = lts.util.validatePythonCommand(pythonCommand, 'tune_correlation');
+command = lts.util.shellJoin([{pythonToken, script}, args]);
 [status, output] = system(command);
 if status ~= 0
     error('tune_correlation:PythonFailed', ...

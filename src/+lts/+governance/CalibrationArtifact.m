@@ -12,7 +12,13 @@ classdef CalibrationArtifact
                 error('lts_governance_CalibrationArtifact:MissingFile', ...
                     'Calibration artifact does not exist: %s', filePath);
             end
-            artifact = jsondecode(fileread(filePath));
+            try
+                artifact = jsondecode(fileread(filePath));
+            catch err
+                error('lts_governance_CalibrationArtifact:InvalidJson', ...
+                    'Could not parse calibration artifact "%s": %s', ...
+                    filePath, err.message);
+            end
             artifact = lts.governance.CalibrationArtifact.validate(artifact, manifest);
             artifact.sourceFile = char(filePath);
         end

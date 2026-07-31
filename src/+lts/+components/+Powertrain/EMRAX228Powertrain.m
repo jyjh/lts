@@ -75,8 +75,12 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 obj.motorRotorInertia = max(0, motorRotorInertia);
             end
             obj.state = lts.components.Powertrain.PowertrainState();
-            
-            data = load(matFilePath);
+
+            % Validate the .mat before loading: load() reconstructs saved
+            % objects by running their class constructor / loadobj, which can
+            % execute arbitrary code. matFilePath is caller-supplied, so screen
+            % it for non-data variables first (defense-in-depth).
+            data = lts.util.loadMatSafe(matFilePath, 'EMRAX228Powertrain');
             obj.matFilePath = string(matFilePath);
             
             requiredFields = {'FDR', 'Speed', 'Tractive_force', 'Gearing_Map'};

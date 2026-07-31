@@ -10,6 +10,15 @@ classdef HierarchicalOptimizer
             % A flying-lap seed avoids making the optimizer result depend on
             % the simulator's numerically delicate near-zero slip regime.
             parser.addParameter('InitialSpeed', 5.0, @(x) isnumeric(x) && isscalar(x));
+            % Parallel=false (default) preserves the tier-by-tier early-exit:
+            % once any candidate in the highest-remaining usage tier is
+            % feasible, lower tiers are skipped. Set Parallel=true to evaluate
+            % the full UsageSchedule x LineOffsetFractions grid with parfor;
+            % this drops the early-exit but parallelizes the (independent)
+            % full-lap simulations. Each candidate is a fresh vehicle + sim, so
+            % they are embarrassingly parallel.
+            parser.addParameter('Parallel', false, ...
+                @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
             parser.parse(varargin{:});
             opts = parser.Results;
 
@@ -18,18 +27,25 @@ classdef HierarchicalOptimizer
                 'minimumTrackMargin', {}, 'stateLog', {}, 'status', {});
             bestIndex = NaN;
             bestTime = Inf;
-            for usage = opts.UsageSchedule(:).'
-                for offset = opts.LineOffsetFractions(:).'
-                    candidate = lts.prediction.HierarchicalOptimizer.runCandidate( ...
-                        config, track, opts.Dt, opts.InitialSpeed, usage, offset);
-                    candidates(end + 1) = candidate; %#ok<AGROW>
-                    if candidate.feasible && candidate.lapTime < bestTime
-                        bestTime = candidate.lapTime;
-                        bestIndex = numel(candidates);
+            if logical(opts.Parallel)
+                candidates = lts.prediction.HierarchicalOptimizer. ...
+                    runCandidatesParallel(config, track, opts);
+                bestIndex = lts.prediction.HierarchicalOptimizer. ...
+                    pickBestCandidate(candidates);
+            else
+                for usage = opts.UsageSchedule(:).'
+                    for offset = opts.LineOffsetFractions(:).'
+                        candidate = lts.prediction.HierarchicalOptimizer.runCandidate( ...
+                            config, track, opts.Dt, opts.InitialSpeed, usage, offset);
+                        candidates(end + 1) = candidate; %#ok<AGROW>
+                        if candidate.feasible && candidate.lapTime < bestTime
+                            bestTime = candidate.lapTime;
+                            bestIndex = numel(candidates);
+                        end
                     end
-                end
-                if isfinite(bestIndex)
-                    break;
+                    if isfinite(bestIndex)
+                        break;
+                    end
                 end
             end
             if isempty(candidates)
@@ -64,7 +80,8 @@ classdef HierarchicalOptimizer
             lapTime = NaN;
             margin = NaN;
             try
-                evalc('vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt);');
+                vehicle = lts.vehicle.VehicleManager.fromConfig( ...
+                    config, track, dt, 'Verbose', false);
                 driver = lts.driver.DriverModel(vehicle);
                 driver.corneringUsage = usage;
                 driver.brakingUsage = usage;
@@ -77,7 +94,7 @@ classdef HierarchicalOptimizer
                 initial = lts.simulation.VehicleState('s', 0, ... %#ok<NASGU>
                     'x', points(1, 1), 'y', points(1, 2), ...
                     'yaw', headings(1), 'speed', initialSpeed);
-                evalc('[stateLog, lapTime] = simulator.simulate(initial, track);');
+                [stateLog, lapTime] = simulator.simulate(initial, track);
                 margin = NaN;
                 if isfield(stateLog, 'lateralError') && ~isempty(stateLog.lateralError)
                     margin = track.getTrackWidth() / 2 - max(abs(stateLog.lateralError));
@@ -97,7 +114,13 @@ classdef HierarchicalOptimizer
                 lapTime = NaN;
                 margin = NaN;
                 feasible = false;
-                status = "error:" + string(err.identifier);
+                % Surface the message + stack frame so a candidate failure is
+                % diagnosable instead of just an opaque identifier.
+                stackFrame = "";
+                if ~isempty(err.stack)
+                    stackFrame = " @ " + string(err.stack(1).name);
+                end
+                status = "error:" + string(err.identifier) + stackFrame;
             end
             candidate = struct('lapTime', lapTime, 'feasible', feasible, ...
                 'lineOffsetFraction', offset, 'usage', usage, ...
@@ -123,6 +146,50 @@ classdef HierarchicalOptimizer
             end
             boundaries = linspace(s(1), s(end), count + 1);
             sectors = diff(interp1(s, time, boundaries, 'linear'));
+        end
+
+        function candidates = runCandidatesParallel(config, track, opts)
+            % RUNCANDIDATESPARALLEL Evaluate the full grid with parfor.
+            %   Builds the UsageSchedule x LineOffsetFractions candidate grid
+            %   as a preallocated struct array and fills it in any order
+            %   (each candidate is an independent full-lap sim). Returns the
+            %   candidates in usage-major order to match the serial path.
+            usages = opts.UsageSchedule(:);
+            offsets = opts.LineOffsetFractions(:);
+            nU = numel(usages);
+            nO = numel(offsets);
+            nC = nU * nO;
+            template = struct('lapTime', NaN, 'feasible', false, ...
+                'lineOffsetFraction', 0.0, 'usage', 0.0, ...
+                'minimumTrackMargin', NaN, 'stateLog', struct(), ...
+                'status', "incomplete");
+            candidates = repmat(template, nC, 1);
+            % Broadcast the full (usage,offset) list so each parfor iteration
+            % is a single flat, sliced assignment (MATLAB requires the sliced
+            % index to appear directly in the parfor body, not a nested loop).
+            % Ordering is usage-major: all offsets for usage 1, then usage 2,
+            % ... matching the serial path's nested for-loop.
+            usageList = repmat(usages, nO, 1);            % [u1..u1, u2..u2, ...]
+            offsetList = repmat(offsets, nU, 1);           % [o1..o_nO, o1..o_nO, ...]
+            parfor k = 1:nC
+                candidates(k) = lts.prediction.HierarchicalOptimizer.runCandidate( ...
+                    config, track, opts.Dt, opts.InitialSpeed, ...
+                    usageList(k), offsetList(k));
+            end
+        end
+
+        function bestIndex = pickBestCandidate(candidates)
+            % PICKBESTCANDIDATE Index of the fastest feasible candidate, or
+            %   NaN if none is feasible. Ties broken by first occurrence to
+            %   match the serial path's "> bestTime" strict comparison.
+            bestIndex = NaN;
+            bestTime = Inf;
+            for k = 1:numel(candidates)
+                if candidates(k).feasible && candidates(k).lapTime < bestTime
+                    bestTime = candidates(k).lapTime;
+                    bestIndex = k;
+                end
+            end
         end
     end
 end

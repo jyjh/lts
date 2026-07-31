@@ -121,7 +121,16 @@ classdef StagedCalibrator
                 params(i).lower = lo;
                 params(i).upper = hi;
                 params(i).prior = value;
-                params(i).sigma = max(double(p.uncertainty.standardDeviation), eps);
+                rawSigma = double(p.uncertainty.standardDeviation);
+                params(i).sigma = max(rawSigma, eps);
+                % A sigma floored at eps silently makes the prior term ~1e16
+                % (effectively disabling it as a soft constraint). Warn once
+                % per parameter so a degenerate manifest is visible.
+                if rawSigma <= eps
+                    warning('lts_calibration_StagedCalibrator:DegenerateSigma', ...
+                        'Parameter "%s" has standardDeviation <= eps; prior is effectively disabled.', ...
+                        p.name);
+                end
             end
         end
 
