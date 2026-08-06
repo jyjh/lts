@@ -286,7 +286,8 @@ classdef DriverModel < handle
             end
 
             if isfield(ref, 'trackHalfWidth') && isfinite(ref.trackHalfWidth)
-                margin = ref.trackHalfWidth - abs(ref.lateralError);
+                halfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, ref.lateralError);
+                margin = halfWidth - abs(ref.lateralError);
                 if margin < obj.edgeSlowdownMargin
                     edgeUse = (obj.edgeSlowdownMargin - margin) / ...
                         max(obj.edgeSlowdownMargin, eps);
@@ -626,9 +627,18 @@ classdef DriverModel < handle
                 return;
             end
 
-            usableOffset = max(ref.trackHalfWidth - ...
+            % Corner-outside bias pushes the target laterally toward the
+            % outside of the corner, which sits on one specific side: a
+            % positive-curvature (left) turn biases the car right (negative
+            % lateralError, bounded by the right half-width); a negative-
+            % curvature (right) turn biases it left (bounded by the left
+            % half-width). Use that side's per-waypoint half-width when the
+            % corridor is asymmetric.
+            biasSideLateralError = -sign(ref.curvature);
+            biasHalfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, biasSideLateralError);
+            usableOffset = max(biasHalfWidth - ...
                 max(obj.edgeSlowdownMargin, obj.edgeSteeringMargin), 0);
-            outsideBias = obj.cornerOutsideBiasFraction * ref.trackHalfWidth;
+            outsideBias = obj.cornerOutsideBiasFraction * biasHalfWidth;
             outsideBias = min([outsideBias, obj.cornerOutsideBiasMax, usableOffset]);
 
             [arcLen, ~] = obj.getTrackGeometry();
@@ -683,7 +693,8 @@ classdef DriverModel < handle
                 return;
             end
 
-            margin = ref.trackHalfWidth - abs(ref.lateralError);
+            halfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, ref.lateralError);
+            margin = halfWidth - abs(ref.lateralError);
             if margin >= obj.edgeSteeringMargin
                 return;
             end
@@ -719,6 +730,8 @@ classdef DriverModel < handle
                 'lateralError', state.lateralError, ...
                 'trackWidth', NaN, ...
                 'trackHalfWidth', NaN, ...
+                'leftHalfWidth', NaN, ...
+                'rightHalfWidth', NaN, ...
                 'trackLimitMargin', NaN, ...
                 'onTrack', state.onTrack);
         end
@@ -1180,6 +1193,38 @@ classdef DriverModel < handle
 
         function apexPhaseClamped = getClampedApexPhase(obj)
             apexPhaseClamped = lts.util.clamp(obj.apexPhase, 0.05, 0.95);
+        end
+    end
+
+    methods (Static)
+        function halfWidth = refHalfWidthForSide(ref, lateralValue)
+            % REFHALFWIDTHFORSIDE Per-side half-width bounding a given lateral
+            % position. Convention (matches TrackReference/edge logic):
+            % positive lateralError = left of the reference line, bounded by
+            % leftHalfWidth; negative = right, bounded by rightHalfWidth.
+            % Falls back to the symmetric trackHalfWidth scalar when a per-
+            % side value is absent or non-finite (synthetic/test refs).
+            fallback = [];
+            if isfield(ref, 'trackHalfWidth')
+                fallback = ref.trackHalfWidth;
+            end
+            if lateralValue >= 0
+                if isfield(ref, 'leftHalfWidth') && isfinite(ref.leftHalfWidth)
+                    halfWidth = ref.leftHalfWidth;
+                elseif ~isempty(fallback) && isfinite(fallback)
+                    halfWidth = fallback;
+                else
+                    halfWidth = Inf;
+                end
+            else
+                if isfield(ref, 'rightHalfWidth') && isfinite(ref.rightHalfWidth)
+                    halfWidth = ref.rightHalfWidth;
+                elseif ~isempty(fallback) && isfinite(fallback)
+                    halfWidth = fallback;
+                else
+                    halfWidth = Inf;
+                end
+            end
         end
     end
 end

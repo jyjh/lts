@@ -9,7 +9,7 @@ addpath('src')
 lts.app.run_simulation
 ```
 
-Each run writes a MotecLogGenerator-compatible CSV to `exports/motec_<track>_<timestamp>.csv`
+Each run writes a MotecLogGenerator-compatible CSV to `exports/motec_<track>_<config.name>_<timestamp>.csv`
 and, through the `external/MotecLogGenerator` submodule, a `.ld` for MoTeC i2.
 Set `exportMoTeC = false` in `src/+lts/+app/run_simulation.m` to disable `.ld` conversion.
 
@@ -136,6 +136,28 @@ changed `Direction` or otherwise), copy the new `.mat` into `tracks/` yourself.
 `Direction` only reorders points *inside* the file — the filename is unchanged —
 so a re-export silently overwrites the previous output.
 
+**Variable track widths.** As of the cone-aware exporter, the `.mat`/`.csv`
+carry the real track corridor, not a single width: each waypoint has its own
+`width_m` plus asymmetric `left_width_m`/`right_width_m` derived from the cone
+marks. `WaypointTrack.loadMat` reads these into `LeftWidth`/`RightWidth`, and
+the simulator consumes them with full per-side fidelity — the off-track margin,
+edge slowdown/steering, racing-line offset, and feasibility all use the actual
+local half-width on whichever side of the centerline the car is on (positive
+lateral error = left of the line, bounded by `left_width_m`; negative by
+`right_width_m`). When a direction override reverses the waypoint order, the
+left and right sides are swapped to stay consistent with the new travel
+direction. Scalar-width files (no `left_width_m`/`right_width_m`) load exactly
+as before and run with a symmetric `Width/2` corridor.
+
+```matlab
+track = lts.components.WaypointTrack.loadMat('tracks/<file>.mat');
+[leftWidth, rightWidth] = track.getTrackSideWidths();   % per-waypoint [m]
+```
+
+The app entry points (`run_simulation`, `run_all`, `CorrelationAppSupport`)
+load the file's widths as-is; do not override `track.Width`, since that would
+discard the exported corridor and force a uniform width back on.
+
 ## Current Model
 
 - **Whole-car aero** — `lts.components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
@@ -190,7 +212,7 @@ Guides that live at the repo root: [setup.md](setup.md) (initial car model) and
 - MATLAB R2019b or later
 - [MFeval](https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval) for Pacejka Magic Formula tire evaluation
 - The provided EMRAX and tire data files in `src/+lts/+components/+Powertrain` and `src/+lts/+components/+Tire`
-- Python 3 with `cantools` and `numpy` for MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/stevendaniluk/MotecLogGenerator) submodule
+- Python 3 with `cantools` and `numpy` for MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/jyjh/MotecLogGenerator) submodule
 
 ## License
 

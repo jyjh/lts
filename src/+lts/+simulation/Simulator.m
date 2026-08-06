@@ -457,6 +457,13 @@ classdef Simulator < handle
             baseTrackLen  = track.getTotalLength();
             trackWidth    = track.getTrackWidth();
 
+            % Per-waypoint left/right half-widths define the actual corridor.
+            % They are optional (legacy/scalar tracks return the symmetric
+            % half-width on each side); when present they are tiled across laps
+            % so the index-aligned per-step margin honors the local geometry.
+            [leftHalfWidthBase, rightHalfWidthBase] = ...
+                obj.sideHalfWidthsFromTrack(track, size(trackPtsBase, 1), trackWidth);
+
             warmupLaps = obj.getTrackWarmupLaps(track);
             recordedLaps = obj.getTrackRecordedLaps(track);
             totalLaps = warmupLaps + recordedLaps;
@@ -469,11 +476,18 @@ classdef Simulator < handle
             if closedLoop
                 [trackPts, curvature, mu, heading] = obj.repeatClosedTrack( ...
                     trackPtsBase, curvatureBase, muBase, headingBase, totalLaps);
+                hasClosurePoint = norm(trackPtsBase(1, :) - trackPtsBase(end, :)) <= 0.05;
+                leftHalfWidth = lts.simulation.TrackReference.repeatClosedColumn( ...
+                    leftHalfWidthBase, size(trackPtsBase, 1), hasClosurePoint, totalLaps);
+                rightHalfWidth = lts.simulation.TrackReference.repeatClosedColumn( ...
+                    rightHalfWidthBase, size(trackPtsBase, 1), hasClosurePoint, totalLaps);
             else
                 trackPts = trackPtsBase;
                 curvature = curvatureBase;
                 mu = muBase;
                 heading = headingBase;
+                leftHalfWidth = leftHalfWidthBase;
+                rightHalfWidth = rightHalfWidthBase;
             end
             nPts = size(trackPts, 1);
             
@@ -485,6 +499,11 @@ classdef Simulator < handle
             trackLen = arcLen(end);
             recordStartS = warmupLaps * baseTrackLen;
             recordEndS = min(trackLen, recordStartS + recordedLaps * baseTrackLen);
+            % Representative scalar half-width: mean of the tiled per-side
+            % corridor. Existing scalar-width consumers (fallback search
+            % radius, logging) read this; per-step / per-side consumers use
+            % trackLeftHalfWidth / trackRightHalfWidth.
+            trackHalfWidth = mean(leftHalfWidth + rightHalfWidth) / 2;
             trackData = struct( ...
                 'points', trackPts, ...
                 'arcLen', arcLen, ...
@@ -493,7 +512,9 @@ classdef Simulator < handle
                 'heading', heading(:), ...
                 'length', trackLen, ...
                 'trackWidth', trackWidth, ...
-                'trackHalfWidth', trackWidth / 2, ...
+                'trackHalfWidth', trackHalfWidth, ...
+                'trackLeftHalfWidth', leftHalfWidth(:), ...
+                'trackRightHalfWidth', rightHalfWidth(:), ...
                 'closedLoop', closedLoop, ...
                 'baseTrackLength', baseTrackLen, ...
                 'totalLaps', totalLaps, ...
@@ -800,9 +821,28 @@ classdef Simulator < handle
                         stateLog.trackWidth(step) = 0;
                         stateLog.trackLimitMargin(step) = 0;
                     else
-                        stateLog.trackWidth(step)  = trackData.trackWidth;
+                        % Recover the reference waypoint index from the
+                        % progress arc length (same lookup as
+                        % referenceAtProgress) so the per-step corridor width
+                        % and margin honor the local left/right half-widths.
+                        refIdxStep = find(trackData.arcLen <= newState.refS, 1, 'last');
+                        if isempty(refIdxStep)
+                            refIdxStep = 1;
+                        end
+                        refIdxStep = max(1, min(refIdxStep, ...
+                            numel(trackData.trackLeftHalfWidth)));
+                        % Per-step corridor width (left + right half-widths),
+                        % kept scalar so the Track Width telemetry channel is 1-D.
+                        stateLog.trackWidth(step) = ...
+                            trackData.trackLeftHalfWidth(refIdxStep) + ...
+                            trackData.trackRightHalfWidth(refIdxStep);
+                        [localLeft, localRight] = ...
+                            lts.simulation.TrackReference.sideHalfWidthsAt( ...
+                            trackData, refIdxStep);
                         stateLog.trackLimitMargin(step) = ...
-                            trackData.trackHalfWidth - abs(newState.lateralError);
+                            lts.simulation.TrackReference.sideMargin( ...
+                            localLeft, localRight, newState.lateralError, ...
+                            trackData.trackHalfWidth);
                     end
                     stateLog.throttle(step)    = input.throttle;
                     stateLog.brake(step)       = forces.brake;
@@ -1723,6 +1763,8 @@ classdef Simulator < handle
                 'lateralError', 0, ...
                 'trackWidth', 0, ...
                 'trackHalfWidth', 0, ...
+                'leftHalfWidth', 0, ...
+                'rightHalfWidth', 0, ...
                 'trackLimitMargin', 0, ...
                 'onTrack', true, ...
                 'referenceMode', 'free');
@@ -1844,6 +1886,23 @@ classdef Simulator < handle
                 points, curvature, mu, heading, lapCount)
             [points, curvature, mu, heading] = ...
                 lts.simulation.TrackReference.repeatClosed(points, curvature, mu, heading, lapCount);
+        end
+
+        function [leftHalfWidth, rightHalfWidth] = sideHalfWidthsFromTrack(~, ...
+                track, nWaypoints, trackWidth)
+            % SIDEHALFWIDTHSFROMTRACK Per-waypoint left/right half-widths [m].
+            % Uses the track's asymmetric corridor (cone-derived) when exposed
+            % via getTrackSideWidths; otherwise broadcasts the scalar half-width
+            % (trackWidth / 2) so every waypoint has a defined limit.
+            if ismethod(track, 'getTrackSideWidths')
+                [leftHalfWidth, rightHalfWidth] = track.getTrackSideWidths();
+                leftHalfWidth = leftHalfWidth(:);
+                rightHalfWidth = rightHalfWidth(:);
+            else
+                halfWidth = trackWidth / 2;
+                leftHalfWidth = repmat(halfWidth, nWaypoints, 1);
+                rightHalfWidth = leftHalfWidth;
+            end
         end
 
         function [stateLog, lapTime, recordedSteps] = applyTelemetryLapWindow(obj, ...

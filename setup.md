@@ -168,9 +168,17 @@ different driver without updating the mass and location.
 
 Use installed dimensions, not only nominal CAD values.
 
-The current model has one `trackWidth` value. If front and rear tracks differ,
-record that limitation. Use the dimension that best represents the model until
-separate front and rear track widths are supported.
+The current model has one vehicle `trackWidth` value (the axle width, e.g.
+1.21 m for R25). If front and rear tracks differ, record that limitation. Use
+the dimension that best represents the model until separate front and rear
+track widths are supported.
+
+Do not confuse the vehicle axle `trackWidth` with the **circuit** track
+width. The circuit width is a property of the loaded `WaypointTrack`, not the
+vehicle config, and is now allowed to vary per waypoint and per side
+(`left_width_m`/`right_width_m` from the fsae track image tool's cone-aware
+export). The simulator consumes that corridor with per-side fidelity; see
+[Track files](README.md#track-files).
 
 ### 4.3 Static weight distribution
 

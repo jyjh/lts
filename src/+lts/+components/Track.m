@@ -22,7 +22,10 @@ classdef (Abstract) Track
         % Get heading angle at each waypoint [rad]
         heading = getHeading(obj)
 
-        % Get total fixed track width [m]
+        % Get representative total track width [m] (scalar; one value per
+        % waypoint for variable-width tracks is exposed via the optional
+        % getTrackSideWidths method, which is not part of the abstract
+        % contract but is implemented by WaypointTrack).
         width = getTrackWidth(obj)
     end
 

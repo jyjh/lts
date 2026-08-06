@@ -20,13 +20,15 @@ classdef DriverInputPlanner
         speedFeedbackBrakeBand = 1.0
         speedFeedbackCorrectionGain = 0.35
         racingLineEnabled = true
+        % Fraction of the per-waypoint drivable corridor (minus the CG
+        % safety margin) that the minimum-curvature optimizer may use.
+        % 1.0 = use the full corridor; smaller values optimize within an
+        % inset band (conservative line). HierarchicalOptimizer sweeps this.
         racingLineOffsetFraction = 0.65
         racingLineCurvatureSmoothDistance = 6.0
         racingLineOffsetSmoothDistance = 8.0
-        racingLineMinCornerLength = 2.0
         vehicleTrackWidth = 0
         edgeSlowdownMargin = 0.75
-        racingLineApexPhase = 0.5
         cachedRollingResistanceCoeff = 0.015
         cachedCorneringUsage = 0.98
         cachedBrakingUsage = 0.98
@@ -103,7 +105,6 @@ classdef DriverInputPlanner
             if ~isempty(dm)
                 if isa(dm, 'lts.driver.DriverModel')
                     obj.edgeSlowdownMargin = dm.edgeSlowdownMargin;
-                    obj.racingLineApexPhase = dm.apexPhase;
                     obj.cachedCorneringUsage = dm.corneringUsage;
                     obj.cachedBrakingUsage = dm.brakingUsage;
                     obj.cachedDriveUsage = dm.driveUsage;
@@ -117,7 +118,6 @@ classdef DriverInputPlanner
                         dm.racingLineOffsetSmoothDistance;
                 else
                     obj.edgeSlowdownMargin = obj.readObjectValue(dm, 'edgeSlowdownMargin', obj.edgeSlowdownMargin);
-                    obj.racingLineApexPhase = obj.readObjectValue(dm, 'apexPhase', obj.racingLineApexPhase);
                     obj.cachedCorneringUsage = obj.readObjectValue(dm, 'corneringUsage', obj.cachedCorneringUsage);
                     obj.cachedBrakingUsage = obj.readObjectValue(dm, 'brakingUsage', obj.cachedBrakingUsage);
                     obj.cachedDriveUsage = obj.readObjectValue(dm, 'driveUsage', obj.cachedDriveUsage);
@@ -132,7 +132,6 @@ classdef DriverInputPlanner
             end
             obj.cachedRollingResistanceCoeff = max(obj.cachedRollingResistanceCoeff, 0);
             obj.edgeSlowdownMargin = max(0, obj.edgeSlowdownMargin);
-            obj.racingLineApexPhase = lts.util.clamp(obj.racingLineApexPhase, 0.1, 0.9);
             obj.cachedCorneringUsage = lts.util.saturate(obj.cachedCorneringUsage);
             obj.cachedBrakingUsage = lts.util.saturate(obj.cachedBrakingUsage);
             obj.cachedDriveUsage = lts.util.saturate(obj.cachedDriveUsage);
@@ -369,6 +368,24 @@ classdef DriverInputPlanner
         end
 
         function line = buildRacingLine(obj, trackData)
+            % BUILDRACINGLINE Minimum-curvature racing line within the corridor.
+            %
+            % The line is parametrized by a lateral offset n_i at each
+            % centerline waypoint (positive = left, negative = right). The
+            % offsets are chosen to minimize the total squared curvature of
+            % the resulting polyline, subject to per-waypoint box constraints
+            % n_i in [-rightLimit, +leftLimit]. This is the classic
+            % minimum-curvature racing line: it cuts corners, runs out to the
+            % full track width wherever that lowers curvature, and yields a
+            % smooth path with few direction changes -- as opposed to a
+            % centerline-relative apex heuristic.
+            %
+            % Contract of the returned struct (all Nx1, N = trackData.nPts):
+            %   targetLateralError - normal offset [m], +left/-right
+            %   lineS               - arc length ALONG the racing line
+            %   lineHeading         - racing-line tangent heading [rad]
+            %   lineCurvature       - racing-line curvature [1/m], smoothed
+            %   planningCurvature   - curvature used by the GGV speed sweep
             n = trackData.nPts;
             centerS = trackData.arcLen(:);
             centerPoints = trackData.points;
@@ -390,36 +407,30 @@ classdef DriverInputPlanner
                 return;
             end
 
-            offsetLimit = obj.computeRacingLineOffsetLimit(trackData.trackHalfWidth);
-            if offsetLimit <= 0
+            % Per-waypoint, per-side offset limits. A positive targetOffset
+            % moves the line left of the centerline (bounded by the left
+            % half-width), a negative one moves it right. racingLineOffsetFraction
+            % scales how much of the available corridor the optimizer may use.
+            [leftLimit, rightLimit] = obj.computeRacingLineOffsetLimits(trackData);
+            if isempty(leftLimit) || (max(leftLimit) <= 0 && max(rightLimit) <= 0)
                 return;
             end
 
-            smoothCurvature = line.planningCurvature;
-            cornerSegments = obj.findRacingLineCornerSegments( ...
-                centerS, smoothCurvature);
-            if isempty(cornerSegments)
-                return;
-            end
+            closedLoop = isfield(trackData, 'closedLoop') && ...
+                ~isempty(trackData.closedLoop) && logical(trackData.closedLoop);
 
-            targetOffset = zeros(n, 1);
-            for segIdx = 1:size(cornerSegments, 1)
-                iStart = cornerSegments(segIdx, 1);
-                iEnd = cornerSegments(segIdx, 2);
-                turnSign = cornerSegments(segIdx, 3);
-                if iEnd <= iStart || turnSign == 0
-                    continue;
-                end
-                segmentS = centerS(iStart:iEnd);
-                segmentLength = max(segmentS(end) - segmentS(1), eps);
-                phase = (segmentS - segmentS(1)) / segmentLength;
-                targetOffset(iStart:iEnd) = obj.racingLineOffsetAtPhase( ...
-                    phase, turnSign, offsetLimit);
-            end
+            % Solve the minimum-curvature problem over the offset vector.
+            targetOffset = obj.solveMinCurvatureOffsets( ...
+                centerPoints, centerHeading, leftLimit, rightLimit, closedLoop);
 
+            % Light post-polish: smooth the offsets so the discrete Menger
+            % curvature fed downstream is not noisy at the corridor walls.
             targetOffset = obj.smoothByDistance( ...
                 targetOffset, centerS, obj.racingLineOffsetSmoothDistance);
-            targetOffset = lts.util.clamp(targetOffset, -offsetLimit, offsetLimit);
+            % Asymmetric clamp: positive offsets bounded by the local left
+            % limit, negative by the local right limit.
+            targetOffset = min(targetOffset, leftLimit);
+            targetOffset = max(targetOffset, -rightLimit);
 
             heading = unwrap(centerHeading);
             normalX = -sin(heading);
@@ -431,10 +442,17 @@ classdef DriverInputPlanner
                 return;
             end
 
+            % computeHeading/computeCurvature are called with closed=false so
+            % cleanPoints does not drop the closure point and the result stays
+            % length-N (matching the centerline/trackData indexing). The line
+            % is a closed loop in geometry but indexed as an open polyline here.
             lineHeading = lts.components.Track.computeHeading(linePoints, false);
             lineCurvature = lts.components.Track.computeCurvature(linePoints, false);
             lineCurvature = obj.smoothByDistance( ...
                 lineCurvature, centerS, obj.racingLineCurvatureSmoothDistance);
+            if numel(lineHeading) ~= n || numel(lineCurvature) ~= n
+                return;
+            end
             line.targetLateralError = targetOffset;
             line.lineS = lineS;
             line.lineHeading = lineHeading(:);
@@ -442,58 +460,272 @@ classdef DriverInputPlanner
             line.planningCurvature = line.lineCurvature;
         end
 
-        function offsetLimit = computeRacingLineOffsetLimit(obj, trackHalfWidth)
+        function [leftLimit, rightLimit] = computeRacingLineOffsetLimits(obj, trackData)
+            % COMPUTERACINGLINEOFFSETLIMITS Per-waypoint left/right racing-line
+            % offset limits [m]. Returns two Nx1 column vectors. Positive
+            % offsets (left of centerline) are bounded by leftLimit; negative
+            % (right) by rightLimit. When the track carries a per-waypoint
+            % corridor (trackLeftHalfWidth/trackRightHalfWidth) the limits
+            % follow it; otherwise both reduce to the symmetric scalar
+            % half-width and the result matches the legacy single-limit path.
+            % racingLineOffsetFraction scales how much of the corridor is
+            % available to the optimizer (1.0 = full corridor minus CG margin).
+            n = size(trackData.points, 1);
+            if isfield(trackData, 'trackLeftHalfWidth') && ...
+                    isfield(trackData, 'trackRightHalfWidth') && ...
+                    ~isempty(trackData.trackLeftHalfWidth)
+                leftHalf = trackData.trackLeftHalfWidth(:);
+                rightHalf = trackData.trackRightHalfWidth(:);
+            else
+                leftHalf = repmat(trackData.trackHalfWidth, n, 1);
+                rightHalf = leftHalf;
+            end
             cgMargin = max(0.5 * obj.vehicleTrackWidth + 0.25, ...
                 obj.edgeSlowdownMargin);
-            offsetLimit = trackHalfWidth - cgMargin;
-            offsetLimit = max(0, obj.racingLineOffsetFraction * offsetLimit);
+            leftLimit = max(0, obj.racingLineOffsetFraction * (leftHalf - cgMargin));
+            rightLimit = max(0, obj.racingLineOffsetFraction * (rightHalf - cgMargin));
         end
 
-        function segments = findRacingLineCornerSegments(obj, s, curvature)
-            absKappa = abs(curvature(:));
-            if all(absKappa <= eps)
-                segments = zeros(0, 3);
+        function offset = solveMinCurvatureOffsets(obj, points, heading, ...
+                leftLimit, rightLimit, closed)
+            % SOLVEMINCURVATUREOFFSETS Minimum-curvature lateral offsets.
+            %
+            % Minimizes J(n) = sum_i kappa_i(n)^2 where kappa_i is the Menger
+            % curvature of the offset polyline, subject to per-waypoint box
+            % constraints n_i in [-rightLimit_i, +leftLimit_i]. Each kappa_i
+            % depends only on the three neighboring offsets (n_{i-1}, n_i,
+            % n_{i+1}), so each offset influences at most three curvature
+            % samples and the full gradient is computed in O(N).
+            %
+            % Strategy: projected gradient descent with an adaptive step.
+            % Warm-started from the convex smoothness surrogate (which is
+            % always finite, smooth, and corridor-respecting). Box projection
+            % keeps every iterate feasible, so the line always respects track
+            % limits regardless of convergence. Extended deviations from the
+            % centerline are encouraged wherever they reduce total curvature.
+            n = size(points, 1);
+            offset = zeros(n, 1);
+            if n < 3
                 return;
             end
 
-            kappa95 = prctile(absKappa, 95);
-            threshold = max([1e-5, 0.15 * kappa95]);
-            active = absKappa > threshold;
-            signKappa = sign(curvature(:));
-            signKappa(~active) = 0;
+            lower = -rightLimit(:);
+            upper = leftLimit(:);
 
-            segments = zeros(0, 3);
-            i = 1;
-            n = numel(curvature);
-            while i <= n
-                if signKappa(i) == 0
-                    i = i + 1;
+            h = unwrap(heading(:));
+            normalX = -sin(h);
+            normalY = cos(h);
+
+            kappaOf = @(o) obj.offsetPolylineCurvature( ...
+                points, normalX, normalY, o, closed);
+            costOf = @(o) sum(kappaOf(o).^2);
+
+            % Warm start from the convex smoothness surrogate: it is cheap,
+            % strictly convex, and always feasible. The Gauss-Newton curvature
+            % refinement below then drives the offsets out to the corridor
+            % walls wherever that reduces total curvature.
+            offset = obj.solveConvexSmoothness(lower, upper, closed);
+            bestOffset = offset;
+            bestCost = costOf(offset);
+
+            % Levenberg-Marquardt (damped Gauss-Newton) on J(n) = sum kappa^2.
+            % Each step solves (J'*J + lambda*I) dn = -J'*kappa, then a
+            % backtracking line search accepts the first scaled step that
+            % reduces the cost (after box projection). LM damping keeps the
+            % step well-conditioned on tight corners; box projection keeps
+            % every iterate inside the corridor, so the line always respects
+            % track limits regardless of convergence.
+            lambda = 1e-2;
+            tol = 1e-8;
+            maxIter = 50;
+            for iter = 1:maxIter
+                [J, kappa] = obj.curvatureJacobian( ...
+                    points, normalX, normalY, offset, closed);
+                g = J' * kappa;                   % gradient of (1/2) sum kappa^2
+                if ~all(isfinite(g)) || norm(g) < tol
+                    break;
+                end
+
+                A = (J' * J) + lambda * speye(n);
+                dn = A \ (-g);                    % Gauss-Newton direction
+                if ~all(isfinite(dn))
+                    lambda = lambda * 10;
+                    if lambda > 1e10
+                        break;
+                    end
                     continue;
                 end
-                turnSign = signKappa(i);
-                iStart = i;
-                while i < n && signKappa(i + 1) == turnSign
-                    i = i + 1;
+
+                % Backtracking line search along dn.
+                curCost = costOf(offset);
+                accepted = false;
+                alpha = 1.0;
+                for ls = 1:20
+                    trial = offset + alpha * dn;
+                    trial = max(lower, min(upper, trial));
+                    trialCost = costOf(trial);
+                    if isfinite(trialCost) && trialCost < curCost - 1e-12
+                        stepNorm = norm(trial - offset);
+                        offset = trial;
+                        if trialCost < bestCost
+                            bestCost = trialCost;
+                            bestOffset = trial;
+                        end
+                        accepted = true;
+                        break;
+                    end
+                    alpha = alpha * 0.5;
                 end
-                iEnd = i;
-                if s(iEnd) - s(iStart) >= obj.racingLineMinCornerLength
-                    segments(end + 1, :) = [iStart, iEnd, turnSign]; %#ok<AGROW>
+
+                if accepted
+                    lambda = max(lambda * 0.3, 1e-8);
+                    if exist('stepNorm', 'var') && stepNorm < tol * (1 + norm(offset))
+                        break;
+                    end
+                else
+                    lambda = lambda * 4;
+                    if lambda > 1e10
+                        break;
+                    end
                 end
-                i = i + 1;
+            end
+
+            offset = bestOffset;
+            % Guarantee feasibility (defends against any non-finite slip).
+            offset(~isfinite(offset)) = 0;
+            offset = max(lower, min(upper, offset));
+        end
+
+        function [J, kappa] = curvatureJacobian(obj, points, normalX, normalY, offset, closed)
+            % CURVATUREJACOBIAN Sparse tridiagonal Jacobian of curvature.
+            %
+            % Returns J (NxN sparse) where J(i,j) = d kappa_i / d n_j, and the
+            % residual kappa = kappa(offset). Each kappa_i depends only on
+            % offsets (n_{i-1}, n_i, n_{i+1}), so J has three nonzero bands.
+            % Computed by perturbing each offset j and reading the change in
+            % the three curvature rows it touches -- O(N) curvature evaluations
+            % total. J is exact to a central finite difference of kappa, so
+            % Gauss-Newton steps derived from it match the true cost gradient.
+            n = numel(offset);
+            J = spalloc(n, n, 3 * n);
+            kappa = obj.offsetPolylineCurvature( ...
+                points, normalX, normalY, offset, closed);
+            if n < 3
+                return;
+            end
+
+            ds = hypot(diff(points(:, 1)), diff(points(:, 2)));
+            ds = ds(isfinite(ds) & ds > 0);
+            epsStep = max(median(ds), 1e-2) * 1e-3;
+
+            for j = 1:n
+                op = offset; op(j) = op(j) + epsStep;
+                om = offset; om(j) = om(j) - epsStep;
+                kp = obj.offsetPolylineCurvature(points, normalX, normalY, op, closed);
+                km = obj.offsetPolylineCurvature(points, normalX, normalY, om, closed);
+                dk = (kp - km) / (2 * epsStep);   % d kappa(row) / d n_j
+                rows = obj.neighborRows(j, n, closed);
+                for r = rows(:).'
+                    if isfinite(dk(r))
+                        J(r, j) = dk(r);
+                    end
+                end
             end
         end
 
-        function offset = racingLineOffsetAtPhase(obj, phase, turnSign, offsetLimit)
-            apexPhase = obj.racingLineApexPhase;
-            phase = lts.util.saturate(phase(:));
-            offset = zeros(size(phase));
+        function kappa = offsetPolylineCurvature(~, points, normalX, normalY, offset, closed)
+            % OFFSETPOLYLINECURVATURE Menger curvature of the offset polyline.
+            %   kappa_i = 2 * signed_area / (a*b*c)
+            % using the three neighboring offset points. Matches the sign
+            % convention of lts.components.Track.computeCurvature (positive =
+            % left turn). Vectorized; periodic wrapping for closed loops.
+            P = points + [offset .* normalX, offset .* normalY];
+            n = size(P, 1);
+            kappa = zeros(n, 1);
+            if n < 3
+                return;
+            end
+            if closed
+                im = mod((1:n) - 2, n) + 1;
+                ip = mod((1:n), n) + 1;
+            else
+                im = max((1:n) - 1, 1);
+                ip = min((1:n) + 1, n);
+            end
+            aVec = P - P(im, :);
+            bVec = P(ip, :) - P;
+            cVec = P(ip, :) - P(im, :);
+            a = hypot(aVec(:, 1), aVec(:, 2));
+            b = hypot(bVec(:, 1), bVec(:, 2));
+            c = hypot(cVec(:, 1), cVec(:, 2));
+            denom = a .* b .* c;
+            area2 = aVec(:, 1) .* bVec(:, 2) - aVec(:, 2) .* bVec(:, 1);
+            kappa = 2 .* area2 ./ denom;
+            kappa(~isfinite(kappa)) = 0;
+            if ~closed
+                kappa(1) = kappa(2);
+                kappa(end) = kappa(end - 1);
+            end
+        end
 
-            entry = phase <= apexPhase;
-            entryBlend = phase(entry) / max(apexPhase, eps);
-            offset(entry) = -turnSign * offsetLimit .* cos(pi * entryBlend);
+        function rows = neighborRows(~, j, n, closed)
+            % NEIGHBORROWS Row indices whose curvature depends on offset j.
+            % Curvature at row i depends on offsets (i-1, i, i+1), so offset j
+            % influences rows (j-1, j, j+1), with periodic wrapping for closed
+            % loops and clamping at open-track endpoints.
+            if closed
+                rows = [mod(j - 2, n) + 1, j, mod(j, n) + 1];
+            else
+                rows = [j - 1, j, j + 1];
+                rows = rows(rows >= 1 & rows <= n);
+            end
+        end
 
-            exitBlend = (phase(~entry) - apexPhase) / max(1 - apexPhase, eps);
-            offset(~entry) = turnSign * offsetLimit .* cos(pi * exitBlend);
+        function offset = solveConvexSmoothness(~, lower, upper, closed)
+            % SOLVECONVEXSMOOTHNESS Strictly-convex minimum-second-difference
+            % surrogate. Minimizes sum (n_{i-1} - 2 n_i + n_{i+1})^2 subject
+            % to the box constraints, via projected gradient descent. Used as
+            % the warm start and safety fallback: it is always finite, smooth,
+            % and corridor-respecting. For a near-straight centerline this is
+            % already close to optimal; for corners it is a sensible seed that
+            % the curvature refinement improves.
+            n = numel(lower);
+            offset = zeros(n, 1);
+            if n < 3
+                return;
+            end
+
+            % Second-difference operator D (path-graph Laplacian), periodic
+            % for closed loops. A = D'*D is PSD; we minimize 0.5 n' A n.
+            e = ones(n, 1);
+            D = spdiags(e * [1 -2 1], -1:1, n, n);
+            if closed
+                D(1, n) = 1;
+                D(n, 1) = 1;
+            end
+            A = D' * D;
+            % Pin the constant-offset null space to zero so the minimizer
+            % stays near the centerline (otherwise the surrogate is indifferent
+            % to a constant shift). Tiny ridge keeps the solve well-conditioned.
+            A = A + spdiags(1e-3 * e, 0, n, n);
+
+            % ||A||_2 <= 16 for the second-difference operator, so alpha=1/16
+            % guarantees descent for the unconstrained problem; projection
+            % only improves feasibility.
+            alpha = 1 / 16;
+            offset = zeros(n, 1);
+            for iter = 1:200 %#ok<NASGU>
+                grad = A * offset;
+                newOffset = offset - alpha * grad;
+                newOffset = max(lower, min(upper, newOffset));
+                if max(abs(newOffset - offset)) < 1e-8
+                    offset = newOffset;
+                    break;
+                end
+                offset = newOffset;
+            end
+            offset(~isfinite(offset)) = 0;
+            offset = max(lower, min(upper, offset));
         end
 
         function values = smoothByDistance(~, values, s, smoothDistance)

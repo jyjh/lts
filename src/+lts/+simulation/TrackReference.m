@@ -67,6 +67,34 @@ classdef TrackReference
             end
         end
 
+        function tiled = repeatClosedColumn(values, nBasePoints, hasClosurePoint, lapCount)
+            % REPEATCLOSEDCOLUMN Tile a per-waypoint column across laps with the
+            % same closure-point + repeat rule as repeatClosed, so any
+            % per-waypoint track attribute (e.g. left/right half-widths) stays
+            % index-aligned with the tiled centerline points.
+            %
+            %   values           - Nx1 base-lap values, one per base waypoint
+            %   nBasePoints      - number of base waypoints (before closure
+            %                      point restoration) matching points(1,:)
+            %   hasClosurePoint  - true if the base centerline already closes
+            %                      (matches repeatClosed's test)
+            %   lapCount         - number of laps to tile
+            values = values(:);
+            lapCount = max(1, round(lapCount));
+            base = values;
+            if ~hasClosurePoint
+                % Restore the removed closure point so tiling covers the
+                % final-to-initial segment, exactly as repeatClosed does for
+                % points/curvature/mu/heading.
+                base = [base; base(1)];
+            end
+            tiled = base;
+            for lapIdx = 2:lapCount %#ok<NASGU>
+                tiled = [tiled; base(2:end)]; %#ok<AGROW>
+            end
+            tiled = tiled(:);
+        end
+
         function ref = referenceAtProgress(s, x, y, trackData)
             s = max(0, min(trackData.length, s));
             idx = find(trackData.arcLen <= s, 1, 'last');
@@ -95,7 +123,10 @@ classdef TrackReference
             dy = y - refPoint(2);
             lateralError = dx * (-sin(refHeading)) + dy * cos(refHeading);
             trackHalfWidth = trackData.trackHalfWidth;
-            trackLimitMargin = trackHalfWidth - abs(lateralError);
+            [leftHalfWidth, rightHalfWidth] = ...
+                lts.simulation.TrackReference.sideHalfWidthsAt(trackData, idx);
+            trackLimitMargin = lts.simulation.TrackReference.sideMargin( ...
+                leftHalfWidth, rightHalfWidth, lateralError, trackHalfWidth);
             onTrack = trackLimitMargin >= -1e-9;
 
             ref = struct( ...
@@ -109,6 +140,8 @@ classdef TrackReference
                 'lateralError', lateralError, ...
                 'trackWidth', trackData.trackWidth, ...
                 'trackHalfWidth', trackHalfWidth, ...
+                'leftHalfWidth', leftHalfWidth, ...
+                'rightHalfWidth', rightHalfWidth, ...
                 'trackLimitMargin', trackLimitMargin, ...
                 'onTrack', onTrack);
         end
@@ -178,13 +211,17 @@ classdef TrackReference
                 bestT * trackData.curvature(interpIdx);
             refMu = (1 - bestT) * trackData.mu(bestIdx) + ...
                 bestT * trackData.mu(interpIdx);
+            [leftHalfWidth, rightHalfWidth] = ...
+                lts.simulation.TrackReference.sideHalfWidthsInterp( ...
+                    trackData, bestIdx, interpIdx, bestT);
 
             dx = x - bestPoint(1);
             dy = y - bestPoint(2);
             lateralError = dx * (-sin(refHeading)) + dy * cos(refHeading);
             refIdx = min(bestIdx + double(bestT > 0.5), trackData.nPts);
             trackHalfWidth = trackData.trackHalfWidth;
-            trackLimitMargin = trackHalfWidth - abs(lateralError);
+            trackLimitMargin = lts.simulation.TrackReference.sideMargin( ...
+                leftHalfWidth, rightHalfWidth, lateralError, trackHalfWidth);
             onTrack = trackLimitMargin >= -1e-9;
 
             ref = struct( ...
@@ -198,8 +235,68 @@ classdef TrackReference
                 'lateralError', lateralError, ...
                 'trackWidth', trackData.trackWidth, ...
                 'trackHalfWidth', trackHalfWidth, ...
+                'leftHalfWidth', leftHalfWidth, ...
+                'rightHalfWidth', rightHalfWidth, ...
                 'trackLimitMargin', trackLimitMargin, ...
                 'onTrack', onTrack);
+        end
+
+        function [leftHalfWidth, rightHalfWidth] = sideHalfWidthsAt(trackData, idx)
+            % SIDEHALFWIDTHSAT Per-side half-widths at a single waypoint index.
+            % Returns the trackLeftHalfWidth/trackRightHalfWidth values when the
+            % track data carries a per-waypoint corridor, else falls back to
+            % the symmetric scalar trackHalfWidth on both sides. This keeps the
+            % off-track margin well-defined for synthetic/test trackData that
+            % only sets the scalar field.
+            trackHalfWidth = trackData.trackHalfWidth;
+            if isfield(trackData, 'trackLeftHalfWidth') && ...
+                    isfield(trackData, 'trackRightHalfWidth') && ...
+                    ~isempty(trackData.trackLeftHalfWidth)
+                idx = max(1, min(idx, numel(trackData.trackLeftHalfWidth)));
+                leftHalfWidth = trackData.trackLeftHalfWidth(idx);
+                rightHalfWidth = trackData.trackRightHalfWidth(idx);
+            else
+                leftHalfWidth = trackHalfWidth;
+                rightHalfWidth = trackHalfWidth;
+            end
+        end
+
+        function [leftHalfWidth, rightHalfWidth] = sideHalfWidthsInterp( ...
+                trackData, idx0, idx1, t)
+            % SIDEHALFWIDTHSINTERP Linearly interpolated per-side half-widths
+            % across segment [idx0, idx1] at parameter t, matching how
+            % projectToReference interpolates curvature and mu.
+            trackHalfWidth = trackData.trackHalfWidth;
+            if isfield(trackData, 'trackLeftHalfWidth') && ...
+                    isfield(trackData, 'trackRightHalfWidth') && ...
+                    ~isempty(trackData.trackLeftHalfWidth)
+                l = trackData.trackLeftHalfWidth;
+                r = trackData.trackRightHalfWidth;
+                idx0 = max(1, min(idx0, numel(l)));
+                idx1 = max(1, min(idx1, numel(l)));
+                leftHalfWidth = (1 - t) * l(idx0) + t * l(idx1);
+                rightHalfWidth = (1 - t) * r(idx0) + t * r(idx1);
+            else
+                leftHalfWidth = trackHalfWidth;
+                rightHalfWidth = trackHalfWidth;
+            end
+        end
+
+        function margin = sideMargin(leftHalfWidth, rightHalfWidth, lateralError, fallback)
+            % SIDEMARGIN Distance to the nearer edge for the side the car is on.
+            % Convention (matches DriverModel): positive lateralError = left of
+            % the reference line, so it is bounded by the left half-width;
+            % negative by the right. Falls back to the symmetric scalar
+            % half-width if a per-side value is missing, empty, or non-finite.
+            if lateralError >= 0
+                halfWidth = leftHalfWidth;
+            else
+                halfWidth = rightHalfWidth;
+            end
+            if isempty(halfWidth) || ~all(isfinite(halfWidth)) || any(halfWidth <= 0)
+                halfWidth = fallback;
+            end
+            margin = halfWidth - abs(lateralError);
         end
 
         function trackData = precomputeSegments(trackData)

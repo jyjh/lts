@@ -5,7 +5,17 @@ classdef WaypointTrack < lts.components.Track
 
     properties
         Points
+        % Total track width [m]. Scalar for a constant-width track, or one
+        % value per waypoint when the surface narrows/widens (cone-derived
+        % corridors from the fsae track image tool). Per-side asymmetry is
+        % carried by LeftWidth / RightWidth; Width is then the local total.
         Width = 3.0
+        % Per-waypoint half-widths [m]. Empty [] means "symmetric: derive each
+        % side from Width/2". When supplied, both must be present and have one
+        % value per waypoint. Positive lateralError (car left of the
+        % centerline) is bounded by LeftWidth, negative by RightWidth.
+        LeftWidth = []
+        RightWidth = []
         % Deprecated compatibility field. Surface friction variability is
         % intentionally unsupported; getSurfaceFriction always returns one.
         Mu = 1.0
@@ -24,7 +34,11 @@ classdef WaypointTrack < lts.components.Track
             ip = inputParser;
             ip.FunctionName = 'WaypointTrack';
             addRequired(ip, 'points', @(x) isnumeric(x) && size(x,2) == 2);
-            addParameter(ip, 'Width', 3.0, @(x) isnumeric(x) && isscalar(x) && x > 0);
+            addParameter(ip, 'Width', 3.0, @(x) isnumeric(x) && all(x(:) > 0));
+            addParameter(ip, 'LeftWidth', [], ...
+                @(x) isempty(x) || (isnumeric(x) && all(x(:) > 0)));
+            addParameter(ip, 'RightWidth', [], ...
+                @(x) isempty(x) || (isnumeric(x) && all(x(:) > 0)));
             addParameter(ip, 'Mu', 1.0, @(x) isnumeric(x) && all(x(:) > 0));
             addParameter(ip, 'Closed', true, @(x) islogical(x) || isnumeric(x));
             addParameter(ip, 'Name', 'WaypointTrack', @(x) ischar(x) || isstring(x));
@@ -34,6 +48,11 @@ classdef WaypointTrack < lts.components.Track
 
             obj.Points = lts.components.Track.cleanPoints(double(ip.Results.points), logical(ip.Results.Closed));
             obj.Width = double(ip.Results.Width);
+            if ~isscalar(obj.Width)
+                obj.Width = obj.Width(:);
+            end
+            obj.LeftWidth = double(ip.Results.LeftWidth(:));
+            obj.RightWidth = double(ip.Results.RightWidth(:));
             % Accept legacy Mu input files/callers, but all surfaces use the
             % same unscaled tire model.
             obj.Mu = 1.0;
@@ -41,6 +60,21 @@ classdef WaypointTrack < lts.components.Track
             obj.Name = char(ip.Results.Name);
             obj.SourceImage = char(ip.Results.SourceImage);
             obj.Metadata = ip.Results.Metadata;
+
+            n = size(obj.Points, 1);
+            if ~isscalar(obj.Width) && numel(obj.Width) ~= n
+                error('WaypointTrack:InvalidWidth', ...
+                    'Width must be scalar or have one value per waypoint.');
+            end
+            if xor(isempty(obj.LeftWidth), isempty(obj.RightWidth))
+                error('WaypointTrack:IncompleteSideWidths', ...
+                    'LeftWidth and RightWidth must either both be supplied or both be empty.');
+            end
+            if ~isempty(obj.LeftWidth) && ...
+                    (numel(obj.LeftWidth) ~= n || numel(obj.RightWidth) ~= n)
+                error('WaypointTrack:InvalidSideWidths', ...
+                    'LeftWidth and RightWidth must have one value per waypoint.');
+            end
         end
 
         function points = getTrackPoints(obj)
@@ -52,6 +86,9 @@ classdef WaypointTrack < lts.components.Track
         end
 
         function mu = getSurfaceFriction(obj)
+            % Surface friction variability is intentionally unsupported; every
+            % surface uses the same unscaled tire model. Returned as one value
+            % per waypoint so width/mu consumers all see the same length.
             n = size(obj.Points, 1);
             mu = ones(n, 1);
         end
@@ -65,7 +102,40 @@ classdef WaypointTrack < lts.components.Track
         end
 
         function width = getTrackWidth(obj)
-            width = obj.Width;
+            % GETTRACKWIDTH Representative total track width [m].
+            % Returns the nominal Width when it is scalar. For a per-waypoint
+            % corridor (vector Width, or LeftWidth/RightWidth set), returns the
+            % mean total width so scalar-width callers (feasibility margins,
+            % logging) get one sensible number. Per-waypoint / per-side callers
+            % should use getTrackSideWidths instead.
+            if ~isempty(obj.LeftWidth)
+                width = mean(obj.LeftWidth + obj.RightWidth);
+            elseif ~isscalar(obj.Width)
+                width = mean(obj.Width);
+            else
+                width = obj.Width;
+            end
+        end
+
+        function [leftWidth, rightWidth] = getTrackSideWidths(obj)
+            % GETTRACKSIDEWIDTHS Per-waypoint left/right half-widths [m].
+            % Returns Nx1 vectors. When LeftWidth/RightWidth are populated
+            % (cone-derived corridor), they are returned as-is. Otherwise each
+            % side is Width/2 -- scalar Width broadcast, or per-waypoint Width
+            % halved elementwise.
+            n = size(obj.Points, 1);
+            if ~isempty(obj.LeftWidth)
+                leftWidth = obj.LeftWidth;
+                rightWidth = obj.RightWidth;
+                return;
+            end
+            if isscalar(obj.Width)
+                halfWidth = repmat(obj.Width / 2, n, 1);
+            else
+                halfWidth = obj.Width(:) / 2;
+            end
+            leftWidth = halfWidth;
+            rightWidth = halfWidth;
         end
 
         function s = getStation(obj)
@@ -90,6 +160,10 @@ classdef WaypointTrack < lts.components.Track
             data.name = obj.Name;
             data.points_m = obj.Points;
             data.width_m = obj.Width;
+            if ~isempty(obj.LeftWidth)
+                data.left_width_m = obj.LeftWidth;
+                data.right_width_m = obj.RightWidth;
+            end
             data.mu = 1.0;
             data.closed = obj.Closed;
             data.source_image = obj.SourceImage;
@@ -115,6 +189,16 @@ classdef WaypointTrack < lts.components.Track
             T.heading_rad = obj.getHeading();
             T.curvature_1pm = obj.getCurvature();
             T.mu = obj.getSurfaceFriction();
+            width = obj.getTrackWidth();
+            if isscalar(width)
+                T.width_m = repmat(width, height(T), 1);
+            else
+                T.width_m = width(:);
+            end
+            if ~isempty(obj.LeftWidth)
+                T.left_width_m = obj.LeftWidth;
+                T.right_width_m = obj.RightWidth;
+            end
             writetable(T, fileName);
         end
 
@@ -184,6 +268,12 @@ classdef WaypointTrack < lts.components.Track
             points = double(t.points_m);
             closed = logical(t.closed);
 
+            % Per-side half-widths are optional. When present they carry the
+            % cone-derived asymmetric corridor and must track every reordering
+            % of points_m (including the direction flip below).
+            leftWidth = lts.components.WaypointTrack.optionalField(t, 'left_width_m');
+            rightWidth = lts.components.WaypointTrack.optionalField(t, 'right_width_m');
+
             % Decide what direction we must end up in and whether to flip.
             % Priority: explicit Direction override > stored field >
             % (geometry-detected winding, used only for reporting).
@@ -214,6 +304,18 @@ classdef WaypointTrack < lts.components.Track
                         points = lts.components.WaypointTrack.reversePreserveStart( ...
                             points, closed);
                         appliedFlip = true;
+                        % Reversing travel direction swaps left and right: the
+                        % half-width that bounded the left side now bounds the
+                        % right side. Reverse the arrays to match the new point
+                        % order, then swap sides.
+                        if ~isempty(leftWidth)
+                            revLeft = lts.components.WaypointTrack.reversePreserveStart( ...
+                                leftWidth, closed);
+                            revRight = lts.components.WaypointTrack.reversePreserveStart( ...
+                                rightWidth, closed);
+                            leftWidth = revRight;
+                            rightWidth = revLeft;
+                        end
                         if ~isempty(requested)
                             source = 'the requested Direction';
                         else
@@ -235,8 +337,13 @@ classdef WaypointTrack < lts.components.Track
                     fileName, target);
             end
 
+            widthArgs = {'Width', t.width_m};
+            if ~isempty(leftWidth)
+                widthArgs = [widthArgs, ...
+                    {'LeftWidth', leftWidth, 'RightWidth', rightWidth}]; %#ok<AGROW>
+            end
             obj = lts.components.WaypointTrack(points, ...
-                'Width', t.width_m, ...
+                widthArgs{:}, ...
                 'Closed', t.closed, ...
                 'Name', t.name);
             if isfield(t, 'source_image')
@@ -270,7 +377,24 @@ classdef WaypointTrack < lts.components.Track
                     ['Track CSV "%s" did not yield >=2 finite numeric ' ...
                     '(x, y) rows.'], fileName);
             end
-            obj = lts.components.WaypointTrack(points, varargin{:});
+            widthArgs = {};
+            if ismember('width_m', T.Properties.VariableNames)
+                widthArgs = [widthArgs, {'Width', T.width_m}]; %#ok<AGROW>
+            end
+            if all(ismember({'left_width_m', 'right_width_m'}, ...
+                    T.Properties.VariableNames))
+                widthArgs = [widthArgs, {'LeftWidth', T.left_width_m, ...
+                    'RightWidth', T.right_width_m}]; %#ok<AGROW>
+            end
+            obj = lts.components.WaypointTrack(points, widthArgs{:}, varargin{:});
+        end
+
+        function value = optionalField(s, name)
+            % OPTIONFIELD Return s.(name) if present, else [].
+            value = [];
+            if isfield(s, name)
+                value = s.(name);
+            end
         end
 
         function direction = windingFromPoints(points)

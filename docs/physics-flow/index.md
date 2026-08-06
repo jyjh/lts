@@ -90,7 +90,9 @@ The driver is not part of the vehicle physics. It decides requested inputs.
 
 `lts.driver.DriverInputPlanner.buildOpenLoopProfile` creates a distance-indexed plan:
 
-1. It computes a racing-line offset where enabled.
+1. It computes a minimum-curvature racing line within the per-waypoint
+   track-width corridor (a true geometric optimum that cuts corners and runs
+   out to the track edges wherever that lowers curvature), where enabled.
 2. It estimates lateral speed limits from curvature:
 
    ```text

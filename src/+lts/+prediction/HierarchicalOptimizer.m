@@ -95,8 +95,18 @@ classdef HierarchicalOptimizer
                     'x', points(1, 1), 'y', points(1, 2), ...
                     'yaw', headings(1), 'speed', initialSpeed);
                 [stateLog, lapTime] = simulator.simulate(initial, track);
+                % Feasibility margin = smallest per-step distance to a track
+                % edge over the lap. stateLog.trackLimitMargin is already the
+                % per-side margin (left or right half-width minus the lateral
+                % error, whichever side the car is on), so its min is the
+                % tightest excursion. Fall back to a symmetric estimate from
+                % the representative track width if the channel is absent.
                 margin = NaN;
-                if isfield(stateLog, 'lateralError') && ~isempty(stateLog.lateralError)
+                if isfield(stateLog, 'trackLimitMargin') && ...
+                        ~isempty(stateLog.trackLimitMargin) && ...
+                        any(isfinite(stateLog.trackLimitMargin))
+                    margin = min(stateLog.trackLimitMargin(isfinite(stateLog.trackLimitMargin)));
+                elseif isfield(stateLog, 'lateralError') && ~isempty(stateLog.lateralError)
                     margin = track.getTrackWidth() / 2 - max(abs(stateLog.lateralError));
                 end
                 finiteState = isfinite(lapTime) && isstruct(stateLog) && ...

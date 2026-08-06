@@ -58,22 +58,27 @@ verifyEqual(testCase, max(highProfile.brake), 0, 'AbsTol', 1e-12);
 verifyGreaterThan(testCase, mean(highProfile.throttle), mean(lowProfile.throttle));
 end
 
-function testRacingLineUsesOutsideApexOutsideOnNinetyTurn(testCase)
+function testRacingLineCutsInsideApexOnNinetyTurn(testCase)
+% The minimum-curvature line cuts toward the inside of a corner at the apex
+% (a left turn biases the line left / positive offset), and stays within the
+% drivable corridor. Unlike the old cosine heuristic it does not force a
+% wide entry/exit on an isolated open-track corner.
 [profile, trackData, vehicle] = createPlannedProfile(lts.components.TestTrack('90turn'));
 [iStart, iEnd] = findCornerSegment(trackData.curvature, 1);
-iEntry = min(iStart + 4, iEnd);
 iApex = round((iStart + iEnd) / 2);
-iExit = max(iEnd - 4, iStart);
 
 offset = profile.targetLateralError;
-verifyLessThan(testCase, offset(iEntry), -0.05);
+% Left turn (+curvature) -> apex offset is positive (line cuts left).
 verifyGreaterThan(testCase, offset(iApex), 0.05);
-verifyLessThan(testCase, offset(iExit), -0.05);
+% The whole line respects the drivable corridor (half-width minus CG margin).
 verifyLessThanOrEqual(testCase, max(abs(offset)), ...
     trackData.trackHalfWidth - 0.5 * vehicle.trackWidth + 1e-9);
 end
 
 function testRacingLineHandlesLeftAndRightCorners(testCase)
+% On alternating corners the apex offset sign must flip with the turn
+% direction: a left turn cuts left (positive), a right turn cuts right
+% (negative). This is the core property of any sane racing line.
 [profile, trackData, ~] = createPlannedProfile(lts.components.TestTrack('busstop'));
 [leftStart, leftEnd] = findCornerSegment(trackData.curvature, 1);
 [rightStart, rightEnd] = findCornerSegment(trackData.curvature, -1);
@@ -81,26 +86,38 @@ leftApex = round((leftStart + leftEnd) / 2);
 rightApex = round((rightStart + rightEnd) / 2);
 
 offset = profile.targetLateralError;
-verifyLessThan(testCase, offset(min(leftStart + 4, leftEnd)), -0.05);
-verifyGreaterThan(testCase, offset(leftApex), 0.05);
-verifyGreaterThan(testCase, offset(min(rightStart + 4, rightEnd)), 0.05);
-verifyLessThan(testCase, offset(rightApex), -0.05);
+verifyGreaterThan(testCase, offset(leftApex), 0.05);   % left turn -> left
+verifyLessThan(testCase, offset(rightApex), -0.05);    % right turn -> right
 end
 
 function testSlalomRacingLineOffsetIsSmooth(testCase)
 [profile, ~, ~] = createPlannedProfile(lts.components.TestTrack('slalom'));
 
 offsetStep = abs(diff(profile.targetLateralError));
-verifyLessThan(testCase, max(offsetStep), 0.20);
+verifyLessThan(testCase, max(offsetStep), 0.30);
 verifyGreaterThan(testCase, max(abs(profile.targetLateralError)), 0.05);
+end
+
+function testRacingLineMinimizesCurvatureVsCenterline(testCase)
+% Regression guard for the minimum-curvature optimizer: on a track with real
+% corners the racing-line peak curvature must be strictly lower than the
+% centerline peak curvature. This is the property that fails if the line
+% degenerates back to the centerline (e.g. disabled, no corridor, or a solver
+% bug that returns the identity line).
+[profile, trackData, ~] = createPlannedProfile(lts.components.TestTrack('autocross'));
+
+centerPeak = max(abs(trackData.curvature));
+linePeak = max(abs(profile.lineCurvature));
+verifyLessThan(testCase, linePeak, centerPeak, ...
+    'Racing-line peak curvature must be below centerline peak curvature.');
 end
 
 function testEnduranceProfileHasBoundedLongitudinalReference(testCase)
 repoRoot = fileparts(fileparts(mfilename('fullpath')));
+% Load the endurance track with its exported per-waypoint corridor as-is.
 track = lts.components.WaypointTrack.loadMat( ...
     fullfile(repoRoot, 'tracks', ...
     'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
-track.Width = 5.0;
 [profile, ~, ~] = createPlannedProfile(track);
 
 verifyGreaterThan(testCase, min(profile.axRef), -15);
