@@ -281,9 +281,8 @@ diff = lts.components.Powertrain.ClutchLSDDifferential( ...
 out = diff.solveDrive(400, 30, 60, 0.5, 0.001);
 mx = max(out.TL, out.TR);
 mn = min(out.TL, out.TR);
-if mn > 0
-    verifyLessThanOrEqual(testCase, mx / mn, biasRatio + 1e-9);
-end
+verifyGreaterThan(testCase, mn, 0);
+verifyLessThanOrEqual(testCase, mx / mn, biasRatio + 1e-9);
 verifyEqual(testCase, out.TL + out.TR, 400, 'AbsTol', 1e-9);
 end
 

@@ -21,15 +21,24 @@ end
 function testLargeBrakeTorqueCanIntegrateWheelSpeedThroughZero(testCase)
 tire = createPacejkaTire();
 corner = tire.FL;
-Fz = 1000;
 longSpeed = 20;
-largeBrakeTorque = 2000;
+dt = 0.001;
+inertia = 0.5;
+tire.rollingResistanceCoeff = 0;
+tire.bearingDragCoeff = 0;
+corner.normalForce = 0;
+corner.Fx = 0;
+corner.angularVelocity = longSpeed / corner.wheelRadius;
+omegaBefore = corner.angularVelocity;
+largeBrakeTorque = 2 * inertia * omegaBefore / dt;
+expectedOmega = omegaBefore - largeBrakeTorque / inertia * dt;
 
-corner.angularVelocity = 0;
-tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 0, largeBrakeTorque, 0.001);
+tire.updateWheelDynamics( ...
+    corner, 0, largeBrakeTorque, dt, inertia, longSpeed);
 
+verifyGreaterThan(testCase, omegaBefore, 0);
 verifyLessThan(testCase, corner.angularVelocity, 0);
-verifyLessThanOrEqual(testCase, corner.slipRatio, -0.95);
+verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
 end
 
 function testDrivenWheelProducesPositiveSlipAndForce(testCase)
