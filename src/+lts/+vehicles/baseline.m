@@ -149,12 +149,12 @@ function cfg = baseline()
     %  they are not configured here.
     %  ====================================================================
     cfg.chassis = struct( ...
-        'heaveStiffness', NaN, ...        % derive from suspension springs
-        'heaveDamping', NaN, ...          % derive from suspension dampers
-        'pitchStiffness', NaN, ...        % derive from suspension springs
-        'pitchDamping', NaN, ...          % derive from suspension dampers
+        'heaveStiffness', 160000, ...    % [N/m] fallback when no suspension linked
+        'heaveDamping', 12000, ...       % [N*s/m] fallback
+        'pitchStiffness', 90000, ...     % [N*m/rad] fallback
+        'pitchDamping', 6000, ...        % [N*m*s/rad] fallback
         'rollStiffness', 55000, ...      % [N*m/rad] (legacy whole-car average)
-        'rollDamping', NaN, ...          % derive from suspension dampers
+        'rollDamping', 5000, ...         % [N*m*s/rad] fallback
         'torsionalRigidity', 229183, ... % [N*m/rad] couples front vs rear roll (twist); ~4000 N*m/deg
         'torsionalDamping', 2000);       % [N*m*s/rad] damps the twist rate
 

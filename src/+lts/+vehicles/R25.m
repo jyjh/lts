@@ -125,12 +125,12 @@ function cfg = R25()
     %  CHASSIS (sprung-mass platform heave/pitch/roll)
     %  ====================================================================
     cfg.chassis = struct( ...
-        'heaveStiffness', NaN, ...        % [not in spec sheet] derive from suspension springs
-        'heaveDamping', NaN, ...          % [not in spec sheet] derive from suspension dampers
-        'pitchStiffness', NaN, ...        % [not in spec sheet] derive from suspension springs
-        'pitchDamping', NaN, ...          % [not in spec sheet] derive from suspension dampers
+        'heaveStiffness', 160000, ...    % [not in spec sheet] [N/m] fallback when no suspension linked
+        'heaveDamping', 12000, ...       % [not in spec sheet] [N*s/m] fallback
+        'pitchStiffness', 90000, ...     % [not in spec sheet] [N*m/rad] fallback
+        'pitchDamping', 6000, ...        % [not in spec sheet] fallback
         'rollStiffness', 55000, ...      % [not in spec sheet] fallback only; suspension roll rate derives from springs with ARBs disabled [N*m/rad]
-        'rollDamping', NaN, ...          % [not in spec sheet] derive from suspension dampers
+        'rollDamping', 5000, ...         % [not in spec sheet] [N*m*s/rad] fallback
         'torsionalRigidity', 178307, ... %   [CSV r78: 3112.04 N*m/deg (Physical Test) x 180/pi] [N*m/rad]
         'torsionalDamping', 2000);       % [not in spec sheet] [N*m*s/rad]
 
