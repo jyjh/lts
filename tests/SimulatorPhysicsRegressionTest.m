@@ -474,6 +474,53 @@ verifyFalse(testCase, isempty(simulator.cachedHasChassis));
 verifyEqual(testCase, simulator.cachedHasChassis, false);
 end
 
+function testWheelSolveDoesNotDoubleIntegrateOmegaAtDefaultIterations(testCase)
+% Regression guard: at the default wheelSolveIterations = 2, each solve
+% iteration must be a fresh fixed-point attempt from omega0, NOT an
+% accumulation. Before the snapshot/reset fix, omega advanced by ~2*dt
+% per step (effective wheel inertia halved). Compare a 1-iteration step
+% against a 2-iteration step from identical initial conditions — both
+% must advance omega by approximately one dt, not 2x.
+speed = 10;
+
+[v1, tire1] = directTorqueVehicle();
+v1.powertrain.totalRatio = 3.4;
+v1.powertrain.efficiency = 0.9;
+initializeWheelSpeeds(tire1, speed);
+state1 = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state1.vehicleManager = v1;
+sim1 = lts.simulation.Simulator(v1, [], 0.001);
+sim1.powertrainMode = "motor_torque_command";
+sim1.wheelSolveIterations = 1;
+ref = struct('heading', 0, 'x', 0, 'y', 0, 'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 50);
+omega0 = tire1.RL.angularVelocity;
+sim1.step(state1, input, ref);
+deltaOmega1Iter = tire1.RL.angularVelocity - omega0;
+
+[v2, tire2] = directTorqueVehicle();
+v2.powertrain.totalRatio = 3.4;
+v2.powertrain.efficiency = 0.9;
+initializeWheelSpeeds(tire2, speed);
+state2 = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state2.vehicleManager = v2;
+sim2 = lts.simulation.Simulator(v2, [], 0.001);
+sim2.powertrainMode = "motor_torque_command";
+sim2.wheelSolveIterations = 2;
+omega0b = tire2.RL.angularVelocity;
+sim2.step(state2, input, ref);
+deltaOmega2Iter = tire2.RL.angularVelocity - omega0b;
+
+% Both iteration counts must advance omega by approximately one dt.
+% With the double-integration bug, deltaOmega2Iter ~= 2 * deltaOmega1Iter.
+verifyGreaterThan(testCase, abs(deltaOmega1Iter), 1e-6);
+verifyEqual(testCase, deltaOmega2Iter, deltaOmega1Iter, 'RelTol', 0.15);
+end
+
 function testPlanarDynamicsReportsAxleSpecificLateralAcceleration(testCase)
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = 256;

@@ -211,7 +211,21 @@ classdef Simulator < handle
             wheelLongSpeeds = tireContact.longSpeeds;
 
             nWheelIter = max(1, round(obj.wheelSolveIterations));
+            % Snapshot wheel omega at step start. updateWheelDynamics mutates
+            % cornerState.angularVelocity in-place, so each solve iteration
+            % must integrate from omega0 (a fresh fixed-point attempt), not
+            % accumulate. Without this reset, nWheelIter=2 would advance
+            % omega by ~2*dt per step (effective inertia halved).
+            omegaStepStart = [vm.tire.FL.angularVelocity; vm.tire.FR.angularVelocity; ...
+                              vm.tire.RL.angularVelocity; vm.tire.RR.angularVelocity];
             for iter = 1:nWheelIter
+                % Reset to step-start omega so this iteration integrates
+                % from omega0 with the latest Fx convergence candidate.
+                vm.tire.FL.angularVelocity = omegaStepStart(1);
+                vm.tire.FR.angularVelocity = omegaStepStart(2);
+                vm.tire.RL.angularVelocity = omegaStepStart(3);
+                vm.tire.RR.angularVelocity = omegaStepStart(4);
+
                 vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds(1));
                 vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds(2));
                 vm.tire.updateWheelDynamics(vm.tire.RL, T_drive_RL, T_brake_rear, obj.dt, inertia.RL, wheelLongSpeeds(3));

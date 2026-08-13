@@ -62,10 +62,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % extra coast-down drag.
         bearingDragCoeff = 0
 
-        % Deprecated compatibility flag retained for configs that set it.
-        % Wheel angular velocity is no longer direction-clamped.
-        allowReverseRotation = false
-
         % Cache peak-mu scans by rounded load/camber/speed. The public
         % string-keyed cache is kept readable for tests/debugging; the
         % numeric cache is the hot-loop lookup path.
@@ -254,94 +250,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
         end
         
-        %% ---- Slip angle computation ----
-        
-        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, vehicleManager)
-            % COMPUTESLIPANGLES Compute per-corner tire slip angles [rad]
-            %   slipAngles = computeSlipAngles(vx, vy, yawRate, steerInput, vehicleManager)
-            %
-            %   Uses per-corner wheel kinematics:
-            %     alpha_i = steer_i + toe_i - atan2(vy_i, vx_i)
-            %
-            %   steer_i and toe_i come from the suspension geometry model,
-            %   allowing Ackermann, bump steer, rear steer, and toe curves.
-            %
-            %   Inputs:
-            %     vx              - forward velocity [m/s]
-            %     vy              - lateral velocity at CG [m/s]
-            %     yawRate         - yaw rate [rad/s]
-            %     steerInput      - driver steering input [rad]
-            %     vehicleManager  - vehicle/component manager with geometry
-            %
-            %   Returns struct with:
-            %     slipAngles.FL, .FR, .RL, .RR  [rad]
+        %% ---- Wheel dynamics ----
 
-            slipAngles = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
-            
-            % At very low speed, slip angles are undefined → return zeros
-            if vx < 0.5
-                return;
-            end
-            
-            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, steerInput);
-            [xFL, yFL] = obj.getKinematicPosition(vehicleManager, 'FL', suspensionKinematics.FL);
-            [xFR, yFR] = obj.getKinematicPosition(vehicleManager, 'FR', suspensionKinematics.FR);
-            [xRL, yRL] = obj.getKinematicPosition(vehicleManager, 'RL', suspensionKinematics.RL);
-            [xRR, yRR] = obj.getKinematicPosition(vehicleManager, 'RR', suspensionKinematics.RR);
-
-            slipAngles.FL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
-                xFL, yFL, suspensionKinematics.FL);
-            slipAngles.FR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
-                xFR, yFR, suspensionKinematics.FR);
-            slipAngles.RL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
-                xRL, yRL, suspensionKinematics.RL);
-            slipAngles.RR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
-                xRR, yRR, suspensionKinematics.RR);
-        end
-        
-        %% ---- Slip ratio computation ----
-        
-        function kappa = computeSlipRatio(obj, cornerState, vehicleSpeed)
-            % COMPUTESLIPRATIO Compute longitudinal slip ratio for one corner
-            %   kappa = computeSlipRatio(cornerState, vehicleSpeed)
-            %
-            %   Slip ratio definition:
-            %     kappa = (omega * R - V) / max(|omega * R|, |V|, epsilon)
-            %
-            %   kappa > 0 → driving (wheel faster than vehicle)
-            %   kappa < 0 → braking (wheel slower than vehicle)
-            %
-            %   Inputs:
-            %     cornerState  - TireState with angularVelocity and wheelRadius
-            %     vehicleSpeed - Vehicle forward speed [m/s]
-            %
-            %   Returns:
-            %     kappa - Slip ratio [-1, 1]
-            
-            omega = cornerState.angularVelocity;
-            R     = cornerState.wheelRadius;
-            V     = max(vehicleSpeed, 0);   % no reverse
-            
-            wheelSpeed = omega * R;
-            denom = max(abs(wheelSpeed), abs(V));
-
-            slipSpeedFloor = 1.0;
-            rawKappa = (wheelSpeed - V) / max(denom, slipSpeedFloor);
-            if denom < slipSpeedFloor
-                previousKappa = cornerState.slipRatio;
-                if ~isfinite(previousKappa)
-                    previousKappa = rawKappa;
-                end
-                blend = denom / slipSpeedFloor;
-                kappa = (1 - blend) * previousKappa + blend * rawKappa;
-            else
-                kappa = rawKappa;
-            end
-            
-            % Clamp to [-1, 1]
-            kappa = lts.util.clamp(kappa, -1, 1);
-        end
-        
         function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia, longitudinalSpeed)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
             %   updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
@@ -410,68 +320,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             cornerState.angularVelocity = omega_new;
         end
 
-        function solveWheelContact(obj, cornerState, normalLoad, slipAngle, ...
-                camberAngle, mu, longitudinalSpeed, driveTorque, brakeTorque, dt)
-            % SOLVEWHEELCONTACT Semi-implicitly couple wheel speed and tire Fx.
-            %   I*domega/dt = T_drive - T_brake - Fx(kappa(omega))*R
-
-            if nargin < 10 || isempty(dt)
-                dt = 0.001;
-            end
-
-            omegaOld = cornerState.angularVelocity;
-            omegaNew = omegaOld;
-            R = max(cornerState.wheelRadius, eps);
-            I = max(obj.wheelInertia, eps);
-            dt = max(dt, 0);
-            slipAngle = lts.util.clamp(slipAngle, -0.3, 0.3);
-
-            finalFx = 0;
-            finalFy = 0;
-            finalMx = 0;
-            finalMy = 0;
-            finalMz = 0;
-            finalPeakMu = 0;
-            finalKappa = cornerState.slipRatio;
-
-            for iter = 1:5 %#ok<NASGU>
-                finalKappa = obj.computeSlipRatioFromOmega( ...
-                    cornerState, omegaNew, longitudinalSpeed);
-                [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
-                    obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
-                    camberAngle, mu, longitudinalSpeed, false);
-
-                brakeSign = obj.computeBrakeTorqueSign( ...
-                    omegaNew, longitudinalSpeed, driveTorque);
-                netTorque = driveTorque - brakeSign * brakeTorque - finalFx * R;
-                omegaCandidate = omegaOld + (netTorque / I) * dt;
-
-                if abs(omegaCandidate - omegaNew) < 1e-4
-                    omegaNew = omegaCandidate;
-                    break;
-                end
-                omegaNew = omegaCandidate;
-            end
-
-            finalKappa = obj.computeSlipRatioFromOmega( ...
-                cornerState, omegaNew, longitudinalSpeed);
-            [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
-                obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
-                camberAngle, mu, longitudinalSpeed, true);
-
-            cornerState.normalForce = normalLoad;
-            cornerState.slipAngle = slipAngle;
-            cornerState.slipRatio = finalKappa;
-            cornerState.camberAngle = camberAngle;
-            cornerState.angularVelocity = omegaNew;
-            cornerState.Fx = finalFx;
-            cornerState.Fy = finalFy;
-            cornerState.Mx = finalMx;
-            cornerState.My = finalMy;
-            cornerState.Mz = finalMz;
-            cornerState.peakMu = finalPeakMu;
-        end
-        
         %% ---- All-corners batch update ----
         
         function updateAllCorners(obj, Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
@@ -562,7 +410,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 decay = exp(-V_eff * dt / sigma);
                 alpha = ssAlpha - (ssAlpha - previousAlpha) .* decay;
                 kappa = ssKappa - (ssKappa - previousKappa) .* decay;
-                alpha = obj.evaluationSlipAngle(alpha);
                 kappa = lts.util.clamp(kappa, -1, 1);
             end
             for i = 1:4
@@ -629,44 +476,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 states{i}.peakMu = 0;
             end
         end
-        
-        function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
-            % UPDATEALLFROMSTATE Compute slip angles/ratios and update all corners
-            %   updateAllFromState(state, vehicleManager, cornerLoads)
-            %
-            %   Computes per-corner slip angles from vehicle kinematics and
-            %   per-corner slip ratios from wheel rotational state, then
-            %   delegates to updateAllCorners().
-            %
-            %   Inputs:
-            %     state          - lts.simulation.VehicleState with speed, vy, yawRate, steer
-            %     vehicleManager - lts.vehicle.VehicleManager for geometry (wheelbase, weight dist)
-            %     cornerLoads    - struct with .FL, .FR, .RL, .RR normal forces [N]
-            if nargin < 5 || isempty(mu)
-                mu = obj.surfaceMuReference;
-            end
-
-            % Compute per-corner slip angles and suspension geometry
-            slipAngles = obj.computeSlipAngles( ...
-                state.speed, state.vy, state.yawRate, state.steer, ...
-                vehicleManager);
-            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, state.steer);
-
-            % Compute per-corner slip ratios from wheel rotational state
-            kappa_FL = obj.computeSlipRatio(obj.FL, state.speed);
-            kappa_FR = obj.computeSlipRatio(obj.FR, state.speed);
-            kappa_RL = obj.computeSlipRatio(obj.RL, state.speed);
-            kappa_RR = obj.computeSlipRatio(obj.RR, state.speed);
-
-            obj.updateAllCorners( ...
-                cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
-                slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
-                kappa_FL, kappa_FR, kappa_RL, kappa_RR, ...
-                suspensionKinematics.FL.camberAngle, ...
-                suspensionKinematics.FR.camberAngle, ...
-                suspensionKinematics.RL.camberAngle, ...
-                suspensionKinematics.RR.camberAngle, 0, [], mu, true);
-        end
     end
     
     methods (Access = private)
@@ -711,85 +520,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             alpha = ssAlpha - (ssAlpha - cornerState.slipAngle) * decay;
             kappa = ssKappa - (ssKappa - cornerState.slipRatio) * decay;
 
-            alpha = obj.evaluationSlipAngle(alpha);
-            kappa = lts.util.clamp(kappa, -1, 1);
-        end
-
-        function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)
-            if ~isempty(vehicleManager.suspension) && ...
-                    ismethod(vehicleManager.suspension, 'getCornerKinematics')
-                suspensionKinematics = vehicleManager.suspension.getCornerKinematics();
-                return;
-            end
-
-            suspensionKinematics = struct();
-            suspensionKinematics.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
-            suspensionKinematics.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
-            suspensionKinematics.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
-            suspensionKinematics.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
-        end
-
-        function [x, y] = getKinematicPosition(obj, vehicleManager, corner, kin)
-            if isfield(kin, 'xPosition') && isfield(kin, 'yPosition')
-                x = kin.xPosition;
-                y = kin.yPosition;
-                return;
-            end
-
-            [x, y] = obj.getWheelPosition(vehicleManager, corner);
-        end
-
-        function [x, y] = getWheelPosition(~, vehicleManager, corner)
-            frontArm = vehicleManager.wheelbase * (1 - vehicleManager.staticFrontWeight);
-            rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
-            halfTrack = vehicleManager.trackWidth / 2;
-
-            switch upper(corner)
-                case 'FL'
-                    x = frontArm;
-                    y = halfTrack;
-                case 'FR'
-                    x = frontArm;
-                    y = -halfTrack;
-                case 'RL'
-                    x = -rearArm;
-                    y = halfTrack;
-                otherwise
-                    x = -rearArm;
-                    y = -halfTrack;
-            end
-        end
-
-        function alpha = computeCornerSlipAngle(~, vx, vy, yawRate, x, y, kin)
-            % Contact patch velocity = CG velocity + yaw-rate cross position.
-            % Rotate that velocity into the steered/toed wheel frame; slip
-            % angle is positive when the tire must generate force to the left.
-            vxCorner = vx - yawRate * y;
-            vyCorner = vy + yawRate * x;
-            wheelHeading = kin.steerAngle + kin.toeAngle;
-            longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
-            latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
-            alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
-        end
-
-        function kappa = computeSlipRatioFromOmega(~, cornerState, omega, longitudinalSpeed)
-            % Same slip convention as lts.simulation.Simulator.computeLocalSlipRatio, used by
-            % the older single-corner contact solver. The low-speed blend
-            % keeps launch/brake-to-zero behavior continuous.
-            wheelSpeed = omega * cornerState.wheelRadius;
-            denom = max(abs(wheelSpeed), abs(longitudinalSpeed));
-            slipSpeedFloor = 1.0;
-            rawKappa = (wheelSpeed - longitudinalSpeed) / max(denom, slipSpeedFloor);
-            if denom < slipSpeedFloor
-                previousKappa = cornerState.slipRatio;
-                if ~isfinite(previousKappa)
-                    previousKappa = rawKappa;
-                end
-                blend = denom / slipSpeedFloor;
-                kappa = (1 - blend) * previousKappa + blend * rawKappa;
-            else
-                kappa = rawKappa;
-            end
             kappa = lts.util.clamp(kappa, -1, 1);
         end
 
@@ -803,47 +533,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             else
                 brakeSign = 0;
             end
-        end
-
-        function [Fx, Fy, Mx, My, Mz, peakMu] = evaluateForces(obj, ...
-                Fz, alpha, kappa, gamma, surfaceMu, longitudinalSpeed, computePeakMu)
-            % EVALUATEFORCES Thin wrapper around MFeval's combined-slip mode.
-            % Inputs follow MFeval's [Fz, kappa, alpha, gamma, phit, Vx, P]
-            % order. The raw .tir file is treated as the dry-reference
-            % surface; surfaceMu scales forces linearly for alternate surfaces.
-            if Fz <= 0
-                Fx = 0;
-                Fy = 0;
-                Mx = 0;
-                My = 0;
-                Mz = 0;
-                peakMu = 0;
-                return;
-            end
-            if nargin < 8 || isempty(computePeakMu)
-                computePeakMu = true;
-            end
-
-            alpha = lts.util.clamp(alpha, -0.3, 0.3);
-            kappa = lts.util.clamp(kappa, -1, 1);
-            P = obj.tireConstants.nomPressure;
-            params = obj.tireConstants.params;
-            Vx = obj.computeMFevalSpeed(longitudinalSpeed);
-            inputsMF = [Fz, kappa, alpha, gamma, 0, Vx, P];
-            outputs = mfeval(params, inputsMF, 111);
-
-            surfaceScale = obj.computeSurfaceScale(surfaceMu);
-            if computePeakMu
-                rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longitudinalSpeed);
-                peakMu = rawPeakMu * surfaceScale;
-            else
-                peakMu = 0;
-            end
-            Fx = outputs(:,1) * surfaceScale;
-            Fy = -outputs(:,2) * surfaceScale;
-            Mx = outputs(:,4);
-            My = outputs(:,5);
-            Mz = outputs(:,6) * surfaceScale;
         end
 
         function [surfaceMu, dt, longSpeed, computePeakMu, relaxationMode] = parseCornerOptionalArgs(obj, varargin)

@@ -13,18 +13,24 @@ classdef AntiRollBar
     %
     % Wheel-rate conversion (standard ARB-at-the-wheel formula):
     %   Kw_bar = stiffness * motionRatio^2 / leverArm^2
+    % Dimensional check with stiffness as a torsional rate [N*m/rad]:
+    %   (N*m/rad) * (-)^2 / (m^2) = N/(m*rad) = N/m at the wheel
+    % (radians are dimensionless). A bar-end linear rate [N/m] would NOT
+    % produce a dimensionally consistent wheel rate through this formula.
     %
     % Set enabled = false (or stiffness = 0) to disable the bar; Kw_bar then
     % returns 0 and the axle's roll stiffness is just its wheel springs.
 
     properties
-        % Bar stiffness at its end, referenced to the drop-link attachment
-        % [N/m]. For a torsional bar this is the linear-equivalent rate at
-        % the lever end (T_bar / (leverArm * angle) reduced to a force rate).
+        % Torsional stiffness of the bar about its axis [N*m/rad]. This is
+        % the torque per radian of bar twist (T_bar = stiffness * theta),
+        % not a linear end rate. The wheel-rate conversion divides by
+        % leverArm^2 to resolve it to the contact patch.
         stiffness = 0
 
         % Installation motion ratio between wheel travel and the ARB end
-        % travel [dimensionless]. Squared in the wheel-rate conversion.
+        % travel [dimensionless] (bar_end_travel / wheel_travel, like the
+        % spring motion ratio). Squared in the wheel-rate conversion.
         motionRatio = 1.0
 
         % Lever arm from the bar axis / pivot to the drop-link attachment

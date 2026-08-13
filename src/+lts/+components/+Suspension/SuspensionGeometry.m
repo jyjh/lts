@@ -171,56 +171,9 @@ classdef SuspensionGeometry
             kin.rollCenterHeight = rollCenterHeight;
             kin.rollCenterLateral = rollCenterLateral;
         end
-
-        function steer = computeSteeringAngles(obj, steerInput)
-            steer.FL = obj.computeWheelSteer('FL', steerInput);
-            steer.FR = obj.computeWheelSteer('FR', steerInput);
-            steer.RL = obj.computeWheelSteer('RL', steerInput);
-            steer.RR = obj.computeWheelSteer('RR', steerInput);
-        end
     end
 
     methods (Access = private)
-        function wheelSteer = computeWheelSteer(obj, corner, steerInput)
-            % COMPUTEWHEELSTEER Convert driver road-wheel command to corner angle.
-            % Front steering blends parallel steer with ideal Ackermann:
-            % the inside wheel steers more than the outside wheel so both
-            % wheels point toward a common low-speed turn center.
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            if strcmp(axle, 'rear')
-                wheelSteer = obj.rearSteerRatio * steerInput;
-                wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
-                return;
-            end
-
-            meanSteer = steerInput / max(obj.steeringRatio, eps);
-            meanSteer = lts.util.clamp(meanSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
-            if abs(meanSteer) < eps || obj.ackermann <= 0
-                wheelSteer = meanSteer;
-                return;
-            end
-
-            turnSign = sign(meanSteer);
-            absSteer = abs(meanSteer);
-            turnRadius = obj.wheelbase / max(tan(absSteer), eps);
-            halfTrack = obj.trackWidth / 2;
-
-            idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
-            idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = lts.util.saturate(obj.ackermann);
-
-            isLeftSide = strcmp(upper(corner), 'FL');
-            isInside = (turnSign > 0 && isLeftSide) || (turnSign < 0 && ~isLeftSide);
-            if isInside
-                target = idealInner;
-            else
-                target = idealOuter;
-            end
-
-            wheelSteer = turnSign * (absSteer + ackermannBlend * (target - absSteer));
-            wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
-        end
-
         function wheelSteer = computeWheelSteerFast(obj, isFront, isLeft, steerInput)
             if ~isFront
                 wheelSteer = obj.rearSteerRatio * steerInput;
@@ -258,55 +211,6 @@ classdef SuspensionGeometry
                 -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
-        function [x, y] = computeWheelPosition(obj, corner)
-            frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
-            rearArm = obj.wheelbase * obj.staticFrontWeight;
-            halfTrack = obj.trackWidth / 2;
-
-            switch upper(corner)
-                case 'FL'
-                    x = frontArm;
-                    y = halfTrack;
-                case 'FR'
-                    x = frontArm;
-                    y = -halfTrack;
-                case 'RL'
-                    x = -rearArm;
-                    y = halfTrack;
-                otherwise
-                    x = -rearArm;
-                    y = -halfTrack;
-            end
-        end
-
-        function axis = computeSteeringAxis(obj, corner)
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
-            caster = obj.getAxleValue(axle, 'CasterAngle');
-            kpi = obj.getAxleValue(axle, 'KingpinInclination');
-
-            axis = [-sin(caster), -side * sin(kpi), ...
-                cos(caster) * cos(kpi)];
-            normAxis = norm(axis);
-            if normAxis <= eps
-                axis = [0, 0, 1];
-            else
-                axis = axis ./ normAxis;
-            end
-        end
-
-        function camber = applySteeringAxisCamber(~, baseCamber, wheelHeading, axis, side)
-            % Steering about a tilted axis changes camber even if the static
-            % camber curve is flat. Rotate the wheel-top vector about the
-            % caster/KPI axis, then measure its outward lean in the wheel frame.
-            topVector = [0, side * sin(baseCamber), cos(baseCamber)];
-            topVector = lts.components.Suspension.SuspensionGeometry.rotateVector( ...
-                topVector, axis, wheelHeading);
-
-            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
-            camber = atan2(dot(topVector, outward), dot(topVector, [0, 0, 1]));
-        end
-
         function camber = applySteeringAxisCamberFast(~, baseCamber, wheelHeading, axis, side)
             topVector = [0, side * sin(baseCamber), cos(baseCamber)];
             c = cos(wheelHeading);
@@ -326,24 +230,6 @@ classdef SuspensionGeometry
                 topVector(3));
         end
 
-        function [x, y, kingpinX, kingpinY] = computeContactPatchPosition( ...
-                obj, corner, wheelHeading, baseX, baseY)
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
-            trail = obj.getAxleValue(axle, 'MechanicalTrail');
-            scrub = obj.getEffectiveScrubRadius(axle);
-
-            offset0 = [-trail, side * scrub];
-            forward = [cos(wheelHeading), sin(wheelHeading)];
-            left = [-sin(wheelHeading), cos(wheelHeading)];
-            offset = -trail * forward + side * scrub * left;
-
-            kingpinX = baseX - offset0(1);
-            kingpinY = baseY - offset0(2);
-            x = kingpinX + offset(1);
-            y = kingpinY + offset(2);
-        end
-
         function [x, y, kingpinX, kingpinY] = computeContactPatchPositionFast( ...
                 ~, trail, scrub, side, wheelHeading, baseX, baseY)
             offset0 = [-trail, side * scrub];
@@ -355,21 +241,6 @@ classdef SuspensionGeometry
             kingpinY = baseY - offset0(2);
             x = kingpinX + offset(1);
             y = kingpinY + offset(2);
-        end
-
-        function value = getEffectiveScrubRadius(obj, axle)
-            scrub = obj.getAxleValue(axle, 'ScrubRadius');
-            offset = obj.getAxleValue(axle, 'KingpinOffset');
-            if abs(scrub) > eps || abs(offset) <= eps
-                value = scrub;
-            else
-                value = offset;
-            end
-        end
-
-        function value = getAxleValue(obj, axle, suffix)
-            fieldName = [axle suffix];
-            value = obj.(fieldName);
         end
     end
 
@@ -429,12 +300,6 @@ classdef SuspensionGeometry
             obj.rearSteerRatio     = s.rearSteerRatio;
         end
 
-        function rotated = rotateVector(vector, axis, angle)
-            axis = axis ./ max(norm(axis), eps);
-            rotated = vector * cos(angle) + cross(axis, vector) * sin(angle) + ...
-                axis * dot(axis, vector) * (1 - cos(angle));
-        end
-
         function value = readConfigField(s, names, defaultValue)
             value = defaultValue;
             for i = 1:numel(names)
@@ -482,22 +347,6 @@ classdef SuspensionGeometry
             end
             frac = (query - grid(idx0)) / dx;
             value = curve(idx0) + frac * (curve(idx0 + 1) - curve(idx0));
-        end
-
-        function axle = getAxle(corner)
-            if startsWith(upper(corner), 'F')
-                axle = 'front';
-            else
-                axle = 'rear';
-            end
-        end
-
-        function side = getSide(corner)
-            if endsWith(upper(corner), 'L')
-                side = 1;
-            else
-                side = -1;
-            end
         end
 
     end

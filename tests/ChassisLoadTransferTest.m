@@ -390,6 +390,77 @@ verifyEqual(testCase, kin.RL.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
 verifyEqual(testCase, kin.RR.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
 end
 
+function testDerivedHeaveStiffnessMatchesSuspensionSprings(testCase)
+% When heaveStiffness is NaN (derive), the chassis should settle to the
+% same heave equilibrium as if the derived value were set explicitly:
+% at steady state with constant downforce, heave_eq = Fz / Kheave.
+config = lts.vehicles.baseline();
+[~, suspension, chassis] = createVehicleWithChassis(config);
+zeroAero = zeroAeroForces();
+dt = 0.001;
+
+% Symmetric downforce step (equal front/rear to minimize pitch coupling).
+FzStep = 2000;
+aeroStep = struct('Fz_front', FzStep / 2, 'Fz_rear', FzStep / 2, ...
+    'F_drag', 0, 'dragHeight', 0);
+
+for idx = 1:5000
+    chassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
+end
+
+% Compute expected Kheave from the suspension springs + motion ratios.
+susp = suspension;
+mrF = susp.frontLeft.motionRatio;
+if susp.frontLeft.state.motionRatioEffective > 0
+    mrF = susp.frontLeft.state.motionRatioEffective;
+end
+mrR = susp.rearLeft.motionRatio;
+if susp.rearLeft.state.motionRatioEffective > 0
+    mrR = susp.rearLeft.state.motionRatioEffective;
+end
+expectedKheave = 2 * (susp.frontLeft.springRate * mrF^2 + ...
+                      susp.rearLeft.springRate * mrR^2);
+
+expectedHeave = FzStep / expectedKheave;
+verifyGreaterThan(testCase, expectedKheave, 0);
+verifyTrue(testCase, isfinite(chassis.state.heave));
+verifyEqual(testCase, chassis.state.heave, expectedHeave, 'RelTol', 0.02);
+end
+
+function testExplicitHeaveStiffnessOverrideIsRespected(testCase)
+% A finite heaveStiffness override must be used instead of the derived
+% value. A very stiff override should produce less heave than the derived.
+configDerived = lts.vehicles.baseline();
+configStiff = lts.vehicles.baseline();
+configStiff.chassis.heaveStiffness = 1e7;
+
+[~, ~, derivedChassis] = createVehicleWithChassis(configDerived);
+[~, ~, stiffChassis] = createVehicleWithChassis(configStiff);
+
+FzStep = 2000;
+aeroStep = struct('Fz_front', FzStep / 2, 'Fz_rear', FzStep / 2, ...
+    'F_drag', 0, 'dragHeight', 0);
+dt = 0.001;
+
+for idx = 1:5000
+    derivedChassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
+    stiffChassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
+end
+
+verifyLessThan(testCase, abs(stiffChassis.state.heave), ...
+    abs(derivedChassis.state.heave));
+end
+
+function testInfTorsionalRigidityIsRejected(testCase)
+config = lts.vehicles.baseline();
+config.chassis.torsionalRigidity = Inf;
+[~, ~, chassis] = createVehicleWithChassis(config);
+
+verifyError(testCase, @() chassis.updateFromAccelerations( ...
+    0, 0, zeroAeroForces(), 0.001, 0), ...
+    'lts_components_Chassis_SimpleChassis:InfTorsionalRigidity');
+end
+
 function [vehicle, suspension, chassis] = createVehicleWithChassis(config)
 % Minimal chassis+suspension fixture for unit tests. Sources all tuning
 % values from the baseline car config (single source of truth) rather than

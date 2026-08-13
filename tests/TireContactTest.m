@@ -11,11 +11,18 @@ dt = 0.001;
 
 corner.angularVelocity = 0;
 for idx = 1:1000
-    tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 0, 0, dt);
+    wheelSpeed = corner.angularVelocity * corner.wheelRadius;
+    denom = max(abs(wheelSpeed), abs(longSpeed));
+    kappa = (wheelSpeed - longSpeed) / max(denom, 1.0);
+    kappa = max(-1, min(1, kappa));
+    tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
+    tire.updateWheelDynamics(corner, 0, 0, dt, 0.5, longSpeed);
 end
 
-verifyLessThan(testCase, abs(corner.slipRatio), 0.05);
-verifyLessThan(testCase, abs(corner.angularVelocity * corner.wheelRadius - longSpeed), 1.0);
+finalWheelSpeed = corner.angularVelocity * corner.wheelRadius;
+finalKappa = (finalWheelSpeed - longSpeed) / max(abs(finalWheelSpeed), abs(longSpeed), 1.0);
+verifyLessThan(testCase, abs(finalKappa), 0.05);
+verifyLessThan(testCase, abs(finalWheelSpeed - longSpeed), 1.0);
 end
 
 function testLargeBrakeTorqueCanIntegrateWheelSpeedThroughZero(testCase)
@@ -26,10 +33,14 @@ longSpeed = 20;
 largeBrakeTorque = 2000;
 
 corner.angularVelocity = 0;
-tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 0, largeBrakeTorque, 0.001);
+% Prime tire force at full brake slip (wheel at standstill, road moving).
+kappa = -1;
+tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
+% One brake step from standstill — the combined brake + slip force
+% drives omega negative.
+tire.updateWheelDynamics(corner, 0, largeBrakeTorque, 0.001, 0.5, longSpeed);
 
 verifyLessThan(testCase, corner.angularVelocity, 0);
-verifyLessThanOrEqual(testCase, corner.slipRatio, -0.95);
 end
 
 function testDrivenWheelProducesPositiveSlipAndForce(testCase)
@@ -39,9 +50,17 @@ Fz = 1000;
 longSpeed = 12;
 
 corner.angularVelocity = longSpeed / corner.wheelRadius;
-tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 250, 0, 0.001);
+% Prime tire force at zero slip (free-rolling).
+tire.updateCorner(corner, Fz, 0, 0, 0, 1.2, 0, longSpeed, true, 'steady');
+% Apply drive torque — wheel speeds up, producing positive slip.
+tire.updateWheelDynamics(corner, 250, 0, 0.001, 0.5, longSpeed);
 
-verifyGreaterThan(testCase, corner.slipRatio, 0);
+wheelSpeed = corner.angularVelocity * corner.wheelRadius;
+kappa = (wheelSpeed - longSpeed) / max(abs(wheelSpeed), abs(longSpeed), 1.0);
+verifyGreaterThan(testCase, kappa, 0);
+
+% Re-evaluate force at the new slip.
+tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
 verifyGreaterThan(testCase, corner.Fx, 0);
 end
 
@@ -105,6 +124,32 @@ tire.updateCorner(corner, 1000, 0, 0.8, 0, 1.2, 0, 20, true, 'hold');
 verifyEqual(testCase, corner.slipAngle, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, corner.slipRatio, 0, 'AbsTol', 1e-12);
 verifyLessThan(testCase, abs(corner.Fx), 100);
+end
+
+function testRelaxationCommitNotScaledByLateralStiffnessScale(testCase)
+% The committed lagged slip state must stay in physical radians.
+% lateralStiffnessScale only affects the MFeval evaluation slip, not the
+% stored relaxation state. This guards the invariant documented in the
+% PacejkaTire property comments.
+tire = createPacejkaTire();
+tire.relaxationLength = 0.30;
+tire.lateralStiffnessScale = 1.5;
+corner = tire.FL;
+corner.slipAngle = 0;
+corner.slipRatio = 0;
+
+ssAlpha = 0.10;
+dt = 0.001;
+longSpeed = 20;
+decay = exp(-longSpeed * dt / tire.relaxationLength);
+expectedSlipAngle = ssAlpha * (1 - decay);
+
+tire.updateCorner(corner, 1000, ssAlpha, 0, 0, 1.2, dt, longSpeed, true, 'advance');
+
+% Committed state must be the unscaled relaxed value.
+verifyEqual(testCase, corner.slipAngle, expectedSlipAngle, 'AbsTol', 1e-12);
+verifyGreaterThan(testCase, expectedSlipAngle * tire.lateralStiffnessScale, ...
+    expectedSlipAngle);
 end
 
 function testZeroSpeedWheelBrakingFollowsTorqueBalance(testCase)

@@ -169,17 +169,21 @@ classdef VehicleConfig
             %   units. Pitch/roll inertia are derived from mass + geometry in
             %   SimpleChassis, so they are not configured here.
             %     heave/pitch/roll Stiffness [N/m] / [N*m/rad]
+            %       NaN = derive from the linked suspension's spring rates.
             %     heave/pitch/roll Damping   [N*s/m] / [N*m*s/rad]
+            %       NaN = derive from the linked suspension's damper rates.
             %     torsionalRigidity [N*m/rad] couples front vs rear roll DOFs
-            %       (twist angle); Inf = perfectly rigid tub. ~4000 N*m/deg.
+            %       (twist angle); a large finite value makes the tub nearly
+            %       rigid torsionally. Inf is rejected (numerically unstable).
+            %       ~4000 N*m/deg ~ 229000 N*m/rad.
             %     torsionalDamping [N*m*s/rad] damps the twist rate.
             obj.chassis = struct( ...
-                'heaveStiffness', 160000, ...
-                'heaveDamping', 12000, ...
-                'pitchStiffness', 90000, ...
-                'pitchDamping', 6000, ...
-                'rollStiffness', 55000, ...
-                'rollDamping', 5000, ...
+                'heaveStiffness', NaN, ...      % NaN = derive from suspension springs
+                'heaveDamping', NaN, ...        % NaN = derive from suspension dampers
+                'pitchStiffness', NaN, ...      % NaN = derive from suspension springs
+                'pitchDamping', NaN, ...        % NaN = derive from suspension dampers
+                'rollStiffness', 55000, ...     % legacy fallback when no axle stiffness
+                'rollDamping', NaN, ...         % NaN = derive from suspension dampers
                 'torsionalRigidity', 229183, ...
                 'torsionalDamping', 2000);
 

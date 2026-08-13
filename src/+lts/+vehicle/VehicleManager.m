@@ -152,12 +152,6 @@ classdef VehicleManager
             if isfield(config.tire, 'surfaceMuReference')
                 tire.surfaceMuReference = config.tire.surfaceMuReference;
             end
-            % Let wheels spin down through zero when the powertrain applies
-            % coastdown/regen drag, so the drag is not masked by the one-way
-            % clutch. Forward-only sims keep the clamp (stable default).
-            if powertrain.reverseCapable
-                tire.allowReverseRotation = true;
-            end
             if isfield(config.tire, 'rollingResistanceCoeff')
                 tire.rollingResistanceCoeff = config.tire.rollingResistanceCoeff;
             end
