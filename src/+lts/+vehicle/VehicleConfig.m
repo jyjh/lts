@@ -76,12 +76,18 @@ classdef VehicleConfig
             % --- Suspension ---
             %   front/rear (shared within an axle):
             %     springRate   [N/m] heave spring (wheel rate = springRate*MR^2)
-            %     dampingCoeff [N*s/m] compression (bump) damping
-            %     reboundCoeff [N*s/m] rebound (droop) damping
+            %     dampingCoeff [N*s/m] low-speed compression (bump) slope
+            %     reboundCoeff [N*s/m] low-speed rebound (droop) slope
             %   motionRatio     [-] installation MR (wheel<->spring); wheel rate scales by MR^2
             %   bumpStopLength  [m] free travel before the bump stop engages
             %   bumpStopRate    [N/m] bump-stop stiffness
             %   tireSpringRate  [N/m] vertical tire stiffness (quarter-car)
+            %   dampingKneeSpeed      [m/s] wheel-domain shaft speed at which the
+            %     damper slope breaks from low-speed to high-speed. Inf => linear.
+            %   dampingHighSpeedRatio [-] high-speed damper slope / low-speed slope.
+            %     1.0 => linear damper. Typical racing dampers ~0.2-0.3; the
+            %     default 0.3 brings an over-damped low-speed setup (~300-400%
+            %     critical) close to critically damped at high shaft speed.
             %   geometry: suspension/steering kinematics (per-axle curves +
             %             steering model), see the geometry block below
             %   frontArb/rearArb: torsional stiffness [N*m/rad], motionRatio,
@@ -95,6 +101,8 @@ classdef VehicleConfig
                 'bumpStopLength', 0.025, ...
                 'bumpStopRate', 200000, ...
                 'tireSpringRate', 200000, ...
+                'dampingKneeSpeed', 0.05, ...
+                'dampingHighSpeedRatio', 0.3, ...
                 'frontArb', struct('stiffness', 1800, 'motionRatio', 0.95, 'leverArm', 0.26, 'enabled', true), ...
                 'rearArb',  struct('stiffness', 1100, 'motionRatio', 0.95, 'leverArm', 0.26, 'enabled', true), ...
                 'rollStiffnessOverride', NaN, ...

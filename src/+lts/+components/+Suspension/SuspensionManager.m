@@ -45,6 +45,11 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         frontAntiRollBarWheelRate = 0
         rearAntiRollBarWheelRate = 0
 
+        % Shared digressive-damper parameters forwarded to every corner's
+        % SimpleSuspension. Defaults reproduce the legacy linear damper.
+        dampingKneeSpeed = Inf       % wheel-domain low->high speed knee [m/s]
+        dampingHighSpeedRatio = 1.0  % high-speed slope / low-speed slope [-]
+
         % Optional override for the front elastic load-transfer fraction
         % [0-1]. When set (non-NaN), it is used directly and the spring+ARB
         % derivation is skipped — this reproduces the legacy fixed 0.55
@@ -79,7 +84,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
                 tireSpringRate, unsprungMass, geometry, ...
-                frontAntiRollBarRate, rearAntiRollBarRate)
+                frontAntiRollBarRate, rearAntiRollBarRate, ...
+                dampingKneeSpeed, dampingHighSpeedRatio)
             % SUSPENSIONMANAGER Construct with front/rear suspension parameters
             %   SuspensionManager(vehicleManager, ...
             %       frontRollStiffDist, ...
@@ -91,11 +97,11 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   vehicleManager      - lts.vehicle.VehicleManager handle (geometry pulled by SimpleSuspension)
             %   frontRollStiffDist  - Front roll stiffness distribution [0-1]
             %   frontSpringRate     - Front heave spring rate [N/m]
-            %   frontDampingCoeff   - Front compression damping [N·s/m]
-            %   frontReboundCoeff   - Front rebound damping [N·s/m]
+            %   frontDampingCoeff   - Front low-speed compression slope [N·s/m]
+            %   frontReboundCoeff   - Front low-speed rebound slope [N·s/m]
             %   rearSpringRate      - Rear heave spring rate [N/m]
-            %   rearDampingCoeff    - Rear compression damping [N·s/m]
-            %   rearReboundCoeff    - Rear rebound damping [N·s/m]
+            %   rearDampingCoeff    - Rear low-speed compression slope [N·s/m]
+            %   rearReboundCoeff    - Rear low-speed rebound slope [N·s/m]
             %   motionRatio         - Installation motion ratio (shared)
             %   bumpStopLength      - Bump stop travel [m] (shared)
             %   bumpStopRate        - Bump stop stiffness [N/m] (shared)
@@ -104,6 +110,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   geometry            - SuspensionGeometry object (optional)
             %   frontAntiRollBarRate - Front ARB coupling rate B [N/m] (optional)
             %   rearAntiRollBarRate  - Rear ARB coupling rate B [N/m] (optional)
+            %   dampingKneeSpeed      - Shared digressive-damper knee [m/s] (optional, Inf=linear)
+            %   dampingHighSpeedRatio - Shared high-speed slope ratio [-] (optional, 1.0=linear)
             
             if nargin < 14 || isempty(geometry)
                 % Fallback when no geometry is supplied: a neutral kinematic
@@ -158,6 +166,19 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
             obj.rearAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.rearAntiRollBar);
 
+            % Shared digressive-damper knee/ratio forwarded to every corner.
+            % Defaults (Inf, 1.0) reproduce the legacy linear damper.
+            if nargin >= 17 && ~isempty(dampingKneeSpeed) && isnumeric(dampingKneeSpeed) ...
+                    && (isinf(dampingKneeSpeed) || (isscalar(dampingKneeSpeed) && ...
+                        isfinite(dampingKneeSpeed) && dampingKneeSpeed > 0))
+                obj.dampingKneeSpeed = dampingKneeSpeed;
+            end
+            if nargin >= 18 && ~isempty(dampingHighSpeedRatio) && isnumeric(dampingHighSpeedRatio) ...
+                    && isscalar(dampingHighSpeedRatio) && isfinite(dampingHighSpeedRatio) ...
+                    && dampingHighSpeedRatio > 0
+                obj.dampingHighSpeedRatio = dampingHighSpeedRatio;
+            end
+
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
             rearSprungMass = max(totalSprungMass * (1 - obj.staticFrontWeight) / 2, eps);
@@ -167,14 +188,16 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 vehicleManager, frontRollStiffDist, ...
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, frontSprungMass);
-            
+                tireSpringRate, unsprungMass, frontSprungMass, ...
+                obj.dampingKneeSpeed, obj.dampingHighSpeedRatio);
+
             obj.frontRight = lts.components.Suspension.SimpleSuspension( ...
                 vehicleManager, frontRollStiffDist, ...
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, frontSprungMass);
-            
+                tireSpringRate, unsprungMass, frontSprungMass, ...
+                obj.dampingKneeSpeed, obj.dampingHighSpeedRatio);
+
             % Create rear corners (share rear parameters, each has own state)
             % Rear roll stiffness distribution = 1 - front
             rearRollStiffDist = 1 - frontRollStiffDist;
@@ -182,13 +205,15 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 vehicleManager, rearRollStiffDist, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, rearSprungMass);
-            
+                tireSpringRate, unsprungMass, rearSprungMass, ...
+                obj.dampingKneeSpeed, obj.dampingHighSpeedRatio);
+
             obj.rearRight = lts.components.Suspension.SimpleSuspension( ...
                 vehicleManager, rearRollStiffDist, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, rearSprungMass);
+                tireSpringRate, unsprungMass, rearSprungMass, ...
+                obj.dampingKneeSpeed, obj.dampingHighSpeedRatio);
         end
         
         %% ---- Warmup: settle suspension to static equilibrium ----
