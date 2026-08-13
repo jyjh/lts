@@ -578,9 +578,14 @@ classdef TelemetryExporter
                 'replayThrottle', 'replayBrake', ...
                 'replayBrakePressureFrontBar', 'replayBrakePressureRearBar', ...
                 'replayRegenTorqueNm', 'replayMotorTorqueCommandNm', ...
+                'replayMotorTorqueDeliveredNm', ...
                 'replayMotorRpm', 'replayPackVoltageV', ...
                 'replayPackCurrentA', 'replayPackPowerW', ...
                 'replaySteer', 'replaySpeed', ...
+                'replayWheelSpeedFL', 'replayWheelSpeedFR', ...
+                'replayWheelSpeedRL', 'replayWheelSpeedRR', ...
+                'wheelSpeedErrorFL', 'wheelSpeedErrorFR', ...
+                'wheelSpeedErrorRL', 'wheelSpeedErrorRR', ...
                 'replayLatAccelG', 'replayFrontLatAccelG', ...
                 'replayRearLatAccelG', 'replayLongAccelG', ...
                 'replayFrontLongAccelG', 'replayRearLongAccelG', ...
@@ -683,6 +688,8 @@ classdef TelemetryExporter
                     name = 'Replay Regen Torque'; unit = 'Nm';
                 case 'replayMotorTorqueCommandNm'
                     name = 'Replay Motor Torque Command'; unit = 'Nm';
+                case 'replayMotorTorqueDeliveredNm'
+                    name = 'Replay Motor Torque Delivered'; unit = 'Nm';
                 case 'replayMotorRpm'
                     name = 'Replay Motor RPM'; unit = 'rpm';
                 case 'replayPackVoltageV'
@@ -697,6 +704,22 @@ classdef TelemetryExporter
                     name = 'Replay Steer Input Raw'; unit = 'rad';
                 case 'replaySpeed'
                     name = 'Replay Speed Input'; unit = 'm/s';
+                case 'replayWheelSpeedFL'
+                    name = 'Replay Wheel Speed Front Left'; unit = 'm/s';
+                case 'replayWheelSpeedFR'
+                    name = 'Replay Wheel Speed Front Right'; unit = 'm/s';
+                case 'replayWheelSpeedRL'
+                    name = 'Replay Wheel Speed Rear Left'; unit = 'm/s';
+                case 'replayWheelSpeedRR'
+                    name = 'Replay Wheel Speed Rear Right'; unit = 'm/s';
+                case 'wheelSpeedErrorFL'
+                    name = 'Wheel Speed Error Front Left'; unit = 'm/s';
+                case 'wheelSpeedErrorFR'
+                    name = 'Wheel Speed Error Front Right'; unit = 'm/s';
+                case 'wheelSpeedErrorRL'
+                    name = 'Wheel Speed Error Rear Left'; unit = 'm/s';
+                case 'wheelSpeedErrorRR'
+                    name = 'Wheel Speed Error Rear Right'; unit = 'm/s';
                 case 'replayLatAccelG'
                     name = 'Replay Lateral Acceleration'; unit = 'G';
                 case 'replayFrontLatAccelG'

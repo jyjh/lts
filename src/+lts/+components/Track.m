@@ -13,7 +13,7 @@ classdef (Abstract) Track
         % Get curvature at each waypoint [1/m]
         curvature = getCurvature(obj)
 
-        % Get surface friction coefficient at each waypoint
+        % Compatibility channel fixed at one for every waypoint
         mu = getSurfaceFriction(obj)
 
         % Get total track length [m]

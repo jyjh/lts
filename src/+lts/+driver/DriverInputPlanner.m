@@ -235,13 +235,15 @@ classdef DriverInputPlanner
             for i = 1:n
                 [throttleRef(i), brakeRef(i)] = lts.driver.DriverInputPlanner.computePedals( ...
                     axRef(i), F_drive_full(i), F_resistance(i), ...
-                    vm.totalMass, brakeForceAccel(i));
+                    vm.totalMass, brakeForceAccel(i), vm.powertrain);
                 % Traction-circle cap: at a corner apex the lateral grip demand
                 % leaves little longitudinal capacity, so cap the throttle
                 % toward driveScale (0 -> pure coast) and the brake toward
                 % brakeScale (trail-brake taper). This makes the planned pedals
                 % apex-aware: lift into the apex, coast through it, drive out.
-                throttleRef(i) = min(throttleRef(i), driveScale(i));
+                drivePedalCap = lts.driver.DriverInputPlanner.pedalForTorqueFraction( ...
+                    vm.powertrain, driveScale(i));
+                throttleRef(i) = min(throttleRef(i), drivePedalCap);
                 brakeRef(i) = min(brakeRef(i), brakeScale(i));
             end
 
@@ -705,20 +707,22 @@ classdef DriverInputPlanner
             % Traction-circle output caps applied to the planned pedals: at a
             % corner apex the lateral grip demand leaves little longitudinal
             % capacity, so the throttle is capped toward driveScale (0 -> coast)
-            % and the brake toward brakeScale (trail-brake). Applied to the
-            % pedal OUTPUT (not the force input) so the ratio in computePedals
-            % is not distorted.
+            % and the brake toward brakeScale (trail-brake). driveScale is a
+            % torque fraction and is converted through the inverse pedal map
+            % before it caps the pedal output.
             limits.driveScale = driveScale;
             limits.brakeScale = brakeScale;
         end
     end
 
     methods (Static)
-        function [throttle, brake] = computePedals(axRef, F_drive_full, F_resistance, mass, brakeForceAccel)
+        function [throttle, brake] = computePedals(axRef, F_drive_full, ...
+                F_resistance, mass, brakeForceAccel, powertrain, driveForceScale)
             % COMPUTEPEDALS Map a required longitudinal accel onto pedal commands.
             %
             %   [throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
-            %       axRef, F_drive_full, F_resistance, mass, brakeForceAccel)
+            %       axRef, F_drive_full, F_resistance, mass, brakeForceAccel, ...
+            %       powertrain, driveForceScale)
             %
             %   Pure (stateless) physics-based pedal map that produces all three
             %   regimes a real driver uses:
@@ -733,10 +737,20 @@ classdef DriverInputPlanner
             %     F_resistance    - drag + rolling resistance at this speed [N]
             %     mass            - vehicle mass [kg]
             %     brakeForceAccel - decel per unit brake command [m/s^2]
+            %     powertrain      - optional component with inverse pedal map
+            %     driveForceScale - optional combined-grip torque multiplier
             %
             %   Pedals are mutually exclusive (never both > 0), clamped to [0,1].
             mass = max(mass, eps);
             brakeForceAccel = max(brakeForceAccel, eps);
+            if nargin < 6
+                powertrain = [];
+            end
+            if nargin < 7 || isempty(driveForceScale) || ...
+                    ~isscalar(driveForceScale) || ~isfinite(driveForceScale)
+                driveForceScale = 1;
+            end
+            driveForceScale = lts.util.saturate(driveForceScale);
 
             % Force the wheels must apply at the contact patch to net axRef,
             % i.e. invert  ax = (F_drive - F_resistance) / mass.
@@ -773,16 +787,47 @@ classdef DriverInputPlanner
                 end
             elseif F_drive_full <= 0
                 % No tractive capability recorded (e.g. at/over rev limit) but
-                % drive was requested: ask for WOT and let the powertrain
-                % return whatever it can.
-                throttle = 1;
-            else
-                throttle = F_req / F_drive_full;
-                throttle = lts.util.saturate(throttle);
-                % Negligible throttle (below a few % of full) -> coast.
-                if throttle < coastFraction
+                % drive was requested: ask for the combined-grip-limited
+                % fraction and let the powertrain return whatever it can.
+                if driveForceScale < coastFraction
                     throttle = 0;
+                else
+                    throttle = lts.driver.DriverInputPlanner.pedalForTorqueFraction( ...
+                        powertrain, driveForceScale);
                 end
+            else
+                torqueFraction = lts.util.saturate( ...
+                    F_req / F_drive_full) * driveForceScale;
+                % Apply the coast threshold in force/torque space. With a
+                % nonlinear pedal map, pedal position is not a force fraction.
+                if torqueFraction < coastFraction
+                    throttle = 0;
+                else
+                    throttle = lts.driver.DriverInputPlanner.pedalForTorqueFraction( ...
+                        powertrain, torqueFraction);
+                end
+            end
+        end
+
+        function pedal = pedalForTorqueFraction(powertrain, fraction)
+            % PEDALFORTORQUEFRACTION Invert a nonlinear powertrain pedal map.
+            % Components that do not expose the optional inverse API retain
+            % the legacy linear behavior.
+            fraction = lts.util.saturate(fraction);
+            pedal = fraction;
+            if isempty(powertrain) || ~isobject(powertrain) || ...
+                    ~ismethod(powertrain, 'pedalForTorqueFraction')
+                return;
+            end
+            try
+                candidate = powertrain.pedalForTorqueFraction(fraction);
+                if isnumeric(candidate) && isscalar(candidate) && isfinite(candidate)
+                    pedal = lts.util.saturate(candidate);
+                end
+            catch
+                % A third-party/legacy implementation must not make the
+                % planner unusable; fall back to a linear command.
+                pedal = fraction;
             end
         end
     end

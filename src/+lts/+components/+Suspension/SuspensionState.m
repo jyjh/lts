@@ -8,11 +8,14 @@ classdef SuspensionState < handle
     % Positive = compression (bump).
     
     properties
-        % Damper compression from static equilibrium [m]
+        % Wheel-domain relative suspension compression from static
+        % equilibrium [m]. This historical field name is retained for
+        % telemetry compatibility; physical damper travel is this value
+        % multiplied by the installation motion ratio.
         % Positive = suspension compressed (bump)
         damperPosition   = 0
         
-        % Damper compression velocity [m/s]
+        % Wheel-domain relative suspension compression velocity [m/s]
         % Positive = compressing
         damperVelocity   = 0
         

@@ -34,18 +34,29 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % (wheel + tire + brake disc rotating assembly)
         wheelInertia = 0.5
 
-        % Tire relaxation length [m]. Models the first-order contact-patch
-        % lag between the kinematic (steady-state) slip and the force-
-        % producing (transient) slip:
+        % Lateral tire relaxation length [m]. Models the first-order
+        % contact-patch lag between kinematic slip angle and force-producing
+        % slip angle:
         %   sigma * d(alpha)/dt + V * alpha = V * alpha_ss
         % Solved in the exact, unconditionally-stable exponential form.
         % 0 disables the transient layer (pure steady-state Magic Formula).
         relaxationLength = 0.30
 
+        % Longitudinal relaxation length [m] for slip ratio. NaN preserves
+        % backward compatibility by using relaxationLength for both states.
+        % A separate value avoids imposing the substantially longer lateral
+        % carcass/contact-patch response on the driven-wheel torque loop.
+        longitudinalRelaxationLength = NaN
+
         % Multiplier on force-evaluation slip angle. This is a correlation
         % knob for cornering-stiffness sensitivity; stored kinematic and
         % relaxed slip states remain in physical radians.
         lateralStiffnessScale = 1.0
+
+        % Optional [FL FR RL RR] multipliers applied after the global scale.
+        % This changes axle cornering stiffness without changing peak grip or
+        % the physical kinematic/relaxed slip states.
+        lateralStiffnessScaleByCorner = [1 1 1 1]
 
         % Rolling-resistance coefficient [-]. Acts as a wheel-resistance
         % torque T_rr = Crr * Fz * R opposing rotation, so a free-rolling
@@ -62,15 +73,21 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % extra coast-down drag.
         bearingDragCoeff = 0
 
+        % Deprecated compatibility flag retained for configs that set it.
+        % Wheel angular velocity is no longer direction-clamped.
+        allowReverseRotation = false
+
         % Cache peak-mu scans by rounded load/camber/speed. The public
         % string-keyed cache is kept readable for tests/debugging; the
         % numeric cache is the hot-loop lookup path.
         peakMuCache
         peakMuNumericCache
 
-        % Track-surface Mu that corresponds to the raw tire file. A surface
-        % Mu of 1.2 preserves the current dry-track Pacejka behavior.
-        surfaceMuReference = 1.2
+        % Deprecated compatibility property. Surface-dependent friction
+        % scaling has been removed; the raw tire file always defines grip.
+        % Legacy callers may still read or assign this value, but it has no
+        % effect on forces and is fixed conceptually at unity.
+        surfaceMuReference = 1.0
 
         % Resolved MFeval low-speed floor [m/s]. The .tir params struct is
         % immutable, so whether it carries VXLOW (and its value) is a run
@@ -116,18 +133,18 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             %   dt           — Timestep [s] (optional; enables relaxation lag)
             %   longSpeed    — Contact-patch longitudinal speed [m/s] (optional)
             %
-            %   The raw Pacejka tire data is treated as the dry-reference
-            %   surface and scaled by surfaceMu/surfaceMuReference.
+            %   Legacy surface-Mu arguments are accepted for API compatibility
+            %   but ignored. MFeval forces are used without surface scaling.
             %   Mutates cornerState in-place with computed forces and moments.
 
-            [surfaceMu, dt, longSpeed, computePeakMu, relaxationMode] = ...
+            [~, dt, longSpeed, computePeakMu, relaxationMode] = ...
                 obj.parseCornerOptionalArgs(varargin{:});
             relaxationMode = obj.resolveRelaxationMode(dt, relaxationMode);
             
             % Store inputs
             cornerState.normalForce = normalLoad;
             ssAlpha = lts.util.clamp(slipAngle, -0.3, 0.3);   % steady-state (kinematic) target
-            ssKappa = lts.util.clamp(slipRatio, -1, 1);
+            ssKappa = obj.clampSlipRatio(slipRatio);
 
             % Apply first-order contact-patch relaxation to obtain the
             % transient (force-producing) slip. With relaxationLength = 0
@@ -165,7 +182,13 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             P     = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
 
+            isRight = obj.isRightCorner(cornerState);
             alphaEval = obj.evaluationSlipAngle(alpha);
+            if isRight
+                % The bundled TIR data is for a left-side tire. Mirror the
+                % slip input when the same tire is mounted on the right.
+                alphaEval = -alphaEval;
+            end
 
             % Build MFeval inputs row: [Fz, kappa, alpha, gamma, phit, Vx, P]
             inputsMF = [Fz, kappa, alphaEval, gamma, 0, V, P];
@@ -173,19 +196,25 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Evaluate Pacejka Magic Formula via MFeval (useMode=111: combined)
             outputs = mfeval(params, inputsMF, 111);
 
-            surfaceScale = obj.computeSurfaceScale(surfaceMu);
             if computePeakMu
                 rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longSpeed);
-                cornerState.peakMu = rawPeakMu * surfaceScale;
+                cornerState.peakMu = rawPeakMu;
             end
 
-            % Store the Magic-Formula forces scaled from the dry reference
-            % surface to the local track Mu.
-            cornerState.Fy = -outputs(:,2) * surfaceScale;
-            cornerState.Fx = outputs(:,1) * surfaceScale;
-            cornerState.Mx = outputs(:,4);
+            % Store the raw Magic-Formula forces.
+            cornerState.Fx = outputs(:,1);
             cornerState.My = outputs(:,5);
-            cornerState.Mz = outputs(:,6) * surfaceScale;
+            if isRight
+                cornerState.Fy = outputs(:,2);
+                cornerState.Mx = -outputs(:,4);
+                cornerState.Mz = outputs(:,6);
+            else
+                cornerState.Fy = -outputs(:,2);
+                cornerState.Mx = outputs(:,4);
+                % MFeval's lateral convention is opposite the simulator's
+                % (Fy is negated above), so its aligning moment changes sign too.
+                cornerState.Mz = -outputs(:,6);
+            end
         end
         
         %% ---- TireModel interface methods ----
@@ -201,15 +230,11 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 Fy = 0;
                 return;
             end
-            if nargin < 4 || isempty(mu)
-                mu = obj.surfaceMuReference;
-            end
-            
             inputsMF = [normalLoad, 0, obj.evaluationSlipAngle(slipAngle), 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
-            Fy = -outputs(:,2) * obj.computeSurfaceScale(mu);
+            Fy = -outputs(:,2);
         end
 
         function Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
@@ -223,15 +248,12 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 Fx = 0;
                 return;
             end
-            if nargin < 4 || isempty(mu)
-                mu = obj.surfaceMuReference;
-            end
-            
+            slipRatio = obj.clampSlipRatio(slipRatio);
             inputsMF = [normalLoad, slipRatio, 0, 0, 0, ...
                 obj.tireConstants.refVelocity, obj.tireConstants.nomPressure];
             outputs = mfeval(obj.tireConstants.params, inputsMF, 111);
             
-            Fx = outputs(:,1) * obj.computeSurfaceScale(mu);
+            Fx = outputs(:,1);
         end
         
         function peakMu = getPeakFriction(obj, normalLoad)
@@ -251,6 +273,64 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         end
         
         %% ---- Wheel dynamics ----
+
+            slipAngles = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
+
+            % At very low speed, slip angles are undefined → return zeros
+            if vx < 0.5
+                return;
+            end
+
+            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, steerInput);
+            [xFL, yFL] = obj.getKinematicPosition(vehicleManager, 'FL', suspensionKinematics.FL);
+            [xFR, yFR] = obj.getKinematicPosition(vehicleManager, 'FR', suspensionKinematics.FR);
+            [xRL, yRL] = obj.getKinematicPosition(vehicleManager, 'RL', suspensionKinematics.RL);
+            [xRR, yRR] = obj.getKinematicPosition(vehicleManager, 'RR', suspensionKinematics.RR);
+
+            slipAngles.FL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFL, yFL, suspensionKinematics.FL);
+            slipAngles.FR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xFR, yFR, suspensionKinematics.FR);
+            slipAngles.RL = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRL, yRL, suspensionKinematics.RL);
+            slipAngles.RR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
+                xRR, yRR, suspensionKinematics.RR);
+        end
+
+        %% ---- Slip ratio computation ----
+
+        function kappa = computeSlipRatio(obj, cornerState, vehicleSpeed)
+            % COMPUTESLIPRATIO Compute longitudinal slip ratio for one corner
+            %   kappa = computeSlipRatio(cornerState, vehicleSpeed)
+            %
+            %   Slip ratio definition (the contract used by MFeval):
+            %     kappa = (omega * R - V) / max(|V|, lowSpeedFloor)
+            %
+            %   kappa > 0 → driving (wheel faster than vehicle)
+            %   kappa < 0 → braking (wheel slower than vehicle)
+            %
+            %   Inputs:
+            %     cornerState  - TireState with angularVelocity and wheelRadius
+            %     vehicleSpeed - Vehicle forward speed [m/s]
+            %
+            %   Returns:
+            %     kappa - Slip ratio [-1, KPUMAX]
+
+            omega = cornerState.angularVelocity;
+            R     = cornerState.wheelRadius;
+            V     = max(vehicleSpeed, 0);   % no reverse
+
+            kappa = obj.computeKinematicSlipRatio(omega * R, V);
+        end
+
+        function kappa = computeSlipRatioFromKinematics(obj, cornerState, longitudinalSpeed)
+            % COMPUTESLIPRATIOFROMKINEMATICS MFeval-consistent local-wheel slip.
+            % This is the shared simulator/contact-solver entry point. Unlike
+            % computeSlipRatio, it preserves the signed wheel-frame road speed.
+            kappa = obj.computeKinematicSlipRatio( ...
+                cornerState.angularVelocity * cornerState.wheelRadius, ...
+                longitudinalSpeed);
+        end
 
         function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia, longitudinalSpeed)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
@@ -278,10 +358,9 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             %     brakeTorque - Brake torque at this wheel [Nm] (positive magnitude)
             %     dt          - Timestep [s]
             %     inertia     - Optional per-wheel inertia override [kg*m^2].
-            %                   Defaults to obj.wheelInertia. The lts.simulation.Simulator
-            %                   passes wheel+tire+reflected-rotor inertia on
-            %                   the driven axle so the motor mass is felt at
-            %                   the contact patch.
+            %                   Defaults to obj.wheelInertia. Differential-
+            %                   carrier inertia is handled by the coupled
+            %                   driven-wheel method below.
 
             omega = cornerState.angularVelocity;
             R     = cornerState.wheelRadius;
@@ -320,6 +399,106 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             cornerState.angularVelocity = omega_new;
         end
 
+        function updateDrivenWheelPairDynamics(obj, leftState, rightState, ...
+                driveTorqueLeft, driveTorqueRight, brakeTorqueLeft, brakeTorqueRight, ...
+                dt, inertiaLeft, inertiaRight, reflectedRotorInertia, ...
+                longitudinalSpeedLeft, longitudinalSpeedRight)
+            % UPDATEDRIVENWHEELPAIRDYNAMICS Integrate a differential axle.
+            % Reflected motor inertia belongs to carrier motion,
+            % omega_c = (omega_L + omega_R)/2. It resists common-mode
+            % acceleration without adding phantom differential-mode inertia.
+            if nargin < 9 || isempty(inertiaLeft)
+                inertiaLeft = obj.wheelInertia;
+            end
+            if nargin < 10 || isempty(inertiaRight)
+                inertiaRight = obj.wheelInertia;
+            end
+            if nargin < 11 || isempty(reflectedRotorInertia) || ...
+                    ~isfinite(reflectedRotorInertia)
+                reflectedRotorInertia = 0;
+            end
+            if nargin < 12 || isempty(longitudinalSpeedLeft)
+                longitudinalSpeedLeft = leftState.angularVelocity * leftState.wheelRadius;
+            end
+            if nargin < 13 || isempty(longitudinalSpeedRight)
+                longitudinalSpeedRight = rightState.angularVelocity * rightState.wheelRadius;
+            end
+
+            tau = [obj.computeWheelNetTorque(leftState, driveTorqueLeft, ...
+                       brakeTorqueLeft, longitudinalSpeedLeft); ...
+                   obj.computeWheelNetTorque(rightState, driveTorqueRight, ...
+                       brakeTorqueRight, longitudinalSpeedRight)];
+            carrierCoupling = max(reflectedRotorInertia, 0) / 4;
+            massMatrix = [max(inertiaLeft, eps) + carrierCoupling, carrierCoupling; ...
+                          carrierCoupling, max(inertiaRight, eps) + carrierCoupling];
+            angularAccel = massMatrix \ tau;
+            leftState.angularVelocity = leftState.angularVelocity + angularAccel(1) * dt;
+            rightState.angularVelocity = rightState.angularVelocity + angularAccel(2) * dt;
+        end
+
+        function solveWheelContact(obj, cornerState, normalLoad, slipAngle, ...
+                camberAngle, mu, longitudinalSpeed, driveTorque, brakeTorque, dt)
+            % SOLVEWHEELCONTACT Semi-implicitly couple wheel speed and tire Fx.
+            %   I*domega/dt = T_drive - T_brake - Fx(kappa(omega))*R
+
+            if nargin < 10 || isempty(dt)
+                dt = 0.001;
+            end
+
+            omegaOld = cornerState.angularVelocity;
+            omegaNew = omegaOld;
+            R = max(cornerState.wheelRadius, eps);
+            I = max(obj.wheelInertia, eps);
+            dt = max(dt, 0);
+            slipAngle = lts.util.clamp(slipAngle, -0.3, 0.3);
+
+            finalFx = 0;
+            finalFy = 0;
+            finalMx = 0;
+            finalMy = 0;
+            finalMz = 0;
+            finalPeakMu = 0;
+            finalKappa = cornerState.slipRatio;
+            isRight = obj.isRightCorner(cornerState);
+
+            for iter = 1:5 %#ok<NASGU>
+                finalKappa = obj.computeSlipRatioFromOmega( ...
+                    cornerState, omegaNew, longitudinalSpeed);
+                [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
+                    obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
+                    camberAngle, mu, longitudinalSpeed, false, isRight);
+
+                brakeSign = obj.computeBrakeTorqueSign( ...
+                    omegaNew, longitudinalSpeed, driveTorque);
+                netTorque = driveTorque - brakeSign * brakeTorque - finalFx * R;
+                omegaCandidate = omegaOld + (netTorque / I) * dt;
+
+                if abs(omegaCandidate - omegaNew) < 1e-4
+                    omegaNew = omegaCandidate;
+                    break;
+                end
+                omegaNew = omegaCandidate;
+            end
+
+            finalKappa = obj.computeSlipRatioFromOmega( ...
+                cornerState, omegaNew, longitudinalSpeed);
+            [finalFx, finalFy, finalMx, finalMy, finalMz, finalPeakMu] = ...
+                obj.evaluateForces(normalLoad, slipAngle, finalKappa, ...
+                camberAngle, mu, longitudinalSpeed, true, isRight);
+
+            cornerState.normalForce = normalLoad;
+            cornerState.slipAngle = slipAngle;
+            cornerState.slipRatio = finalKappa;
+            cornerState.camberAngle = camberAngle;
+            cornerState.angularVelocity = omegaNew;
+            cornerState.Fx = finalFx;
+            cornerState.Fy = finalFy;
+            cornerState.Mx = finalMx;
+            cornerState.My = finalMy;
+            cornerState.Mz = finalMz;
+            cornerState.peakMu = finalPeakMu;
+        end
+        
         %% ---- All-corners batch update ----
         
         function updateAllCorners(obj, Fz_FL, Fz_FR, Fz_RL, Fz_RR, ...
@@ -339,8 +518,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             %   before MFeval when dt and longSpeeds are supplied.
             %   Camber defaults to 0 for all corners.
             %
-            %   The raw Pacejka tire data is treated as the dry-reference
-            %   surface and scaled by surfaceMu/surfaceMuReference.
+            %   Legacy surface-Mu inputs are accepted but ignored; grip comes
+            %   directly from the tire file.
 
             if nargin < 14
                 camber_FL = 0;
@@ -370,10 +549,10 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
             ssAlpha = lts.util.clamp(...
                 [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR], -0.3, 0.3);
-            ssKappa = lts.util.clamp([kappa_FL; kappa_FR; kappa_RL; kappa_RR], -1, 1);
+            ssKappa = obj.clampSlipRatio( ...
+                [kappa_FL; kappa_FR; kappa_RL; kappa_RR]);
             gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
             longSpeed = longSpeeds(:);
-            surfaceScale = obj.expandSurfaceScale(surfaceMu, 4);
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
             P = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
@@ -396,22 +575,45 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                              obj.RL.slipAngle; obj.RR.slipAngle];
             previousKappa = [obj.FL.slipRatio; obj.FR.slipRatio; ...
                              obj.RL.slipRatio; obj.RR.slipRatio];
-            sigma = obj.relaxationLength;
+            sigmaAlpha = obj.relaxationLength;
+            sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
             advanceMode = strcmp(relaxationMode, 'advance');
             holdMode = strcmp(relaxationMode, 'hold');
-            if holdMode && sigma > 0
-                alpha = previousAlpha;
-                kappa = previousKappa;
-            elseif sigma <= 0 || dt <= 0 || strcmp(relaxationMode, 'steady')
+            if holdMode
+                alpha = ssAlpha;
+                kappa = ssKappa;
+                if sigmaAlpha > 0
+                    alpha = previousAlpha;
+                end
+                if sigmaKappa > 0
+                    kappa = previousKappa;
+                end
+            elseif dt <= 0 || strcmp(relaxationMode, 'steady')
                 alpha = ssAlpha;
                 kappa = ssKappa;
             else
                 V_eff = max(abs(longSpeed), 1.0);
-                decay = exp(-V_eff * dt / sigma);
-                alpha = ssAlpha - (ssAlpha - previousAlpha) .* decay;
-                kappa = ssKappa - (ssKappa - previousKappa) .* decay;
-                kappa = lts.util.clamp(kappa, -1, 1);
+                if sigmaAlpha > 0
+                    decayAlpha = exp(-V_eff * dt / sigmaAlpha);
+                    alpha = ssAlpha - ...
+                        (ssAlpha - previousAlpha) .* decayAlpha;
+                else
+                    alpha = ssAlpha;
+                end
+                if sigmaKappa > 0
+                    decayKappa = exp(-V_eff * dt / sigmaKappa);
+                    kappa = ssKappa - ...
+                        (ssKappa - previousKappa) .* decayKappa;
+                else
+                    kappa = ssKappa;
+                end
+                kappa = obj.clampSlipRatio(kappa);
             end
+            % A stopped contact patch has no kinematic longitudinal slip.
+            % Never retain a previous braking force after both wheel and road
+            % speed have reached zero.
+            rest = abs(longSpeed) <= 1e-9 & abs(ssKappa) <= 1e-12;
+            kappa(rest) = 0;
             for i = 1:4
                 states{i}.normalForce = Fz(i);
                 states{i}.ssSlipAngle = ssAlpha(i);
@@ -428,7 +630,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if any(active)
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
-                alphaEval = obj.evaluationSlipAngle(alpha);
+                alphaEval = obj.evaluationSlipAnglesByCorner(alpha);
+                alphaEval([2, 4]) = -alphaEval([2, 4]);
                 inputsMF = [Fz(active), kappa(active), alphaEval(active), ...
                     gamma(active), zeros(nActive, 1), ...
                     Vx, repmat(P, nActive, 1)];
@@ -455,13 +658,19 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                             states{i}.peakMuCacheKey = numericKey;
                             states{i}.rawPeakMu = rawPeakMu;
                         end
-                        states{i}.peakMu = rawPeakMu * surfaceScale(i);
+                        states{i}.peakMu = rawPeakMu;
                     end
-                    states{i}.Fx = outputs(j,1) * surfaceScale(i);
-                    states{i}.Fy = -outputs(j,2) * surfaceScale(i);
-                    states{i}.Mx = outputs(j,4);
+                    states{i}.Fx = outputs(j,1);
                     states{i}.My = outputs(j,5);
-                    states{i}.Mz = outputs(j,6) * surfaceScale(i);
+                    if i == 2 || i == 4
+                        states{i}.Fy = outputs(j,2);
+                        states{i}.Mx = -outputs(j,4);
+                        states{i}.Mz = outputs(j,6);
+                    else
+                        states{i}.Fy = -outputs(j,2);
+                        states{i}.Mx = outputs(j,4);
+                        states{i}.Mz = -outputs(j,6);
+                    end
                 end
             end
 
@@ -485,42 +694,132 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Solved with the exact, unconditionally-stable exponential form
             %   alpha = alpha_ss - (alpha_ss - alpha_prev) * exp(-V_eff*dt/sigma)
             % which is stable for any dt (explicit Euler would be stiff here).
-            % With relaxationLength = 0 the transient slip equals ss (baseline).
-            sigma = obj.relaxationLength;
+            % Each state has its own physical relaxation length. NaN for the
+            % longitudinal value retains the legacy shared-length behavior.
+            sigmaAlpha = obj.relaxationLength;
+            sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
+            clearLongitudinalSlipAtRest = ...
+                abs(longSpeed) <= 1e-9 && abs(ssKappa) <= 1e-12;
             if nargin < 7 || isempty(relaxationMode)
                 relaxationMode = obj.resolveRelaxationMode(dt, '');
             end
-            if sigma <= 0 || dt <= 0
-                if strcmp(relaxationMode, 'hold') && sigma > 0
+            if strcmp(relaxationMode, 'hold')
+                alpha = ssAlpha;
+                kappa = ssKappa;
+                if sigmaAlpha > 0
                     alpha = cornerState.slipAngle;
-                    kappa = cornerState.slipRatio;
-                    return;
                 end
-                alpha = ssAlpha;
-                kappa = ssKappa;
+                if sigmaKappa > 0
+                    kappa = cornerState.slipRatio;
+                end
+                if clearLongitudinalSlipAtRest
+                    kappa = 0;
+                end
                 return;
             end
-            if strcmp(relaxationMode, 'steady')
+            if dt <= 0 || strcmp(relaxationMode, 'steady')
                 alpha = ssAlpha;
                 kappa = ssKappa;
-                return;
-            elseif strcmp(relaxationMode, 'hold')
-                alpha = cornerState.slipAngle;
-                kappa = cornerState.slipRatio;
+                if clearLongitudinalSlipAtRest
+                    kappa = 0;
+                end
                 return;
             end
 
-            % Effective rolling speed for the lag time constant. A floor
-            % matches the slip-ratio low-speed blend so the lag does not
-            % blow up at standstill (at low speed the patch builds force
-            % slowly, which is physical).
+            % Effective rolling speed for the lag time constant. A floor keeps
+            % the transient model well-conditioned near standstill.
             V_eff = max(abs(longSpeed), 1.0);
-            decay = exp(-V_eff * dt / sigma);
+            if sigmaAlpha > 0
+                decayAlpha = exp(-V_eff * dt / sigmaAlpha);
+                alpha = ssAlpha - ...
+                    (ssAlpha - cornerState.slipAngle) * decayAlpha;
+            else
+                alpha = ssAlpha;
+            end
+            if sigmaKappa > 0
+                decayKappa = exp(-V_eff * dt / sigmaKappa);
+                kappa = ssKappa - ...
+                    (ssKappa - cornerState.slipRatio) * decayKappa;
+            else
+                kappa = ssKappa;
+            end
 
-            alpha = ssAlpha - (ssAlpha - cornerState.slipAngle) * decay;
-            kappa = ssKappa - (ssKappa - cornerState.slipRatio) * decay;
+            kappa = obj.clampSlipRatio(kappa);
+            if clearLongitudinalSlipAtRest
+                kappa = 0;
+            end
+        end
 
-            kappa = lts.util.clamp(kappa, -1, 1);
+        function sigma = resolvedLongitudinalRelaxationLength(obj)
+            sigma = obj.longitudinalRelaxationLength;
+            if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
+                    ~isfinite(sigma) || sigma < 0
+                sigma = obj.relaxationLength;
+            end
+        end
+
+        function suspensionKinematics = getSuspensionKinematics(~, vehicleManager, steerInput)
+            if ~isempty(vehicleManager.suspension) && ...
+                    ismethod(vehicleManager.suspension, 'getCornerKinematics')
+                suspensionKinematics = vehicleManager.suspension.getCornerKinematics();
+                return;
+            end
+
+            suspensionKinematics = struct();
+            suspensionKinematics.FL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.FR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', steerInput);
+            suspensionKinematics.RL = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+            suspensionKinematics.RR = struct('camberAngle', 0, 'toeAngle', 0, 'steerAngle', 0);
+        end
+
+        function [x, y] = getKinematicPosition(obj, vehicleManager, corner, kin)
+            if isfield(kin, 'xPosition') && isfield(kin, 'yPosition')
+                x = kin.xPosition;
+                y = kin.yPosition;
+                return;
+            end
+
+            [x, y] = obj.getWheelPosition(vehicleManager, corner);
+        end
+
+        function [x, y] = getWheelPosition(~, vehicleManager, corner)
+            frontArm = vehicleManager.wheelbase * (1 - vehicleManager.staticFrontWeight);
+            rearArm = vehicleManager.wheelbase * vehicleManager.staticFrontWeight;
+            halfTrack = vehicleManager.trackWidth / 2;
+
+            switch upper(corner)
+                case 'FL'
+                    x = frontArm;
+                    y = halfTrack;
+                case 'FR'
+                    x = frontArm;
+                    y = -halfTrack;
+                case 'RL'
+                    x = -rearArm;
+                    y = halfTrack;
+                otherwise
+                    x = -rearArm;
+                    y = -halfTrack;
+            end
+        end
+
+        function alpha = computeCornerSlipAngle(~, vx, vy, yawRate, x, y, kin)
+            % Contact patch velocity = CG velocity + yaw-rate cross position.
+            % Rotate that velocity into the steered/toed wheel frame; slip
+            % angle is positive when the tire must generate force to the left.
+            vxCorner = vx - yawRate * y;
+            vyCorner = vy + yawRate * x;
+            wheelHeading = kin.steerAngle + kin.toeAngle;
+            longSpeed = vxCorner * cos(wheelHeading) + vyCorner * sin(wheelHeading);
+            latSpeed = -vxCorner * sin(wheelHeading) + vyCorner * cos(wheelHeading);
+            alpha = atan2(-latSpeed, max(abs(longSpeed), 0.1));
+        end
+
+        function kappa = computeSlipRatioFromOmega(obj, cornerState, omega, longitudinalSpeed)
+            % Same slip convention as lts.simulation.Simulator.computeLocalSlipRatio, used by
+            % the older single-corner contact solver.
+            wheelSpeed = omega * cornerState.wheelRadius;
+            kappa = obj.computeKinematicSlipRatio(wheelSpeed, longitudinalSpeed);
         end
 
         function brakeSign = computeBrakeTorqueSign(~, omega, longitudinalSpeed, driveTorque)
@@ -533,6 +832,81 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             else
                 brakeSign = 0;
             end
+        end
+
+        function [Fx, Fy, Mx, My, Mz, peakMu] = evaluateForces(obj, ...
+                Fz, alpha, kappa, gamma, surfaceMu, longitudinalSpeed, ...
+                computePeakMu, isRight)
+            % EVALUATEFORCES Thin wrapper around MFeval's combined-slip mode.
+            % Inputs follow MFeval's [Fz, kappa, alpha, gamma, phit, Vx, P]
+            % order. The raw .tir file is treated as the dry-reference
+            % surface. Legacy surfaceMu is ignored.
+            if Fz <= 0
+                Fx = 0;
+                Fy = 0;
+                Mx = 0;
+                My = 0;
+                Mz = 0;
+                peakMu = 0;
+                return;
+            end
+            if nargin < 8 || isempty(computePeakMu)
+                computePeakMu = true;
+            end
+            if nargin < 9 || isempty(isRight)
+                isRight = false;
+            end
+
+            alpha = obj.evaluationSlipAngle(alpha);
+            if isRight
+                alpha = -alpha;
+            end
+            kappa = obj.clampSlipRatio(kappa);
+            P = obj.tireConstants.nomPressure;
+            params = obj.tireConstants.params;
+            Vx = obj.computeMFevalSpeed(longitudinalSpeed);
+            inputsMF = [Fz, kappa, alpha, gamma, 0, Vx, P];
+            outputs = mfeval(params, inputsMF, 111);
+
+            if computePeakMu
+                rawPeakMu = obj.getCachedPeakMu(Fz, gamma, P, params, longitudinalSpeed);
+                peakMu = rawPeakMu;
+            else
+                peakMu = 0;
+            end
+            Fx = outputs(:,1);
+            My = outputs(:,5);
+            if isRight
+                Fy = outputs(:,2);
+                Mx = -outputs(:,4);
+                Mz = outputs(:,6);
+            else
+                Fy = -outputs(:,2);
+                Mx = outputs(:,4);
+                Mz = -outputs(:,6);
+            end
+        end
+
+        function netTorque = computeWheelNetTorque(obj, cornerState, ...
+                driveTorque, brakeTorque, longitudinalSpeed)
+            omega = cornerState.angularVelocity;
+            radius = cornerState.wheelRadius;
+            brakeSign = obj.computeBrakeTorqueSign( ...
+                omega, longitudinalSpeed, driveTorque);
+            spinSign = sign(omega);
+            if spinSign == 0
+                spinSign = brakeSign;
+            end
+            normalForce = max(cornerState.normalForce, 0);
+            resistTorque = spinSign * ( ...
+                obj.rollingResistanceCoeff * normalForce * radius + ...
+                obj.bearingDragCoeff * abs(omega));
+            netTorque = driveTorque - brakeSign * brakeTorque ...
+                - cornerState.Fx * radius - resistTorque;
+        end
+
+        function tf = isRightCorner(obj, cornerState)
+            tf = isequal(cornerState, obj.FR) || isequal(cornerState, obj.RR);
         end
 
         function [surfaceMu, dt, longSpeed, computePeakMu, relaxationMode] = parseCornerOptionalArgs(obj, varargin)
@@ -585,10 +959,10 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             end
 
             mode = lower(char(mode));
-            validModes = {'advance', 'steady', 'hold'};
+            validModes = {'advance', 'preview', 'steady', 'hold'};
             if ~any(strcmp(mode, validModes))
                 error('PacejkaTire:InvalidRelaxationMode', ...
-                    'relaxationMode must be advance, steady, or hold.');
+                    'relaxationMode must be advance, preview, steady, or hold.');
             end
         end
 
@@ -600,34 +974,58 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             alphaEval = lts.util.clamp(alpha .* scale, -0.3, 0.3);
         end
 
-        function scale = computeSurfaceScale(obj, surfaceMu)
-            % Track mu is a multiplier relative to the tire file's reference
-            % surface, not an extra friction cap. This keeps the Pacejka load
-            % sensitivity intact while allowing lower-grip tracks.
-            if nargin < 2 || isempty(surfaceMu) || ~isfinite(surfaceMu)
-                surfaceMu = obj.surfaceMuReference;
+        function alphaEval = evaluationSlipAnglesByCorner(obj, alpha)
+            alphaEval = obj.evaluationSlipAngle(alpha);
+            scale = obj.lateralStiffnessScaleByCorner;
+            if isempty(scale) || ~isnumeric(scale) || numel(scale) ~= 4 || ...
+                    any(~isfinite(scale)) || any(scale <= 0)
+                scale = ones(4, 1);
+            else
+                scale = scale(:);
             end
-            scale = max(surfaceMu, 0) / max(obj.surfaceMuReference, eps);
+            if numel(alphaEval) == 4
+                alphaEval = lts.util.clamp(alphaEval(:) .* scale, -0.3, 0.3);
+            end
         end
 
-        function scale = expandSurfaceScale(obj, surfaceMu, n)
-            if nargin < 3
-                n = 1;
+        function kappa = computeKinematicSlipRatio(obj, wheelSpeed, longitudinalSpeed)
+            % MFeval reconstructs wheel speed as omega*R=(1+kappa)*Vx,
+            % hence road speed (not wheel speed) belongs in the denominator.
+            % Regularize only near zero road speed and explicitly clear the
+            % indeterminate 0/0 state. A truly locked wheel remains kappa=-1
+            % for every nonzero forward road speed.
+            restTolerance = 1e-9;
+            if abs(wheelSpeed) <= restTolerance && ...
+                    abs(longitudinalSpeed) <= restTolerance
+                kappa = 0;
+                return;
             end
-            if isempty(surfaceMu)
-                surfaceMu = obj.surfaceMuReference;
+
+            if isnan(obj.cachedMFevalLowSpeed)
+                obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
             end
-            if isscalar(surfaceMu)
-                surfaceMu = repmat(surfaceMu, n, 1);
+            slipSpeedFloor = obj.cachedMFevalLowSpeed;
+            if longitudinalSpeed > restTolerance && ...
+                    abs(wheelSpeed) <= restTolerance
+                rawKappa = -1;
             else
-                surfaceMu = surfaceMu(:);
-                if numel(surfaceMu) ~= n
-                    error('PacejkaTire:InvalidSurfaceMu', ...
-                        'surfaceMu must be scalar or have one value per corner.');
-                end
+                rawKappa = (wheelSpeed - longitudinalSpeed) / ...
+                    max(abs(longitudinalSpeed), slipSpeedFloor);
             end
-            surfaceMu(~isfinite(surfaceMu)) = obj.surfaceMuReference;
-            scale = max(surfaceMu, 0) ./ max(obj.surfaceMuReference, eps);
+            kappa = obj.clampSlipRatio(rawKappa);
+        end
+
+        function kappa = clampSlipRatio(obj, kappa)
+            % Physical forward braking bottoms out at a locked wheel (-1).
+            % Preserve the tire file/MFeval positive-drive range instead of
+            % imposing the former artificial +1 ceiling.
+            upperLimit = 1.5;
+            params = obj.tireConstants.params;
+            if isfield(params, 'KPUMAX') && isscalar(params.KPUMAX) && ...
+                    isfinite(params.KPUMAX)
+                upperLimit = max(double(params.KPUMAX), 0);
+            end
+            kappa = min(max(kappa, -1), upperLimit);
         end
 
         function Vx = computeMFevalSpeed(obj, longitudinalSpeed)

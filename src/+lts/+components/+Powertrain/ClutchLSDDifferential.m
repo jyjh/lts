@@ -10,15 +10,17 @@ classdef ClutchLSDDifferential < lts.components.Powertrain.DifferentialComponent
     %          + ramp * T_total          (torque-sensitive ramp, 1:1 here)
     %          + speedGain*(w_fast-w_slow)  (speed-sensitive viscous term)
     %
-    % capped by a maximum torque bias ratio (T_slow / T_fast <= biasRatio).
+    % The clutch torque is an internal equal-and-opposite axle torque: it
+    % remains active off-throttle while TL + TR always equals the externally
+    % applied driveline torque. Load-dependent bias is capped by biasRatio.
     % This is a simplified but representative model of the plate-style LSDs
     % (and Torsten-type units) commonly run on FSAE cars.
     %
     % Defaults are a mild, stable setup; tune preload/ramp/biasRatio to suit.
 
     properties
-        % Static clutch pack preload torque [Nm]. Always biases toward the
-        % slower wheel even at zero applied torque.
+        % Static clutch pack preload torque [Nm]. It resists relative wheel
+        % motion even at zero externally applied torque.
         preload = 20
 
         % Torque-sensitive ramp coefficient [dimensionless]. Fraction of the
@@ -35,6 +37,11 @@ classdef ClutchLSDDifferential < lts.components.Powertrain.DifferentialComponent
         % Maximum torque bias ratio T_slow / T_fast [-]. A typical 1.5-way
         % clutch LSD runs ~1.5-3.0. inf disables the cap.
         biasRatio = 2.0
+
+        % Maximum fraction of relative wheel speed corrected by one explicit
+        % torque evaluation. Keeping this below one makes the simulator's
+        % fixed-point wheel iterations contract instead of chatter.
+        relativeSpeedDamping = 0.5
     end
 
     methods
@@ -52,53 +59,41 @@ classdef ClutchLSDDifferential < lts.components.Powertrain.DifferentialComponent
             end
         end
 
-        function out = solveDrive(obj, totalWheelTorque, omegaL, omegaR, ~, ~)
-            totalWheelTorque = max(0, totalWheelTorque);
-            % omegaL/omegaR may be negative when reverse rotation is enabled;
-            % the carrier mean and slower-wheel identification both work with
-            % signed speeds, so no clamp here.
+        function out = solveDrive(obj, totalWheelTorque, omegaL, omegaR, wheelInertia, dt)
+            out = obj.solveDriveline( ...
+                max(0, totalWheelTorque), 0, omegaL, omegaR, wheelInertia, dt);
+        end
 
+        function out = solveDriveline(obj, driveWheelTorque, coastdownWheelTorque, ...
+                omegaL, omegaR, wheelInertia, dt)
+            driveWheelTorque = max(0, driveWheelTorque);
+            totalWheelTorque = driveWheelTorque + coastdownWheelTorque;
             base = 0.5 * totalWheelTorque;
+            dw = omegaR - omegaL;
 
-            % Identify slower wheel (receives extra torque) and compute the
-            % raw locking torque from preload + ramp + speed terms.
-            if omegaL <= omegaR
-                slowerSide = 'L';
-                dw = omegaR - omegaL;
-            else
-                slowerSide = 'R';
-                dw = omegaL - omegaR;
+            % Ramp and viscous capacity are load-dependent. During nonzero
+            % drive/coast, cap that part at the configured torque-bias ratio.
+            % Preload remains an independent clutch capacity, so it can act as
+            % a zero-net internal torque during true off-throttle coast.
+            dynamicCapacity = max(0, obj.ramp) * ...
+                (abs(driveWheelTorque) + abs(coastdownWheelTorque)) + ...
+                max(0, obj.speedGain) * abs(dw);
+            if abs(totalWheelTorque) > eps && isfinite(obj.biasRatio)
+                b = max(1, obj.biasRatio);
+                biasRatioCapacity = 0.5 * abs(totalWheelTorque) * ...
+                    (b - 1) / (b + 1);
+                dynamicCapacity = min(dynamicCapacity, biasRatioCapacity);
             end
+            clutchCapacity = max(0, obj.preload) + dynamicCapacity;
 
-            Tlock = obj.preload + obj.ramp * totalWheelTorque + obj.speedGain * dw;
-            Tlock = max(0, Tlock);
-            % Cap the locking torque so it can never exceed the open-diff base
-            % torque. Without this, a high preload relative to a low commanded
-            % total torque (e.g. preload=20 at T_total=10) drives the fast-side
-            % torque negative, which inverts the bias and breaks TL+TR ==
-            % T_total after the non-negative clamp. Capping at base - eps keeps
-            % both sides strictly non-negative before any further processing.
-            Tlock = min(Tlock, max(base - eps, 0));
+            biasMagnitude = obj.boundedBiasMagnitude( ...
+                clutchCapacity, dw, wheelInertia, dt);
+            biasTorque = sign(dw) * biasMagnitude;
 
-            TL = base;
-            TR = base;
-            if slowerSide == 'L'
-                TL = TL + Tlock;
-                TR = TR - Tlock;
-            else
-                TR = TR + Tlock;
-                TL = TL - Tlock;
-            end
-
-            % Enforce the maximum bias ratio on the now-guaranteed-non-negative
-            % torques. applyBiasRatio rescales the lesser (fast) side up to
-            % maxSide/biasRatio and pulls the excess from the slow side, which
-            % preserves TL + TR == totalWheelTorque exactly.
-            [TL, TR] = obj.applyBiasRatio(TL, TR);
-
-            out.TL = TL;
-            out.TR = TR;
+            out.TL = base + biasTorque;
+            out.TR = base - biasTorque;
             out.carrierOmega = 0.5 * (omegaL + omegaR);
+            out.lockTorqueDifference = 2 * biasMagnitude;
         end
 
         function locked = locksWheels(~)
@@ -111,36 +106,25 @@ classdef ClutchLSDDifferential < lts.components.Powertrain.DifferentialComponent
     end
 
     methods (Access = private)
-        function [TL, TR] = applyBiasRatio(obj, TL, TR)
-            % APPLYBIASRATIO Cap T_high / T_low at biasRatio, preserving total.
-            %   When the requested split exceeds the bias ratio, redistribute
-            %   to the maximum allowed split. For total torque T and bias
-            %   ratio b, the capped split is T_high = T*b/(b+1),
-            %   T_low = T/(b+1) (the closed-form solution of
-            %   T_high/T_low = b with T_high + T_low = T). The earlier
-            %   incremental rescale was wrong: it computed the floor from the
-            %   pre-transfer max side, so raising the low side and pulling
-            %   from the high side overshot and collapsed the bias.
-            if ~isfinite(obj.biasRatio) || obj.biasRatio <= 0
+        function magnitude = boundedBiasMagnitude(obj, capacity, dw, wheelInertia, dt)
+            if abs(dw) <= eps || capacity <= 0
+                magnitude = 0;
                 return;
             end
-            total = TL + TR;
-            if total <= eps
-                return;
-            end
-            ratio = max(TL, TR) / max(min(TL, TR), eps);
-            if ratio <= obj.biasRatio
-                return;   % within the allowed bias
-            end
-            b = obj.biasRatio;
-            highSide = total * b / (b + 1);
-            lowSide  = total / (b + 1);
-            if TL >= TR
-                TL = highSide;
-                TR = lowSide;
-            else
-                TR = highSide;
-                TL = lowSide;
+
+            magnitude = capacity;
+            if isfinite(wheelInertia) && wheelInertia > 0 && ...
+                    isfinite(dt) && dt > 0
+                damping = obj.relativeSpeedDamping;
+                if ~isfinite(damping)
+                    damping = 0.5;
+                end
+                damping = lts.util.clamp(damping, 0, 0.95);
+                % Equal-and-opposite bias B changes relative acceleration by
+                % 2B/I. This impulse cap limits the one-evaluation correction
+                % to damping*|dw| and keeps fixed-point iteration contractive.
+                impulseCapacity = 0.5 * damping * wheelInertia * abs(dw) / dt;
+                magnitude = min(magnitude, impulseCapacity);
             end
         end
     end

@@ -84,7 +84,7 @@ classdef VehicleConfig
             %   tireSpringRate  [N/m] vertical tire stiffness (quarter-car)
             %   geometry: suspension/steering kinematics (per-axle curves +
             %             steering model), see the geometry block below
-            %   frontArb/rearArb: stiffness [N/m at bar end], motionRatio,
+            %   frontArb/rearArb: torsional stiffness [N*m/rad], motionRatio,
             %                     leverArm [m], enabled
             %   rollStiffnessOverride: NaN = derive from springs+ARBs, else [0-1]
             %   coupleChassisRollToLoadTransfer: opt-in twist coupling
@@ -120,7 +120,7 @@ classdef VehicleConfig
             %     kingpinInclination [rad] positive when steering-axis top leans inward
             %     kingpinOffset [m] alias/fallback for scrubRadius when scrub is omitted
             %   Steering model: steerInput is treated as a road-wheel angle.
-            %     ackermann: 0 = parallel steer, 1 = ideal Ackermann.
+            %     ackermann: 0 = parallel, 1 = ideal, >1 = over-Ackermann.
             %   (Vehicle-level wheelbase/track/weight are pulled from the
             %    lts.vehicle.VehicleManager at construction, not duplicated here.)
             obj.suspension.geometry = struct( ...
@@ -194,8 +194,14 @@ classdef VehicleConfig
             %     finalDriveRatio [ratio] optional override for the map FDR
             %     efficiency [0-1] motoring drivetrain efficiency
             %       (gearbox + bearings, or correlation scalar)
+            %     efficiencyRpm / efficiencyValues optional equal-length
+            %       vectors defining a bounded RPM-dependent motoring curve;
+            %       empty vectors preserve the scalar efficiency
             %     regenEfficiency [0-1] optional direct-mode regen drivetrain
             %       efficiency; NaN uses efficiency
+            %     deliveredTorqueDrivetrainEfficiency [0-1] mechanical-only
+            %       loss from measured motor shaft torque to the driven axle;
+            %       NaN uses efficiency for backward compatibility
             %     motorRotorInertia [kg*m^2] motor rotor inertia, reflected as
             %       I*ratio^2 onto the driven (rear) wheels (default 0.07).
             %     regenEnabled (false) opt-in regenerative braking at off-throttle
@@ -219,7 +225,10 @@ classdef VehicleConfig
                 'matFile', '', ...
                 'finalDriveRatio', NaN, ...
                 'efficiency', 0.92, ...
+                'efficiencyRpm', [], ...
+                'efficiencyValues', [], ...
                 'regenEfficiency', NaN, ...
+                'deliveredTorqueDrivetrainEfficiency', NaN, ...
                 'motorRotorInertia', 0.07, ...
                 'regenEnabled', false, ...
                 'motoringDragTorque', 0, ...
@@ -233,17 +242,21 @@ classdef VehicleConfig
 
             % --- Tire ---
             %   Pacejka Magic Formula (MF 6.1) via MFeval. Grip is set entirely
-            %   by the tire data (its peak mu with load sensitivity); there is
-            %   no separate surface-friction cap, so the driver and the tire
-            %   model agree on grip at the dry reference surface.
-            %   surfaceMuReference is the track Mu value that maps to the
-            %   unscaled tire data; procedural dry tracks use Mu = 1.2.
+            %   by the tire data (including its load sensitivity). Track
+            %   surface-friction scaling is intentionally unsupported.
+            %   surfaceMuReference is retained only for legacy compatibility
+            %   and has no effect; its canonical value is 1.
             %   tirFile lives in +Tire/.
             %     tirFile:  Pacejka .tir filename in +Tire/
             %     wheelInertia [kg*m^2] wheel+tire+brake rotating inertia/corner
-            %     relaxationLength [m] contact-patch slip lag (0 = steady-state)
+            %     relaxationLength [m] lateral contact-patch slip lag
+            %       (0 = steady-state)
+            %     longitudinalRelaxationLength [m] longitudinal slip-ratio
+            %       lag; NaN uses relaxationLength for backward compatibility
             %     lateralStiffnessScale [-] multiplier on tire slip angle for
             %       correlation sensitivity (1 preserves raw tire file)
+            %     lateralStiffnessScaleByCorner [-] optional [FL FR RL RR]
+            %       multipliers applied after lateralStiffnessScale
             %     wheelRadius [m] effective rolling radius
             %     rollingResistanceCoeff [-] Crr; per-wheel resistance torque
             %       T_rr = Crr*Fz*R (0 disables coast-down drag)
@@ -253,22 +266,31 @@ classdef VehicleConfig
                 'tirFile', '43105_18x7.5_10_R25B_7.tir', ...
                 'wheelInertia', 0.5, ...
                 'relaxationLength', 0.30, ...
+                'longitudinalRelaxationLength', NaN, ...
                 'lateralStiffnessScale', 1.0, ...
-                'surfaceMuReference', 1.2, ...
+                'lateralStiffnessScaleByCorner', [1 1 1 1], ...
+                'surfaceMuReference', 1.0, ...
                 'wheelRadius', 0.241935, ...
                 'rollingResistanceCoeff', 0.015, ...
                 'bearingDragCoeff', 0);
 
             % --- Correlation replay ---
             % Scenario-level overrides used only by lts.app.run_correlation.
-            % NaN preserves the track/default representative surface mu.
+            % surfaceMu is retained for compatibility and has no physics effect.
             % initialTransientWindowS = 0 uses the first logged sample;
-            % positive values median transient seed signals over that many seconds.
+            % positive values fit a local boundary trend over that many seconds.
+            % Steering calibration is identity by default. A center gain other
+            % than one applies an odd quadratic transfer curve that remains
+            % exact at steeringCalibrationEndAngleRad.
             obj.correlation = struct( ...
-                'surfaceMu', NaN, ...
+                'surfaceMu', 1.0, ...
                 'useLoggedYawRate', true, ...
                 'useLoggedTransientState', true, ...
-                'initialTransientWindowS', 0);
+                'initialTransientWindowS', 0, ...
+                'steeringCenterGain', 1.0, ...
+                'steeringCenterOffsetRad', 0, ...
+                'steeringCalibrationEndAngleRad', deg2rad(22), ...
+                'steeringDelayS', 0);
         end
     end
 end

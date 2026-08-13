@@ -9,6 +9,12 @@ function metrics = plot_correlation_position_overlay(replayCsv, simCsv, outputPn
 %   metrics = plot_correlation_position_overlay(..., 'RawTimeOffsetS', dt)
 %   compares sim time zero against raw GPS time dt. This is useful when fast
 %   logged controls appear time-advanced relative to GPS position/course.
+%
+%   metrics = plot_correlation_position_overlay(..., 'MaxSimTimeS', tEnd)
+%   caps the overlay at sim time tEnd (seconds). Only sim samples with
+%   Time <= tEnd are used for the path overlay, error traces, and metrics.
+%   Useful for focusing on the launch/initial-correlation window. Leave unset
+%   (default Inf) to plot the full run.
 
 arguments
     replayCsv (1, 1) string
@@ -16,6 +22,7 @@ arguments
     outputPng (1, 1) string = "exports/correlation_position_overlay.png"
     options.RawTimeOffsetS (1, 1) double = 0
     options.InitialHeadingMode (1, 1) string = "gps_course"
+    options.MaxSimTimeS (1, 1) double = Inf
 end
 
 raw = readtable(replayCsv, 'VariableNamingRule', 'preserve');
@@ -82,6 +89,22 @@ if numel(simTime) < 2
         "Simulation CSV must contain at least two finite X/Y samples.");
 end
 
+maxSimTimeS = options.MaxSimTimeS;
+if isfinite(maxSimTimeS) && maxSimTimeS <= simTime(1)
+    error("plot_correlation_position_overlay:InvalidMaxSimTime", ...
+        "MaxSimTimeS must be greater than the first sim time (%.3f s).", ...
+        simTime(1));
+end
+timeCapMask = simTime <= maxSimTimeS;
+if nnz(timeCapMask) < 2
+    error("plot_correlation_position_overlay:InvalidMaxSimTime", ...
+        "MaxSimTimeS (%.3f s) leaves fewer than two sim samples; increase it.", ...
+        maxSimTimeS);
+end
+simTime = simTime(timeCapMask);
+simX = simX(timeCapMask);
+simY = simY(timeCapMask);
+
 simX = simX - simX(1);
 simY = simY - simY(1);
 simEast = simX .* cos(initialCourse) - simY .* sin(initialCourse);
@@ -102,6 +125,7 @@ metrics.simCsv = char(simCsv);
 metrics.initialCourseDeg = rad2deg(initialCourse);
 metrics.initialHeadingMode = char(initialHeadingMode);
 metrics.rawTimeOffsetS = rawTimeOffsetS;
+metrics.maxSimTimeS = maxSimTimeS;
 metrics.sampleCount = nnz(validErr);
 metrics.positionRmseM = sqrt(mean(posErrMag(validErr).^2));
 metrics.positionMeanM = mean(posErrMag(validErr));
@@ -136,8 +160,12 @@ axis(axPath, 'tight');
 grid(axPath, 'on');
 xlabel(axPath, 'East from aligned raw GPS start (m)');
 ylabel(axPath, 'North from aligned raw GPS start (m)');
-title(axPath, sprintf('Raw GPS vs simulation path | raw offset %.3f s | heading %.1f deg', ...
-    metrics.rawTimeOffsetS, metrics.initialCourseDeg));
+pathTitle = sprintf('Raw GPS vs simulation path | raw offset %.3f s | heading %.1f deg', ...
+    metrics.rawTimeOffsetS, metrics.initialCourseDeg);
+if isfinite(maxSimTimeS)
+    pathTitle = sprintf('%s | sim cap %.2f s', pathTitle, maxSimTimeS);
+end
+title(axPath, pathTitle);
 legend(axPath, 'Location', 'bestoutside');
 
 axErr = nexttile(layout);
@@ -193,6 +221,9 @@ fprintf('Position overlay written: %s\n', outputPng);
 fprintf('Initial heading: %.3f deg (%s)\n', ...
     metrics.initialCourseDeg, metrics.initialHeadingMode);
 fprintf('Raw GPS time offset: %.3f s\n', metrics.rawTimeOffsetS);
+if isfinite(maxSimTimeS)
+    fprintf('Sim time cap: %.3f s\n', maxSimTimeS);
+end
 fprintf('Samples: %d\n', metrics.sampleCount);
 fprintf('Position error RMSE: %.3f m | mean: %.3f m | max: %.3f m | final: %.3f m\n', ...
     metrics.positionRmseM, metrics.positionMeanM, metrics.positionMaxM, ...

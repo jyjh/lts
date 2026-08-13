@@ -85,8 +85,9 @@ classdef VehicleState
         refCurvature = 0
         lateralError = 0
         
-        % Current surface friction coefficient
-        mu          = 1.2
+        % Legacy surface telemetry. Surface-dependent tire-force scaling has
+        % been removed, so this value is always neutral unity.
+        mu          = 1
         
         % Elapsed simulation time [s]
         time        = 0
@@ -121,6 +122,7 @@ classdef VehicleState
             elseif specifiedHeading
                 obj.yaw = obj.heading;
             end
+            obj.mu = 1;
             obj.bodySlipAngle = obj.computeBodySlipAngle();
         end
         
@@ -132,7 +134,7 @@ classdef VehicleState
             %   dt         - time increment [s]
             %   curvature  - track curvature at new position [1/m]
             %   heading    - track heading at new position [rad]
-            %   mu         - surface friction at new position
+            %   mu         - deprecated compatibility input (ignored)
             
             obj.ax = ax;
             obj.ay = ay;
@@ -146,7 +148,7 @@ classdef VehicleState
             obj.curvature = curvature;
             obj.heading = heading;
             obj.yaw = heading;
-            obj.mu = mu;
+            obj.mu = 1;
             obj.refS = obj.s;
             obj.refHeading = heading;
             obj.refCurvature = curvature;
@@ -207,18 +209,64 @@ classdef VehicleState
             obj.refCurvature = refCurvature;
             obj.curvature = refCurvature;
             obj.lateralError = lateralError;
-            obj.mu = mu;
+            obj.mu = 1;
 
-            obj.pitchAngle = obj.computePitch();
-            obj.rollAngle = obj.computeRoll();
-            obj.rollRate = obj.computeRollRate();
-            obj.frontRollAngle = obj.computeFrontRoll();
-            obj.rearRollAngle  = obj.computeRearRoll();
-            obj.frontRollRate = obj.computeFrontRollRate();
-            obj.rearRollRate  = obj.computeRearRollRate();
-            obj.twistAngle     = obj.computeTwist();
-            obj.twistRate      = obj.computeTwistRate();
-            obj.rideHeight = obj.computeRideHeight();
+            % P3-A: Resolve vm/chassis once and read all attitude fields in a
+            % single branch instead of 10 separate method calls (each of which
+            % repeated the same isempty/isa type checks).
+            vm = obj.vehicleManager;
+            if ~isempty(vm) && ~isempty(vm.chassis) && ...
+                    isa(vm.chassis, 'lts.components.Chassis.ChassisComponent')
+                chassis = vm.chassis;
+                obj.pitchAngle = chassis.getPitchAngle();
+                obj.rollAngle  = chassis.getRollAngle();
+                obj.rideHeight = -chassis.getHeave();
+                % Roll rate / twist: available on SimpleChassis and any chassis
+                % that exposes getRollRate / getFrontRollAngle / getTwistAngle.
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getRollRate')
+                    obj.rollRate      = chassis.getRollRate();
+                    obj.frontRollRate = chassis.getFrontRollRate();
+                    obj.rearRollRate  = chassis.getRearRollRate();
+                else
+                    obj.rollRate      = 0;
+                    obj.frontRollRate = 0;
+                    obj.rearRollRate  = 0;
+                end
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getFrontRollAngle')
+                    obj.frontRollAngle = chassis.getFrontRollAngle();
+                    obj.rearRollAngle  = chassis.getRearRollAngle();
+                else
+                    obj.frontRollAngle = obj.rollAngle;
+                    obj.rearRollAngle  = obj.rollAngle;
+                end
+                if isa(chassis, 'lts.components.Chassis.SimpleChassis') || ...
+                        ismethod(chassis, 'getTwistAngle')
+                    obj.twistAngle = chassis.getTwistAngle();
+                    obj.twistRate  = chassis.getTwistRate();
+                else
+                    obj.twistAngle = obj.frontRollAngle - obj.rearRollAngle;
+                    obj.twistRate  = obj.frontRollRate  - obj.rearRollRate;
+                end
+            else
+                % No chassis: check suspension for pitch; zero everything else.
+                if ~isempty(vm) && ~isempty(vm.suspension) && ...
+                        ismethod(vm.suspension, 'computePitchAngle')
+                    obj.pitchAngle = vm.suspension.computePitchAngle();
+                else
+                    obj.pitchAngle = 0;
+                end
+                obj.rollAngle      = 0;
+                obj.rollRate       = 0;
+                obj.frontRollAngle = 0;
+                obj.rearRollAngle  = 0;
+                obj.frontRollRate  = 0;
+                obj.rearRollRate   = 0;
+                obj.twistAngle     = 0;
+                obj.twistRate      = 0;
+                obj.rideHeight     = 0;
+            end
             obj.time = obj.time + dt;
         end
         

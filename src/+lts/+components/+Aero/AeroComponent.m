@@ -67,14 +67,14 @@ classdef (Abstract) AeroComponent
 
         function forces = computeForces(obj, vehicleState)
             % COMPUTEFORCES Resolve this aero model to simulator force outputs
-            %   forces.Fz_front, .Fz_rear, .F_drag, .dragHeight
+            %   forces.Fz_front, .Fz_rear, .F_drag, .dragHeight,
+            %   .dragXPosition
             %
             % A single component is split between front and rear axles by
             % moment balance. AeroManager overrides this for multiple
             % components, but exposes the same simulator-facing contract.
 
             wb = vehicleState.vehicleManager.wheelbase;
-            cgHeight = vehicleState.vehicleManager.cgHeight;
             frontWeightFrac = vehicleState.vehicleManager.staticFrontWeight;
 
             b = wb * frontWeightFrac;  % CG to rear axle [m]
@@ -88,15 +88,22 @@ classdef (Abstract) AeroComponent
             end
 
             frontFrac = (b + xi) / wb;
-            frontFrac = lts.util.saturate(frontFrac);
 
             forces.Fz_front = F_downforce * frontFrac;
             forces.Fz_rear = F_downforce * (1 - frontFrac);
             forces.F_drag = F_drag;
             if F_drag > 0
-                forces.dragHeight = zi - cgHeight;
+                % Simulator-facing drag-center contract:
+                %   dragHeight    is absolute height above ground [m]
+                %   dragXPosition is longitudinal position from CG [m]
+                % Keeping the height absolute lets the chassis form either
+                % a ground-force moment or an explicit CG-relative moment
+                % without silently mixing the two reference datums.
+                forces.dragHeight = zi;
+                forces.dragXPosition = xi;
             else
                 forces.dragHeight = 0;
+                forces.dragXPosition = 0;
             end
         end
     end

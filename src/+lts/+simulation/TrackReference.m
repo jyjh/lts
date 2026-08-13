@@ -38,32 +38,32 @@ classdef TrackReference
             curvature = curvature(:);
             mu = mu(:);
             heading = heading(:);
-            if lapCount <= 1
-                return;
-            end
+            lapCount = max(1, round(lapCount));
 
             basePoints = points;
             baseCurvature = curvature;
             baseMu = mu;
             baseHeading = heading;
-            repeatStartIdx = 1;
             hasClosurePoint = norm(basePoints(1, :) - basePoints(end, :)) <= 0.05;
-            if hasClosurePoint
-                repeatStartIdx = 2;
+            if ~hasClosurePoint
+                % Track preprocessing removes a duplicate endpoint. Restore
+                % it here so the final-to-initial segment is simulated even
+                % for a single requested lap.
+                basePoints = [basePoints; basePoints(1, :)];
+                baseCurvature = [baseCurvature; baseCurvature(1)];
+                baseMu = [baseMu; baseMu(1)];
+                baseHeading = [baseHeading; baseHeading(1)];
             end
 
+            points = basePoints;
+            curvature = baseCurvature;
+            mu = baseMu;
+            heading = baseHeading;
             for lapIdx = 2:lapCount %#ok<NASGU>
-                points = [points; basePoints(repeatStartIdx:end, :)]; %#ok<AGROW>
-                curvature = [curvature; baseCurvature(repeatStartIdx:end)]; %#ok<AGROW>
-                mu = [mu; baseMu(repeatStartIdx:end)]; %#ok<AGROW>
-                heading = [heading; baseHeading(repeatStartIdx:end)]; %#ok<AGROW>
-            end
-
-            if lapCount > 1 && ~hasClosurePoint
-                points = [points; basePoints(1, :)]; %#ok<AGROW>
-                curvature = [curvature; baseCurvature(1)]; %#ok<AGROW>
-                mu = [mu; baseMu(1)]; %#ok<AGROW>
-                heading = [heading; baseHeading(1)]; %#ok<AGROW>
+                points = [points; basePoints(2:end, :)]; %#ok<AGROW>
+                curvature = [curvature; baseCurvature(2:end)]; %#ok<AGROW>
+                mu = [mu; baseMu(2:end)]; %#ok<AGROW>
+                heading = [heading; baseHeading(2:end)]; %#ok<AGROW>
             end
         end
 

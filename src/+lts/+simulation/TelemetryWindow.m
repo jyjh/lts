@@ -4,12 +4,15 @@ classdef TelemetryWindow
     methods (Static)
         function [stateLog, lapTime, recordedSteps] = apply(stateLog, recordStartS, recordEndS)
             if isempty(stateLog.time)
-                lapTime = 0;
+                lapTime = NaN;
                 recordedSteps = 0;
                 return;
             end
 
             trimDiagnostics = lts.simulation.TelemetryWindow.trimDiagnostics(stateLog);
+            completionTolerance = max(1e-6, 1e-9 * max(abs(recordEndS), 1));
+            completedWindow = isfinite(trimDiagnostics.maxS) && ...
+                trimDiagnostics.maxS >= recordEndS - completionTolerance;
             keep = stateLog.s >= recordStartS - 1e-9 & ...
                 stateLog.s <= recordEndS + 1e-9;
             fields = fieldnames(stateLog);
@@ -30,7 +33,7 @@ classdef TelemetryWindow
                     trimDiagnostics.finalSpeedKmh, ...
                     trimDiagnostics.finalLateralError, ...
                     trimDiagnostics.minTrackMargin);
-                lapTime = 0;
+                lapTime = NaN;
                 return;
             end
 
@@ -49,7 +52,16 @@ classdef TelemetryWindow
                 end
             end
 
-            lapTime = stateLog.time(end);
+            if completedWindow
+                lapTime = stateLog.time(end);
+            else
+                lapTime = NaN;
+                warning('lts_simulation_Simulator:IncompleteRecordedTelemetry', ...
+                    ['Simulation entered the recorded lap window but stopped before ' ...
+                    'its end (target %.1f m, max simulated s %.1f m). The partial ' ...
+                    'telemetry is retained, but no lap time is reported.'], ...
+                    recordEndS, trimDiagnostics.maxS);
+            end
         end
 
         function diagnostics = trimDiagnostics(stateLog)

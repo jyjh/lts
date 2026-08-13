@@ -4,7 +4,8 @@ classdef CorrelationReplayProfile
     % The normalized CSV contract is intentionally small and stable:
     % time_s, distance_m, throttle_ratio, brake_ratio,
     % brake_pressure_front_bar, brake_pressure_rear_bar, regen_torque_nm,
-    % motor_torque_command_nm, motor_rpm, pack_voltage_v, pack_current_a,
+    % motor_torque_command_nm, motor_torque_delivered_nm, motor_rpm,
+    % pack_voltage_v, pack_current_a,
     % steer_rad, speed_mps,
     % with optional yaw_rad, yaw_rate_radps, x_m, y_m, GPS/course,
     % measured acceleration channels, and per-corner wheel speeds.
@@ -19,6 +20,7 @@ classdef CorrelationReplayProfile
         brakePressureRearBar = []
         regenTorqueNm = []
         motorTorqueCommandNm = []
+        motorTorqueDeliveredNm = []
         motorRpm = []
         packVoltageV = []
         packCurrentA = []
@@ -69,6 +71,7 @@ classdef CorrelationReplayProfile
             parser.addParameter('BrakePressureRearBar', [], @isnumeric);
             parser.addParameter('RegenTorqueNm', [], @isnumeric);
             parser.addParameter('MotorTorqueCommandNm', [], @isnumeric);
+            parser.addParameter('MotorTorqueDeliveredNm', [], @isnumeric);
             parser.addParameter('MotorRpm', [], @isnumeric);
             parser.addParameter('PackVoltageV', [], @isnumeric);
             parser.addParameter('PackCurrentA', [], @isnumeric);
@@ -105,6 +108,7 @@ classdef CorrelationReplayProfile
             obj.brakePressureRearBar = parser.Results.BrakePressureRearBar(:);
             obj.regenTorqueNm = parser.Results.RegenTorqueNm(:);
             obj.motorTorqueCommandNm = parser.Results.MotorTorqueCommandNm(:);
+            obj.motorTorqueDeliveredNm = parser.Results.MotorTorqueDeliveredNm(:);
             obj.motorRpm = parser.Results.MotorRpm(:);
             obj.packVoltageV = parser.Results.PackVoltageV(:);
             obj.packCurrentA = parser.Results.PackCurrentA(:);
@@ -170,6 +174,14 @@ classdef CorrelationReplayProfile
                 'FR', obj.wheelSpeedFR(1), ...
                 'RL', obj.wheelSpeedRL(1), ...
                 'RR', obj.wheelSpeedRR(1));
+        end
+
+        function tf = hasWheelSpeeds(obj)
+            tf = any(isfinite([ ...
+                obj.wheelSpeedFL(:); ...
+                obj.wheelSpeedFR(:); ...
+                obj.wheelSpeedRL(:); ...
+                obj.wheelSpeedRR(:)]));
         end
 
         function tf = hasYaw(obj)
@@ -239,6 +251,134 @@ classdef CorrelationReplayProfile
             distance = obj.distance(end) - obj.distance(1);
         end
 
+        function out = window(obj, startTimeS, horizonS)
+            %WINDOW Extract an exact, time-rebased replay segment.
+            %   All public per-sample channels are interpolated onto a common
+            %   axis containing the requested boundaries. Distance is rebased
+            %   alongside time so the segment can be passed directly to the
+            %   existing replay driver and state initializer.
+            if ~isnumeric(startTimeS) || ~isscalar(startTimeS) || ...
+                    ~isfinite(startTimeS)
+                error('lts_correlation_CorrelationReplayProfile:InvalidWindowStart', ...
+                    'Window start must be a finite scalar in seconds.');
+            end
+            if ~isnumeric(horizonS) || ~isscalar(horizonS) || ...
+                    ~isfinite(horizonS) || horizonS <= 0
+                error('lts_correlation_CorrelationReplayProfile:InvalidWindowHorizon', ...
+                    'Window horizon must be a positive finite scalar in seconds.');
+            end
+
+            sourceStart = obj.time(1);
+            sourceEnd = obj.time(end);
+            startTimeS = double(startTimeS);
+            endTimeS = startTimeS + double(horizonS);
+            tolerance = 32 * eps(max(1, max(abs([sourceStart, sourceEnd]))));
+            if startTimeS < sourceStart - tolerance || ...
+                    endTimeS > sourceEnd + tolerance
+                error('lts_correlation_CorrelationReplayProfile:WindowOutsideProfile', ...
+                    ['Requested window [%.6g, %.6g] s is outside replay ' ...
+                    'range [%.6g, %.6g] s.'], ...
+                    startTimeS, endTimeS, sourceStart, sourceEnd);
+            end
+            startTimeS = max(sourceStart, startTimeS);
+            endTimeS = min(sourceEnd, endTimeS);
+
+            interior = obj.time(obj.time > startTimeS & obj.time < endTimeS);
+            queryTime = unique([startTimeS; interior(:); endTimeS], 'stable');
+            if numel(queryTime) < 2
+                error('lts_correlation_CorrelationReplayProfile:WindowTooShort', ...
+                    'Replay window must contain at least two samples.');
+            end
+
+            out = obj;
+            n = numel(obj.time);
+            channelNames = properties(obj);
+            for i = 1:numel(channelNames)
+                name = channelNames{i};
+                values = obj.(name);
+                if isnumeric(values) && isvector(values) && numel(values) == n
+                    out.(name) = obj.interpolateWindowChannel(values(:), queryTime);
+                end
+            end
+            out.time = queryTime - queryTime(1);
+            if ~isempty(out.distance)
+                firstDistance = out.distance(1);
+                if isfinite(firstDistance)
+                    out.distance = out.distance - firstDistance;
+                end
+            end
+            out = out.buildSampleCaches();
+        end
+
+        function [obj, report] = withGpsKinematics(obj, varargin)
+            %WITHGPSKINEMATICS Make GPS position the body-motion authority.
+            % Position is converted to a local east/north frame. Smoothed
+            % derivatives provide vehicle speed and body-frame acceleration;
+            % wheel-speed and axle accelerometer channels remain untouched.
+            parser = inputParser;
+            parser.addParameter('SmoothingWindowS', 0.35, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0);
+            parser.addParameter('MinimumSpeedMps', 1.0, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.parse(varargin{:});
+            report = struct('status', "unavailable", 'sampleCount', 0, ...
+                'smoothingWindowS', double(parser.Results.SmoothingWindowS));
+
+            valid = isfinite(obj.time) & isfinite(obj.gpsLat) & isfinite(obj.gpsLon);
+            if nnz(valid) < 5
+                return;
+            end
+            latitude = obj.interpolateFinite(obj.gpsLat);
+            longitude = obj.interpolateFinite(obj.gpsLon);
+            origin = find(isfinite(latitude) & isfinite(longitude), 1, 'first');
+            if isempty(origin)
+                return;
+            end
+            earthRadiusM = 6371008.8;
+            lat0 = deg2rad(latitude(origin));
+            xEast = earthRadiusM .* deg2rad(longitude - longitude(origin)) .* cos(lat0);
+            yNorth = earthRadiusM .* deg2rad(latitude - latitude(origin));
+
+            dt = median(diff(obj.time(isfinite(obj.time) & [true; diff(obj.time) > 0])));
+            if ~isfinite(dt) || dt <= 0
+                return;
+            end
+            samples = max(3, round(parser.Results.SmoothingWindowS / dt));
+            if mod(samples, 2) == 0
+                samples = samples + 1;
+            end
+            % Preserve the measured GPS trace itself. Differentiate first,
+            % then smooth velocity/acceleration; smoothing position with a
+            % truncated endpoint window halves the initial speed.
+            dxdt = gradient(xEast) ./ gradient(obj.time);
+            dydt = gradient(yNorth) ./ gradient(obj.time);
+            dxdt = movmean(dxdt, samples, 'Endpoints', 'shrink');
+            dydt = movmean(dydt, samples, 'Endpoints', 'shrink');
+            speedGps = hypot(dxdt, dydt);
+            axEast = gradient(dxdt) ./ gradient(obj.time);
+            ayNorth = gradient(dydt) ./ gradient(obj.time);
+            axEast = movmean(axEast, samples, 'Endpoints', 'shrink');
+            ayNorth = movmean(ayNorth, samples, 'Endpoints', 'shrink');
+
+            moving = speedGps >= parser.Results.MinimumSpeedMps;
+            longAccel = nan(size(speedGps));
+            latAccel = nan(size(speedGps));
+            longAccel(moving) = (dxdt(moving) .* axEast(moving) + ...
+                dydt(moving) .* ayNorth(moving)) ./ speedGps(moving);
+            latAccel(moving) = (dxdt(moving) .* ayNorth(moving) - ...
+                dydt(moving) .* axEast(moving)) ./ speedGps(moving);
+
+            obj.x = xEast(:);
+            obj.y = yNorth(:);
+            obj.speed = max(0, speedGps(:));
+            obj.longAccelG = longAccel(:) ./ 9.80665;
+            obj.latAccelG = latAccel(:) ./ 9.80665;
+            obj.distance = cumtrapz(obj.time, obj.speed);
+            obj = obj.buildSampleCaches();
+            report.status = "applied";
+            report.sampleCount = nnz(isfinite(obj.speed));
+        end
+
         function obj = withPackPowerAdvance(obj, advanceS)
             if nargin < 2 || isempty(advanceS)
                 advanceS = 0;
@@ -257,6 +397,105 @@ classdef CorrelationReplayProfile
             obj.packVoltageV = obj.shiftTimeChannel(obj.packVoltageV, queryTime);
             obj.packCurrentA = obj.shiftTimeChannel(obj.packCurrentA, queryTime);
             obj = obj.buildSampleCaches();
+        end
+
+        function [obj, report] = withPowerConservingRegenRepair(obj, varargin)
+            % Replace delivered-torque samples that cannot produce measured
+            % pack charging power. Unity efficiency gives the smallest
+            % physically admissible shaft-regeneration magnitude.
+            parser = inputParser;
+            parser.addParameter('PackPowerAdvanceS', -0.015, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x));
+            parser.addParameter('MinimumChargingPowerW', 1000, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.addParameter('MinimumMotorSpeedRpm', 300, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.addParameter('RegenRequestThresholdNm', 5, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.addParameter('PowerToleranceW', 500, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
+            parser.addParameter('MaximumRegenEfficiency', 1, ...
+                @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x > 0 && x <= 1);
+            parser.addParameter('MaximumReconstructedTorqueNm', inf, ...
+                @(x) isnumeric(x) && isscalar(x) && x > 0);
+            parser.parse(varargin{:});
+            opts = parser.Results;
+
+            report = struct( ...
+                'status', "unavailable", ...
+                'repairedSampleCount', 0, ...
+                'signContradictionSampleCount', 0, ...
+                'powerDeficitSampleCount', 0, ...
+                'remainingPowerDeficitSampleCount', 0, ...
+                'maximumTorqueCorrectionNm', 0);
+            if ~obj.hasMotorTorqueDelivered() || ~obj.hasPackPower() || ...
+                    ~obj.hasMotorRpm() || ...
+                    (~obj.hasMotorTorqueCommand() && ~obj.hasRegenTorque())
+                return;
+            end
+
+            queryTime = obj.time + double(opts.PackPowerAdvanceS);
+            alignedVoltage = obj.shiftTimeChannel(obj.packVoltageV, queryTime);
+            alignedCurrent = obj.shiftTimeChannel(obj.packCurrentA, queryTime);
+            chargingPowerW = max(0, -alignedVoltage .* alignedCurrent);
+            motorRpm = abs(obj.motorRpm);
+            motorOmega = motorRpm * (2 * pi / 60);
+            measuredTorqueNm = obj.motorTorqueDeliveredNm;
+            measuredRegenPowerW = max(0, -measuredTorqueNm) .* motorOmega;
+            % The R25 regen channel is the available negative-torque limit,
+            % not the torque currently requested. Taking min(limit, command)
+            % falsely labels positive-torque transitions as regen. Prefer the
+            % signed motor command and use the regen channel only when that
+            % command is unavailable.
+            regenRequestNm = obj.motorTorqueCommandNm;
+            missingRequest = ~isfinite(regenRequestNm);
+            regenRequestNm(missingRequest) = ...
+                obj.regenTorqueNm(missingRequest);
+
+            active = isfinite(measuredTorqueNm) & isfinite(regenRequestNm) & ...
+                isfinite(chargingPowerW) & isfinite(motorOmega) & ...
+                regenRequestNm <= -double(opts.RegenRequestThresholdNm) & ...
+                chargingPowerW >= double(opts.MinimumChargingPowerW) & ...
+                motorRpm >= double(opts.MinimumMotorSpeedRpm);
+            signContradiction = active & measuredTorqueNm >= 0;
+            powerDeficit = active & chargingPowerW > ...
+                double(opts.MaximumRegenEfficiency) .* measuredRegenPowerW + ...
+                double(opts.PowerToleranceW);
+            repairMask = signContradiction | powerDeficit;
+
+            minimumTorqueNm = nan(size(measuredTorqueNm));
+            positiveSpeed = motorOmega > eps;
+            minimumTorqueNm(positiveSpeed) = ...
+                -chargingPowerW(positiveSpeed) ./ ...
+                (double(opts.MaximumRegenEfficiency) .* motorOmega(positiveSpeed));
+            if isfinite(opts.MaximumReconstructedTorqueNm)
+                minimumTorqueNm = max( ...
+                    minimumTorqueNm, -abs(double(opts.MaximumReconstructedTorqueNm)));
+            end
+
+            repairedTorqueNm = measuredTorqueNm;
+            repairedTorqueNm(repairMask) = min( ...
+                measuredTorqueNm(repairMask), minimumTorqueNm(repairMask));
+            obj.motorTorqueDeliveredNm = repairedTorqueNm;
+            obj = obj.buildSampleCaches();
+
+            remainingPowerDeficit = repairMask & chargingPowerW > ...
+                double(opts.MaximumRegenEfficiency) .* ...
+                max(0, -repairedTorqueNm) .* motorOmega + ...
+                double(opts.PowerToleranceW);
+            correctionNm = repairedTorqueNm - measuredTorqueNm;
+            report.status = "ok";
+            report.repairedSampleCount = nnz(repairMask);
+            report.signContradictionSampleCount = nnz(signContradiction);
+            report.powerDeficitSampleCount = nnz(powerDeficit);
+            report.remainingPowerDeficitSampleCount = nnz(remainingPowerDeficit);
+            if any(repairMask)
+                report.maximumTorqueCorrectionNm = ...
+                    max(abs(correctionNm(repairMask)));
+            end
+            report.packPowerAdvanceS = double(opts.PackPowerAdvanceS);
+            report.maximumRegenEfficiency = double(opts.MaximumRegenEfficiency);
+            report.powerToleranceW = double(opts.PowerToleranceW);
         end
 
         function obj = withMotorTorqueCommandDelay(obj, delayS)
@@ -278,6 +517,66 @@ classdef CorrelationReplayProfile
                 obj.motorTorqueCommandNm, queryTime);
             if obj.hasRegenTorque()
                 obj.regenTorqueNm = obj.shiftTimeChannel(obj.regenTorqueNm, queryTime);
+            end
+            obj = obj.buildSampleCaches();
+        end
+
+        function tf = hasMotorTorqueDelivered(obj)
+            tf = ~isempty(obj.motorTorqueDeliveredNm) && ...
+                any(isfinite(obj.motorTorqueDeliveredNm));
+        end
+
+        function obj = withSteeringCalibration( ...
+                obj, centerGain, endAngleRad, delayS, centerOffsetRad)
+            if nargin < 2 || isempty(centerGain)
+                centerGain = 1;
+            end
+            if nargin < 3 || isempty(endAngleRad)
+                endAngleRad = pi;
+            end
+            if nargin < 4 || isempty(delayS)
+                delayS = 0;
+            end
+            if nargin < 5 || isempty(centerOffsetRad)
+                centerOffsetRad = 0;
+            end
+            if ~isnumeric(centerGain) || ~isscalar(centerGain) || ...
+                    ~isfinite(centerGain) || centerGain < 0 || centerGain > 2
+                error('lts_correlation_CorrelationReplayProfile:InvalidSteeringCenterGain', ...
+                    'Steering center gain must be a finite scalar from 0 to 2.');
+            end
+            if ~isnumeric(endAngleRad) || ~isscalar(endAngleRad) || ...
+                    ~isfinite(endAngleRad) || endAngleRad <= 0
+                error('lts_correlation_CorrelationReplayProfile:InvalidSteeringCalibrationEndAngle', ...
+                    'Steering calibration end angle must be a positive finite scalar in radians.');
+            end
+            if ~isnumeric(delayS) || ~isscalar(delayS) || ...
+                    ~isfinite(delayS) || delayS < 0
+                error('lts_correlation_CorrelationReplayProfile:InvalidSteeringDelay', ...
+                    'Steering delay must be a nonnegative finite scalar in seconds.');
+            end
+            if ~isnumeric(centerOffsetRad) || ~isscalar(centerOffsetRad) || ...
+                    ~isfinite(centerOffsetRad)
+                error('lts_correlation_CorrelationReplayProfile:InvalidSteeringCenterOffset', ...
+                    'Steering center offset must be a finite scalar in radians.');
+            end
+
+            centerGain = double(centerGain);
+            endAngleRad = double(endAngleRad);
+            delayS = double(delayS);
+            centerOffsetRad = double(centerOffsetRad);
+            if centerGain ~= 1 || centerOffsetRad ~= 0
+                magnitude = abs(obj.steer);
+                fraction = min(magnitude ./ endAngleRad, 1);
+                correctedMagnitude = endAngleRad .* ( ...
+                    centerGain .* fraction + (1 - centerGain) .* fraction.^2);
+                corrected = sign(obj.steer) .* correctedMagnitude + ...
+                    centerOffsetRad .* (1 - fraction).^2;
+                corrected(magnitude > endAngleRad) = obj.steer(magnitude > endAngleRad);
+                obj.steer = corrected;
+            end
+            if delayS > 0
+                obj.steer = obj.shiftTimeChannel(obj.steer, obj.time - delayS);
             end
             obj = obj.buildSampleCaches();
         end
@@ -317,6 +616,8 @@ classdef CorrelationReplayProfile
                 obj.regenTorqueNm, n, NaN, 'regenTorqueNm');
             obj.motorTorqueCommandNm = obj.optionalColumn( ...
                 obj.motorTorqueCommandNm, n, NaN, 'motorTorqueCommandNm');
+            obj.motorTorqueDeliveredNm = obj.optionalColumn( ...
+                obj.motorTorqueDeliveredNm, n, NaN, 'motorTorqueDeliveredNm');
             obj.motorRpm = obj.optionalColumn( ...
                 obj.motorRpm, n, NaN, 'motorRpm');
             obj.packVoltageV = obj.optionalColumn( ...
@@ -411,6 +712,17 @@ classdef CorrelationReplayProfile
             end
             query = max(axis(1), min(axis(end), query));
 
+            % P4-A: Batch path — single interp1 call over all channels stored
+            % in a pre-built N×13 matrix. Replaces 12 individual griddedInterpolant
+            % calls (each with their own lookup overhead) with one vectorised op.
+            if ~isempty(cache.batchAxis)
+                q = max(cache.batchAxis(1), min(cache.batchAxis(end), query));
+                row = interp1(cache.batchAxis, cache.batchMatrix, q, 'linear', 'nearest');
+                input = obj.sampleRowToInput(row);
+                return;
+            end
+
+            % Fallback: per-channel lookup (used only when batch cache build failed).
             input = struct( ...
                 'throttle', obj.lookup(cache.throttle, query), ...
                 'brake', obj.lookup(cache.brake, query), ...
@@ -418,6 +730,7 @@ classdef CorrelationReplayProfile
                 'brakePressureRearBar', obj.lookup(cache.brakePressureRearBar, query), ...
                 'regenTorqueNm', obj.lookup(cache.regenTorqueNm, query), ...
                 'motorTorqueCommandNm', obj.lookup(cache.motorTorqueCommandNm, query), ...
+                'motorTorqueDeliveredNm', obj.lookup(cache.motorTorqueDeliveredNm, query), ...
                 'motorRpm', obj.lookup(cache.motorRpm, query), ...
                 'packVoltageV', obj.lookup(cache.packVoltageV, query), ...
                 'packCurrentA', obj.lookup(cache.packCurrentA, query), ...
@@ -443,6 +756,7 @@ classdef CorrelationReplayProfile
                 'brakePressureRearBar', obj.buildInterpCache(axis, obj.brakePressureRearBar), ...
                 'regenTorqueNm', obj.buildInterpCache(axis, obj.regenTorqueNm), ...
                 'motorTorqueCommandNm', obj.buildInterpCache(axis, obj.motorTorqueCommandNm), ...
+                'motorTorqueDeliveredNm', obj.buildInterpCache(axis, obj.motorTorqueDeliveredNm), ...
                 'motorRpm', obj.buildInterpCache(axis, obj.motorRpm), ...
                 'packVoltageV', obj.buildInterpCache(axis, obj.packVoltageV), ...
                 'packCurrentA', obj.buildInterpCache(axis, obj.packCurrentA), ...
@@ -450,6 +764,55 @@ classdef CorrelationReplayProfile
                 'speed', obj.buildInterpCache(axis, obj.speed), ...
                 'time', obj.buildInterpCache(axis, obj.time), ...
                 'distance', obj.buildInterpCache(axis, obj.distance));
+
+            % P4-A: Build a unified N×13 channel matrix so sampleAt() can use
+            % a single interp1 call instead of 12 individual griddedInterpolants.
+            % The matrix is evaluated on the interpolant axes already cleaned up
+            % by buildInterpCache, so it inherits the same NaN filtering and
+            % deduplication without repeating that work.
+            fields = obj.sampleFieldOrder();
+            cacheFields = {'throttle','brake','brakePressureFrontBar', ...
+                'brakePressureRearBar','regenTorqueNm','motorTorqueCommandNm', ...
+                'motorTorqueDeliveredNm', ...
+                'motorRpm','packVoltageV','packCurrentA','steer','speed', ...
+                'time','distance'};
+            batchAxis   = [];
+            batchMatrix = [];
+            try
+                % Use the axis from the first non-missing, non-scalar channel.
+                for fi = 1:numel(cacheFields)
+                    ch = cache.(cacheFields{fi});
+                    if ~ch.isMissing && ~ch.isScalar && numel(ch.axis) >= 2
+                        batchAxis = ch.axis(:);
+                        break;
+                    end
+                end
+                if numel(batchAxis) >= 2
+                    nPts   = numel(batchAxis);
+                    nCh    = numel(fields);
+                    batchMatrix = NaN(nPts, nCh);
+                    for fi = 1:nCh
+                        ch = cache.(cacheFields{fi});
+                        if ch.isMissing
+                            % Leave column as NaN (treated as missing by sampleRowToInput).
+                        elseif ch.isScalar
+                            batchMatrix(:, fi) = ch.values(1);
+                        else
+                            % Evaluate the already-built griddedInterpolant on
+                            % the common axis — this runs once at construction,
+                            % not once per simulation step.
+                            q = max(ch.axis(1), min(ch.axis(end), batchAxis));
+                            batchMatrix(:, fi) = ch.interpolant(q);
+                        end
+                    end
+                end
+            catch
+                % Non-fatal: fall back to per-channel lookup path.
+                batchAxis   = [];
+                batchMatrix = [];
+            end
+            cache.batchAxis   = batchAxis;
+            cache.batchMatrix = batchMatrix;
         end
 
         function cache = buildInterpCache(~, axis, values)
@@ -463,7 +826,9 @@ classdef CorrelationReplayProfile
             keep = isfinite(axis(:)) & isfinite(values);
             axis = axis(keep);
             values = values(keep);
-            [axis, ia] = unique(axis, 'stable');
+            % P1-D: unique('sorted') deduplicates and sorts in a single pass,
+            % replacing the previous unique('stable') + sort two-step sequence.
+            [axis, ia] = unique(axis, 'sorted');
             values = values(ia);
 
             if isempty(axis)
@@ -473,8 +838,6 @@ classdef CorrelationReplayProfile
                 cache = struct('axis', axis, 'values', values, ...
                     'interpolant', [], 'isMissing', false, 'isScalar', true);
             else
-                [axis, order] = sort(axis);
-                values = values(order);
                 interpolant = griddedInterpolant(axis, values, 'linear', 'nearest');
                 cache = struct('axis', axis, 'values', values, ...
                     'interpolant', interpolant, 'isMissing', false, 'isScalar', false);
@@ -567,20 +930,22 @@ classdef CorrelationReplayProfile
                 'brakePressureRearBar', row(4), ...
                 'regenTorqueNm', row(5), ...
                 'motorTorqueCommandNm', row(6), ...
-                'motorRpm', row(7), ...
-                'packVoltageV', row(8), ...
-                'packCurrentA', row(9), ...
-                'steer', row(10), ...
-                'targetSpeed', row(11), ...
+                'motorTorqueDeliveredNm', row(7), ...
+                'motorRpm', row(8), ...
+                'packVoltageV', row(9), ...
+                'packCurrentA', row(10), ...
+                'steer', row(11), ...
+                'targetSpeed', row(12), ...
                 'axRef', NaN, ...
-                'sourceTime', row(12), ...
-                'sourceDistance', row(13));
+                'sourceTime', row(13), ...
+                'sourceDistance', row(14));
         end
 
         function fields = sampleFieldOrder(~)
             fields = {'throttle', 'brake', ...
                 'brakePressureFrontBar', 'brakePressureRearBar', ...
-                'regenTorqueNm', 'motorTorqueCommandNm', 'motorRpm', ...
+                'regenTorqueNm', 'motorTorqueCommandNm', ...
+                'motorTorqueDeliveredNm', 'motorRpm', ...
                 'packVoltageV', 'packCurrentA', 'steer', 'speed', ...
                 'time', 'distance'};
         end
@@ -616,6 +981,35 @@ classdef CorrelationReplayProfile
                 queryTime = max(cache.axis(1), min(cache.axis(end), queryTime(:)));
                 values = cache.interpolant(queryTime);
             end
+        end
+
+        function values = interpolateWindowChannel(obj, sourceValues, queryTime)
+            valid = isfinite(obj.time) & isfinite(sourceValues);
+            if nnz(valid) >= 2
+                values = interp1(obj.time(valid), sourceValues(valid), ...
+                    queryTime, 'linear', NaN);
+            elseif nnz(valid) == 1
+                values = repmat(sourceValues(find(valid, 1)), size(queryTime));
+            else
+                values = nan(size(queryTime));
+            end
+            values = values(:);
+        end
+
+        function values = interpolateFinite(obj, sourceValues)
+            valid = isfinite(obj.time) & isfinite(sourceValues);
+            if nnz(valid) < 2
+                values = nan(size(obj.time));
+                return;
+            end
+            sourceTime = obj.time(valid);
+            sourceValues = sourceValues(valid);
+            [sourceTime, uniqueIndex] = unique(sourceTime, 'stable');
+            sourceValues = sourceValues(uniqueIndex);
+            values = interp1(sourceTime, sourceValues, obj.time, 'linear', NaN);
+            values(obj.time < sourceTime(1)) = sourceValues(1);
+            values(obj.time > sourceTime(end)) = sourceValues(end);
+            values = values(:);
         end
     end
 
@@ -664,6 +1058,9 @@ classdef CorrelationReplayProfile
                 {'motor_torque_command_nm', 'motor_torque_command', ...
                 'motorTorqueCommandNm', 'BAMOCAR Channels Calculated Cmd', ...
                 'BAMOCAR Calculated Cmd', 'Calculated Cmd'}, false, NaN), ...
+                'MotorTorqueDeliveredNm', readFcn( ...
+                {'motor_torque_delivered_nm', 'motorTorqueDeliveredNm', ...
+                'delivered_motor_torque_nm', 'BAMOCAR Delivered Torque'}, false, NaN), ...
                 'MotorRpm', readFcn( ...
                 {'motor_rpm', 'motorRpm', 'BAMOCAR Channels RPM', ...
                 'BAMOCAR RPM', 'Motor RPM', 'Inverter Motor RPM'}, false, NaN), ...

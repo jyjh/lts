@@ -46,7 +46,7 @@ classdef SuspensionGeometry
         % Steering model. steerInput is treated as road-wheel angle by
         % default to preserve current lts.driver.DriverModel behavior.
         steeringRatio = 1.0
-        ackermann = 0.0                 % 0 = parallel steer, 1 = ideal Ackermann
+        ackermann = 0.0                 % 0 = parallel, 1 = ideal, >1 = over-Ackermann
         maxWheelSteerAngle = 0.6        % [rad]
         rearSteerRatio = 0.0
 
@@ -174,6 +174,49 @@ classdef SuspensionGeometry
     end
 
     methods (Access = private)
+        function wheelSteer = computeWheelSteer(obj, corner, steerInput)
+            % COMPUTEWHEELSTEER Convert driver road-wheel command to corner angle.
+            % Front steering blends parallel steer with ideal Ackermann:
+            % the inside wheel steers more than the outside wheel so both
+            % wheels point toward a common low-speed turn center.
+            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
+            if strcmp(axle, 'rear')
+                wheelSteer = obj.rearSteerRatio * steerInput;
+                wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+                return;
+            end
+
+            meanSteer = steerInput / max(obj.steeringRatio, eps);
+            meanSteer = lts.util.clamp(meanSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+            if abs(meanSteer) < eps || obj.ackermann <= 0
+                wheelSteer = meanSteer;
+                return;
+            end
+
+            turnSign = sign(meanSteer);
+            absSteer = abs(meanSteer);
+            turnRadius = obj.wheelbase / max(tan(absSteer), eps);
+            halfTrack = obj.trackWidth / 2;
+
+            idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
+            idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
+            ackermannBlend = max(obj.ackermann, 0);
+            if ~isfinite(ackermannBlend)
+                ackermannBlend = 0;
+            end
+
+            isLeftSide = strcmp(upper(corner), 'FL');
+            isInside = (turnSign > 0 && isLeftSide) || (turnSign < 0 && ~isLeftSide);
+            if isInside
+                target = idealInner;
+            else
+                target = idealOuter;
+            end
+
+            wheelSteer = turnSign * (absSteer + ackermannBlend * (target - absSteer));
+            wheelSteer = lts.util.clamp(wheelSteer, -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
+        end
+
         function wheelSteer = computeWheelSteerFast(obj, isFront, isLeft, steerInput)
             if ~isFront
                 wheelSteer = obj.rearSteerRatio * steerInput;
@@ -197,7 +240,10 @@ classdef SuspensionGeometry
 
             idealInner = atan(obj.wheelbase / max(turnRadius - halfTrack, eps));
             idealOuter = atan(obj.wheelbase / (turnRadius + halfTrack));
-            ackermannBlend = lts.util.saturate(obj.ackermann);
+            ackermannBlend = max(obj.ackermann, 0);
+            if ~isfinite(ackermannBlend)
+                ackermannBlend = 0;
+            end
 
             isInside = (turnSign > 0 && isLeft) || (turnSign < 0 && ~isLeft);
             if isInside
@@ -347,6 +393,14 @@ classdef SuspensionGeometry
             end
             frac = (query - grid(idx0)) / dx;
             value = curve(idx0) + frac * (curve(idx0 + 1) - curve(idx0));
+        end
+
+        function axle = getAxle(corner)
+            if startsWith(upper(corner), 'F')
+                axle = 'front';
+            else
+                axle = 'rear';
+            end
         end
 
     end

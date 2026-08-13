@@ -183,6 +183,56 @@ verifyEqual(testCase, forces.coastdownTorqueTotal, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
+function testDeliveredMotorTorqueModeUsesShaftTorqueWithoutRequestLimits(testCase)
+[vehicle, tire, powertrain] = directTorqueVehicle();
+vehicle.powertrain.totalRatio = 3.4;
+vehicle.powertrain.efficiency = 0.97;
+vehicle.powertrain.rpmLimitRPM = 1000;
+powertrain = vehicle.powertrain;
+
+speed = 20;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state.vehicleManager = vehicle;
+
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.powertrainMode = "motor_torque_delivered";
+simulator.limitMotorTorqueByPackPower = true;
+simulator.wheelSolveIterations = 1;
+ref = struct('heading', 0, 'x', 0, 'y', 0, 'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 100, ...
+    'motorTorqueDeliveredNm', 50, ...
+    'packVoltageV', 300, 'packCurrentA', 1);
+
+[~, forces] = simulator.step(state, input, ref);
+
+expectedWheelTorque = 50 * powertrain.totalRatio * powertrain.efficiency;
+verifyEqual(testCase, forces.motorTorqueRequested, 100, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.motorTorque, 50, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.driveTorqueTotal, expectedWheelTorque, 'AbsTol', 1e-12);
+verifyFalse(testCase, forces.motorTorquePowerLimitActive);
+verifyTrue(testCase, isnan(forces.motorTorquePowerLimitNm));
+verifyFalse(testCase, forces.rpmLimitActive);
+verifyEqual(testCase, forces.packPowerW, 300, 'AbsTol', 1e-12);
+end
+
+function testWheelIterationFeedsCarrierSpeedBackIntoPackTorqueCap(testCase)
+forcesOne = packLimitedMotoringStep(1);
+forcesTwo = packLimitedMotoringStep(2);
+
+% The first torque impulse raises carrier speed. The second fixed-point
+% candidate must therefore use the lower constant-power torque limit.
+verifyLessThan(testCase, forcesTwo.motorTorque, forcesOne.motorTorque);
+verifyEqual(testCase, forcesTwo.motorTorquePowerLimitNm, ...
+    forcesTwo.motorTorque, 'AbsTol', 1e-12);
+verifyEqual(testCase, forcesTwo.driveTorqueTotal, ...
+    forcesTwo.motorTorque * 3.4 * 0.9, 'AbsTol', 1e-12);
+end
+
 function testMotorTorqueCommandPowerCapUsesLoggedRpmBeforeSimulatedMotorSpeed(testCase)
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
@@ -463,15 +513,62 @@ verifyError(testCase, @() simulator.step(state, input, ref), ...
     'lts_simulation_Simulator:MissingMotorTorqueCommand');
 end
 
-function testSimulatorCachesPersistAcrossMethodCalls(testCase)
+function testSimulatorRejectsObsoleteNoChassisPath(testCase)
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+state = lts.simulation.VehicleState('speed', 1, 'vx', 1, ...
+    'yaw', 0, 'x', 0, 'y', 0);
+state.vehicleManager = vehicle;
+input = struct('throttle', 0, 'brake', 0, 'steer', 0);
+ref = struct('heading', 0, 'x', 0, 'y', 0);
 
-tf = simulator.hasChassis();
+verifyError(testCase, @() simulator.step(state, input, ref), ...
+    'lts_simulation_Simulator:ChassisRequired');
+end
 
-verifyFalse(testCase, tf);
-verifyFalse(testCase, isempty(simulator.cachedHasChassis));
-verifyEqual(testCase, simulator.cachedHasChassis, false);
+function testWheelIterationsDoNotMultiplyAppliedImpulse(testCase)
+dOmegaOne = zeroGripDrivenWheelDelta(1);
+dOmegaThree = zeroGripDrivenWheelDelta(3);
+
+verifyGreaterThan(testCase, dOmegaOne, 0);
+% Fixed-point corrections may change the converged contact force, but must
+% not scale angular impulse in proportion to the iteration count.
+verifyEqual(testCase, dOmegaThree, dOmegaOne, 'RelTol', 0.15);
+end
+
+function testTireAligningMomentsContributeToYawMoment(testCase)
+[vehicle, tire, ~] = directTorqueVehicle();
+tire.relaxationLength = 0;
+tire.rollingResistanceCoeff = 0;
+speed = 10;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 1, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2, 'steer', 0);
+state.vehicleManager = vehicle;
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+kin = simulator.getCornerKinematics(0);
+contact = simulator.computePlanarTireContactData(state, kin);
+load = vehicle.totalMass * 9.80665 / 4;
+loads = struct('FL', load, 'FR', load, 'RL', load, 'RR', load);
+
+tireData = simulator.updatePlanarTireForces( ...
+    state, loads, 0, true, 'steady', contact);
+states = {tire.FL, tire.FR, tire.RL, tire.RR};
+forceMoment = 0;
+aligningMoment = 0;
+for i = 1:4
+    fxBody = states{i}.Fx * contact.cosWheelHeading(i) - ...
+        states{i}.Fy * contact.sinWheelHeading(i);
+    fyBody = states{i}.Fx * contact.sinWheelHeading(i) + ...
+        states{i}.Fy * contact.cosWheelHeading(i);
+    forceMoment = forceMoment + contact.xPositions(i) * fyBody - ...
+        contact.yPositions(i) * fxBody;
+    aligningMoment = aligningMoment + states{i}.Mz;
+end
+
+verifyNotEqual(testCase, aligningMoment, 0);
+verifyEqual(testCase, tireData.yawMoment, forceMoment + aligningMoment, ...
+    'AbsTol', 1e-9);
 end
 
 function testWheelSolveDoesNotDoubleIntegrateOmegaAtDefaultIterations(testCase)
@@ -595,10 +692,19 @@ stateLog.rearRollRate = [0.08; 0.09];
 stateLog.twistRate = stateLog.frontRollRate - stateLog.rearRollRate;
 stateLog.replayRegenTorqueNm = [-5; -6];
 stateLog.replayMotorTorqueCommandNm = [10; -3];
+stateLog.replayMotorTorqueDeliveredNm = [8; -2];
 stateLog.replayMotorRpm = [1000; 1100];
 stateLog.replayPackVoltageV = [300; 301];
 stateLog.replayPackCurrentA = [12; -4];
 stateLog.replayPackPowerW = stateLog.replayPackVoltageV .* stateLog.replayPackCurrentA;
+stateLog.replayWheelSpeedFL = [10.1; 10.2];
+stateLog.replayWheelSpeedFR = [10.2; 10.3];
+stateLog.replayWheelSpeedRL = [NaN; NaN];
+stateLog.replayWheelSpeedRR = [10.3; 10.4];
+stateLog.wheelSpeedErrorFL = stateLog.tireSpeed_FL - stateLog.replayWheelSpeedFL;
+stateLog.wheelSpeedErrorFR = [-0.2; -0.3];
+stateLog.wheelSpeedErrorRL = [NaN; NaN];
+stateLog.wheelSpeedErrorRR = [-0.3; -0.4];
 stateLog.motorTorque = [8; -2];
 stateLog.motorTorqueRequested = [10; -3];
 stateLog.motorTorquePowerLimitNm = [8; -2];
@@ -629,10 +735,19 @@ verifyTrue(testCase, contains(header, 'Roll Rate Rear (deg/s)'));
 verifyTrue(testCase, contains(header, 'Chassis Twist Rate (deg/s)'));
 verifyTrue(testCase, contains(header, 'Replay Regen Torque (Nm)'));
 verifyTrue(testCase, contains(header, 'Replay Motor Torque Command (Nm)'));
+verifyTrue(testCase, contains(header, 'Replay Motor Torque Delivered (Nm)'));
 verifyTrue(testCase, contains(header, 'Replay Motor RPM (rpm)'));
 verifyTrue(testCase, contains(header, 'Replay Pack Voltage (V)'));
 verifyTrue(testCase, contains(header, 'Replay Pack Current (A)'));
 verifyTrue(testCase, contains(header, 'Replay Pack Power (W)'));
+verifyTrue(testCase, contains(header, 'Replay Wheel Speed Front Left (m/s)'));
+verifyTrue(testCase, contains(header, 'Replay Wheel Speed Front Right (m/s)'));
+verifyTrue(testCase, contains(header, 'Replay Wheel Speed Rear Left (m/s)'));
+verifyTrue(testCase, contains(header, 'Replay Wheel Speed Rear Right (m/s)'));
+verifyTrue(testCase, contains(header, 'Wheel Speed Error Front Left (m/s)'));
+verifyTrue(testCase, contains(header, 'Wheel Speed Error Front Right (m/s)'));
+verifyTrue(testCase, contains(header, 'Wheel Speed Error Rear Left (m/s)'));
+verifyTrue(testCase, contains(header, 'Wheel Speed Error Rear Right (m/s)'));
 verifyTrue(testCase, contains(header, 'Requested Motor Torque Command (Nm)'));
 verifyTrue(testCase, contains(header, 'Pack Power Motor Torque Limit (Nm)'));
 verifyTrue(testCase, contains(header, 'Pack Power Torque Limit Active (bool)'));
@@ -678,6 +793,133 @@ vehicle.staticFrontWeight = 0.5;
 vehicle.brakeBiasFront = 0.6;
 vehicle.brakeForceCoefficient = 0.7;
 vehicle.maxSpeed = 80;
+end
+
+function testPowertrainModeCacheTracksRuntimePolicyChanges(testCase)
+[vehicle, ~, ~] = directTorqueVehicle();
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+state = lts.simulation.VehicleState('speed', 10, 'vx', 10, 'vy', 0);
+
+simulator.powertrainMode = "throttle";
+[driveTorque, coastTorque] = simulator.computePowertrainTorques( ...
+    state, struct(), 0.5);
+verifyEqual(testCase, driveTorque, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, coastTorque, 0, 'AbsTol', 1e-12);
+
+simulator.powertrainMode = "motor_torque_command";
+input = struct('motorTorqueCommandNm', -20);
+[driveTorque, coastTorque] = simulator.computePowertrainTorques( ...
+    state, input, 0);
+verifyEqual(testCase, driveTorque, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, coastTorque, -20, 'AbsTol', 1e-12);
+end
+
+function testFullRunResetClearsComponentDynamics(testCase)
+[vehicle, tire, powertrain] = directTorqueVehicle();
+tire.FL.angularVelocity = 100;
+tire.RR.slipRatio = -0.8;
+tire.RR.Fx = -500;
+powertrain.state.updateFromDrivenWheels(100, 1);
+vehicle.chassis.state.pitchAngle = 0.2;
+
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.resetForSimulation();
+
+verifyEqual(testCase, tire.FL.angularVelocity, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.RR.slipRatio, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.RR.Fx, 0, 'AbsTol', 1e-12);
+verifyFalse(testCase, powertrain.state.motorSpeedInitialized);
+verifyEqual(testCase, vehicle.chassis.state.pitchAngle, 0, 'AbsTol', 1e-12);
+end
+
+function testLateralDragAtLongitudinalOffsetCreatesYawMoment(testCase)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.totalMass = 100;
+vehicle.yawInertia = 50;
+vehicle.wheelbase = 1.6;
+vehicle.staticFrontWeight = 0.5;
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+state = lts.simulation.VehicleState( ...
+    'speed', hypot(10, 10), 'vx', 10, 'vy', 10);
+tireData = struct('sumFxBody', 0, 'sumFyBody', 0, 'yawMoment', 0);
+aeroForces = struct('F_drag', 100, 'dragXPosition', 1);
+
+dynamics = simulator.computePlanarDynamics(state, tireData, aeroForces);
+
+expectedFy = -100 / sqrt(2);
+verifyEqual(testCase, dynamics.dragForceY, expectedFy, 'AbsTol', 1e-12);
+verifyEqual(testCase, dynamics.yawMoment, expectedFy, 'AbsTol', 1e-12);
+verifyEqual(testCase, dynamics.yawAccel, expectedFy / 50, 'AbsTol', 1e-12);
+end
+
+function testOutboardAeroCenterPreservesPitchMoment(testCase)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.wheelbase = 1.6;
+vehicle.staticFrontWeight = 0.5;
+vehicle.cgHeight = 0.3;
+vehicle.airDensity = 1.2;
+frontArm = vehicle.wheelbase * (1 - vehicle.staticFrontWeight);
+rearArm = vehicle.wheelbase * vehicle.staticFrontWeight;
+xPosition = frontArm + 0.2;
+aero = lts.components.Aero.WholeCarAero(xPosition, 0.3, 1, 0, 0);
+state = lts.simulation.VehicleState('speed', 10, 'vx', 10);
+state.vehicleManager = vehicle;
+
+forces = aero.computeForces(state);
+totalDownforce = aero.computeDownforce(state);
+
+verifyGreaterThan(testCase, forces.Fz_front, totalDownforce);
+verifyLessThan(testCase, forces.Fz_rear, 0);
+verifyEqual(testCase, forces.Fz_front + forces.Fz_rear, ...
+    totalDownforce, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.Fz_front * frontArm - ...
+    forces.Fz_rear * rearArm, totalDownforce * xPosition, 'AbsTol', 1e-12);
+end
+
+function dOmega = zeroGripDrivenWheelDelta(iterations)
+[vehicle, tire, ~] = directTorqueVehicle();
+% Isolate the applied driveline impulse with an unloaded contact patch.
+% Surface mu is deliberately not a force-scaling control anymore.
+vehicle.suspension.loadPerCorner = 0;
+tire.relaxationLength = 0;
+tire.rollingResistanceCoeff = 0;
+speed = 10;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1);
+state.vehicleManager = vehicle;
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.powertrainMode = "motor_torque_command";
+simulator.wheelSolveIterations = iterations;
+ref = struct('heading', 0, 'x', 0, 'y', 0, 's', 0, ...
+    'mu', 1, 'curvature', 0, 'referenceMode', 'free');
+input = struct('throttle', 0.5, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 50);
+omega0 = tire.RL.angularVelocity;
+
+simulator.step(state, input, ref);
+dOmega = tire.RL.angularVelocity - omega0;
+end
+
+function forces = packLimitedMotoringStep(iterations)
+[vehicle, tire, ~] = directTorqueVehicle();
+vehicle.powertrain.totalRatio = 3.4;
+vehicle.powertrain.efficiency = 0.9;
+speed = 10;
+initializeWheelSpeeds(tire, speed);
+state = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state.vehicleManager = vehicle;
+simulator = lts.simulation.Simulator(vehicle, [], 0.001);
+simulator.powertrainMode = "motor_torque_command";
+simulator.limitMotorTorqueByPackPower = true;
+simulator.wheelSolveIterations = iterations;
+ref = struct('heading', 0, 'x', 0, 'y', 0, 'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 100, 'packVoltageV', 300, 'packCurrentA', 5);
+
+[~, forces] = simulator.step(state, input, ref);
 end
 
 function initializeWheelSpeeds(tire, speed)

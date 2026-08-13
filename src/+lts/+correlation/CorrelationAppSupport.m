@@ -17,9 +17,15 @@ classdef CorrelationAppSupport
                     mode == "calculated_cmd" || mode == "calculated_command"
                 mode = "motor_torque_command";
             end
-            if mode ~= "throttle" && mode ~= "motor_torque_command"
+            if mode == "motor_iq" || mode == "measured_torque" || ...
+                    mode == "delivered_torque"
+                mode = "motor_torque_delivered";
+            end
+            if mode ~= "throttle" && mode ~= "motor_torque_command" && ...
+                    mode ~= "motor_torque_delivered"
                 error('run_correlation:InvalidPowertrainMode', ...
-                    'PowertrainMode must be "throttle" or "motor_torque_command".');
+                    ['PowertrainMode must be "throttle", "motor_torque_command", ' ...
+                    'or "motor_torque_delivered".']);
             end
         end
 
@@ -167,6 +173,9 @@ classdef CorrelationAppSupport
         end
 
         function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
+            % surfaceMu is a deprecated compatibility input. Correlation
+            % reporting follows the simulator's fixed unity-surface contract.
+            surfaceMu = 1.0;
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
@@ -269,18 +278,9 @@ classdef CorrelationAppSupport
             end
         end
 
-        function mu = vehicleCorrelationSurfaceMu(config)
-            mu = NaN;
-            correlation = lts.correlation.CorrelationAppSupport.vehicleCorrelationStruct(config);
-            if isempty(correlation) || ~isfield(correlation, 'surfaceMu')
-                return;
-            end
-
-            candidate = correlation.surfaceMu;
-            if isnumeric(candidate) && isscalar(candidate) && ...
-                    isfinite(candidate) && candidate > 0
-                mu = double(candidate);
-            end
+        function mu = vehicleCorrelationSurfaceMu(~)
+            % Deprecated compatibility query. Surface scaling was removed.
+            mu = 1.0;
         end
 
         function value = vehicleCorrelationFlag(config, fieldName, defaultValue)
@@ -348,6 +348,7 @@ classdef CorrelationAppSupport
             names = {'throttle_ratio', 'brake_ratio', ...
                 'brake_pressure_front_bar', 'brake_pressure_rear_bar', ...
                 'regen_torque_nm', 'motor_torque_command_nm', ...
+                'motor_torque_delivered_nm', ...
                 'motor_rpm', 'pack_voltage_v', 'pack_current_a', ...
                 'steer_rad', 'speed_mps', 'distance_m', 'yaw_rad', ...
                 'yaw_rate_radps', 'vx_mps', 'vy_mps', 'body_slip_rad'};
@@ -445,7 +446,21 @@ classdef CorrelationAppSupport
             if nargin < 3 || isempty(limitMotorTorqueByPackPower)
                 limitMotorTorqueByPackPower = false;
             end
+            if profile.hasMotorTorqueDelivered()
+                fprintf('Delivered motor torque range: %.3f to %.3f Nm\n', ...
+                    lts.util.minFinite(profile.motorTorqueDeliveredNm), ...
+                    lts.util.maxFinite(profile.motorTorqueDeliveredNm));
+            end
             powertrainMode = lts.correlation.CorrelationAppSupport.validatePowertrainMode(powertrainMode);
+            if powertrainMode == "motor_torque_delivered"
+                if ~profile.hasMotorTorqueDelivered()
+                    error('run_correlation:MissingMotorTorqueDeliveredChannel', ...
+                        ['PowertrainMode "motor_torque_delivered" requires ' ...
+                        'motor_torque_delivered_nm in the replay CSV. Re-extract the log ' ...
+                        'with the R25 channel map so BAMOCAR Iq is converted to shaft torque.']);
+                end
+                return;
+            end
             if powertrainMode ~= "motor_torque_command"
                 return;
             end

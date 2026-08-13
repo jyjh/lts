@@ -44,7 +44,8 @@ parser.addParameter('MassRangeKg', [180 280], @validateMassRange);
 parser.addParameter('MassStepKg', 0.5, @validatePositiveScalar);
 parser.addParameter('EnvelopeSlipAnglesDeg', 0:0.1:14, @validateSlipAngles);
 parser.addParameter('EnvelopeLoadsN', 100:10:2500, @validateNormalLoads);
-parser.addParameter('SurfaceMu', [], @validateSurfaceMu);
+% Retained as an ignored compatibility option; all surfaces are unity.
+parser.addParameter('SurfaceMu', 1.0, @validateSurfaceMu);
 parser.addParameter('TrackWidth', 1.21, @validatePositiveScalar);
 parser.addParameter('CgHeight', 0.256, @validateNonnegativeScalar);
 parser.addParameter('StaticFrontWeight', 0.5095, @validateUnitScalar);
@@ -80,10 +81,7 @@ if isempty(envelopeLoadsN)
 end
 
 tire = lts.components.Tire.PacejkaTire(tirFile);
-surfaceMu = opts.SurfaceMu;
-if isempty(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
+surfaceMu = 1.0;
 
 tireFilePath = tire.tireConstants.tirFilePath;
 envelope = buildTireEnvelope(tire, envelopeLoadsN, slipAnglesDeg, surfaceMu);
@@ -208,10 +206,9 @@ envelope = struct( ...
     'lateralForceN', Fy);
 end
 
-function Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, surfaceMu)
+function Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, ~)
 normalLoads = normalLoads(:);
 Fy = zeros(numel(normalLoads), numel(slipAnglesDeg));
-surfaceScale = tireSurfaceScale(tire, surfaceMu);
 active = normalLoads > 0;
 if ~any(active)
     return;
@@ -246,7 +243,7 @@ for startIdx = 1:maxRowsPerCall:nRows
     cleanups = onCleanup(@() warning(warnState));
     outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
     clear cleanups;
-    FyActive(idx) = -outputs(:, 2) * surfaceScale;
+    FyActive(idx) = -outputs(:, 2);
 end
 
 Fy(active, :) = FyActive;
@@ -523,13 +520,6 @@ if valueRange <= eps
 else
     values = (values - min(values)) / valueRange;
 end
-end
-
-function scale = tireSurfaceScale(tire, surfaceMu)
-if isempty(surfaceMu) || ~isfinite(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
-scale = max(surfaceMu, 0) / max(tire.surfaceMuReference, eps);
 end
 
 function out = curveLinearity(massKg, signal)

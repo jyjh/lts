@@ -37,8 +37,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         rearRollCenterLateral = 0
 
         % Anti-roll bars per axle, resolved from geometry at construction.
-        % Their wheel-rate stiffness is added to each axle's wheel-spring
-        % rate to derive the elastic load-transfer split.
+        % Their differential wheel-coupling rate is converted to an
+        % equivalent independent-corner rate (2*B_bar) when deriving axle
+        % roll stiffness and elastic load-transfer split.
         frontAntiRollBar = []
         rearAntiRollBar  = []
         frontAntiRollBarWheelRate = 0
@@ -101,8 +102,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   tireSpringRate      - Tire vertical stiffness [N/m] (shared)
             %   unsprungMass        - Per-corner unsprung mass [kg] (shared)
             %   geometry            - SuspensionGeometry object (optional)
-            %   frontAntiRollBarRate - Front anti-roll bar wheel rate [N/m] (optional)
-            %   rearAntiRollBarRate  - Rear anti-roll bar wheel rate [N/m] (optional)
+            %   frontAntiRollBarRate - Front ARB coupling rate B [N/m] (optional)
+            %   rearAntiRollBarRate  - Rear ARB coupling rate B [N/m] (optional)
             
             if nargin < 14 || isempty(geometry)
                 % Fallback when no geometry is supplied: a neutral kinematic
@@ -142,7 +143,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 obj.rearAntiRollBar = geometry.rearAntiRollBar;
             end
 
-            % Backward-compatible scalar ARB wheel rates (legacy call style):
+            % Backward-compatible scalar ARB coupling rates (legacy call style):
             % when supplied AND the geometry did not already provide a bar,
             % install a unit-ratio AntiRollBar whose wheel-rate stiffness
             % equals the scalar. Geometry-object ARBs take precedence.
@@ -447,7 +448,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             disp = chassis.state.cornerDisplacement;
             vel  = chassis.state.cornerVelocity;
 
-            % ARB coupling forces per axle (wheel-rate stiffness from the bar
+            % ARB coupling forces per axle (differential rate from the bar
             % objects, mirroring computeCornerLoads).
             arb = obj.getAntiRollBarForces();
 
@@ -470,14 +471,43 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             loads = obj.applyChassisGeometricTransfer(loads, chassis);
         end
 
+        function loads = initializeCornerLoadsFromChassis(obj, chassis, steer)
+            % INITIALIZECORNERLOADSFROMCHASSIS Put each unsprung mass and tire
+            % spring in equilibrium with an already-seeded chassis attitude.
+            if nargin < 3 || isempty(steer)
+                steer = 0;
+            end
+
+            chassis.computeCornerKinematics();
+            disp = chassis.state.cornerDisplacement;
+            vel = chassis.state.cornerVelocity;
+            arb = obj.getAntiRollBarForces();
+
+            obj.frontLeft.initializeCornerFromChassis( ...
+                obj.frontLeft.state, disp.FL, vel.FL, arb.FL);
+            obj.frontRight.initializeCornerFromChassis( ...
+                obj.frontRight.state, disp.FR, vel.FR, arb.FR);
+            obj.rearLeft.initializeCornerFromChassis( ...
+                obj.rearLeft.state, disp.RL, vel.RL, arb.RL);
+            obj.rearRight.initializeCornerFromChassis( ...
+                obj.rearRight.state, disp.RR, vel.RR, arb.RR);
+            obj.updateGeometry(steer);
+
+            loads.FL = obj.frontLeft.state.tireNormalForce;
+            loads.FR = obj.frontRight.state.tireNormalForce;
+            loads.RL = obj.rearLeft.state.tireNormalForce;
+            loads.RR = obj.rearRight.state.tireNormalForce;
+            loads = obj.applyChassisGeometricTransfer(loads, chassis);
+        end
+
         function frac = deriveFrontRollStiffnessFraction(obj)
             % DERIVEFRONTROLLSTIFFNESSFRACTION Front share [0-1] of the
             % elastic lateral load transfer, derived from actual per-axle
             % roll stiffness (wheel springs + anti-roll bars) rather than a
             % fixed magic scalar.
             %
-            %   KwF = front effective wheel rate + frontAntiRollBar.Kw_bar
-            %   KwR = rear effective wheel rate  + rearAntiRollBar.Kw_bar
+            %   KwF = mean front wheel rate + 2*frontAntiRollBar.B_bar
+            %   KwR = mean rear wheel rate  + 2*rearAntiRollBar.B_bar
             %   frac = KwF / (KwF + KwR)
             %
             % If rollStiffnessOverride is set (non-NaN) it is returned
@@ -517,18 +547,23 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         end
 
         function [KwF, KwR] = getAxleRollStiffness(obj)
-            % GETAXLEROLLSTIFFNESS Per-axle wheel-rate roll stiffness [N/m].
-            % Wheel springs + anti-roll bar, referenced to the wheel. Shared
-            % with the chassis roll model so the load-transfer split and the
-            % chassis roll stiffness use the same numbers.
-            KwSpringF = obj.fastEffectiveWheelRate(obj.frontLeft, obj.frontLeft.state);
-            KwSpringR = obj.fastEffectiveWheelRate(obj.rearLeft, obj.rearLeft.state);
-            KwF = KwSpringF + obj.frontAntiRollBarWheelRate;
-            KwR = KwSpringR + obj.rearAntiRollBarWheelRate;
+            % GETAXLEROLLSTIFFNESS Equivalent per-corner axle rate [N/m].
+            % The spring term is the mean of the current left/right tangent
+            % rates. An ARB rate B applies +/-B*(zR-zL), so it contributes
+            % 2*B to this equivalent rate. The chassis conversion Kw*t^2/2
+            % then exactly matches the corner-force roll moment B*t^2.
+            KwSpringF = 0.5 * ( ...
+                obj.fastEffectiveWheelRate(obj.frontLeft, obj.frontLeft.state) + ...
+                obj.fastEffectiveWheelRate(obj.frontRight, obj.frontRight.state));
+            KwSpringR = 0.5 * ( ...
+                obj.fastEffectiveWheelRate(obj.rearLeft, obj.rearLeft.state) + ...
+                obj.fastEffectiveWheelRate(obj.rearRight, obj.rearRight.state));
+            KwF = KwSpringF + 2 * obj.frontAntiRollBarWheelRate;
+            KwR = KwSpringR + 2 * obj.rearAntiRollBarWheelRate;
         end
 
         function kw = getAxleBarWheelRate(~, antiRollBar)
-            % GETAXLEBARWHEELRATE Wheel-rate roll stiffness of an axle's ARB.
+            % GETAXLEBARWHEELRATE Differential wheel-coupling rate of an ARB.
             kw = 0;
             if ~isempty(antiRollBar) && isa(antiRollBar, 'lts.components.Suspension.AntiRollBar')
                 kw = antiRollBar.getWheelRateStiffness();
@@ -537,8 +572,20 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
 
         function updateCornerGeometry(obj, cornerUnit, cornerName, steerInput)
             cornerState = cornerUnit.state;
-            wheelTravel = cornerState.damperPosition / max(cornerUnit.motionRatio, eps);
+            % sprungPosition and unsprungPosition are wheel-center-domain
+            % coordinates. Their difference is therefore already physical
+            % wheel travel; motion ratio has already entered the force law as
+            % MR^2 and must not be applied a second time here.
+            wheelTravel = cornerState.damperPosition;
             kin = obj.geometry.computeCornerKinematics(cornerName, wheelTravel, steerInput);
+
+            % Geometry tables return camber relative to the chassis. Rotate
+            % the wheel-top vector into the road frame so chassis roll is not
+            % silently omitted from the Magic Formula inclination input.
+            rollAngle = obj.readChassisRollAngle(cornerName);
+            wheelHeading = kin.steerAngle + kin.toeAngle;
+            kin.camberAngle = obj.applyChassisRollCamber( ...
+                kin.camberAngle, wheelHeading, cornerName, rollAngle);
 
             cornerState.wheelTravel = kin.wheelTravel;
             cornerState.camberAngle = kin.camberAngle;
@@ -595,10 +642,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
 
         function setAntiRollBarRates(obj, frontRate, rearRate)
             % SETANTIROLLBARRATES Configure front/rear anti-roll bars from a
-            %   wheel-rate stiffness [N/m].
-            %   The rates are interpreted as the bar's wheel-rate roll
-            %   stiffness (the same quantity getWheelRateStiffness returns),
-            %   so an AntiRollBar is built whose wheel rate equals the input.
+            %   differential wheel-coupling rate B [N/m] (the same quantity
+            %   getWheelRateStiffness returns).
             if nargin >= 2 && ~isempty(frontRate)
                 obj.frontAntiRollBar = obj.makeWheelRateBar(max(frontRate, 0));
                 obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
@@ -619,12 +664,9 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             motionRatio = max(motionRatio, eps);
             wheelRate = cornerUnit.springRate * motionRatio^2;
 
-            staticCompression = cornerState.staticSuspensionCompression;
-            if ~isfinite(staticCompression)
-                staticCompression = 0;
-            end
             if cornerUnit.bumpStopRate > 0 && ...
-                    staticCompression >= max(cornerUnit.bumpStopLength, 0) - 1e-12
+                    cornerState.damperPosition >= ...
+                    max(cornerUnit.bumpStopLength, 0) - 1e-12
                 wheelRate = wheelRate + cornerUnit.bumpStopRate;
             end
         end
@@ -686,17 +728,51 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         end
 
         function loads = applyChassisGeometricTransfer(obj, loads, chassis)
-            transfer = obj.readChassisGeometricTransfer(chassis);
+            geometricTransfer = obj.readChassisGeometricTransfer(chassis);
+            additionalTransfer = obj.readChassisAdditionalTransfer(chassis);
 
-            loads.FL = max(loads.FL - transfer.front, 0);
-            loads.FR = max(loads.FR + transfer.front, 0);
-            loads.RL = max(loads.RL - transfer.rear, 0);
-            loads.RR = max(loads.RR + transfer.rear, 0);
+            % Geometric transfer is an internal left/right redistribution.
+            % Bound it by the unloading wheel's available load so wheel lift
+            % cannot create net vertical force at an axle.
+            [loads.FL, loads.FR] = obj.transferAxleLoad( ...
+                loads.FL, loads.FR, geometricTransfer.front);
+            [loads.RL, loads.RR] = obj.transferAxleLoad( ...
+                loads.RL, loads.RR, geometricTransfer.rear);
+            [loads.FL, loads.FR] = obj.transferAxleLoad( ...
+                loads.FL, loads.FR, additionalTransfer.frontLateral);
+            [loads.RL, loads.RR] = obj.transferAxleLoad( ...
+                loads.RL, loads.RR, additionalTransfer.rearLateral);
+
+            % Positive longitudinal transfer unloads the front and loads the
+            % rear. Apply half at each side while preserving nonnegative loads.
+            [loads.FL, loads.RL] = obj.transferLongitudinalLoad( ...
+                loads.FL, loads.RL, additionalTransfer.longitudinal / 2);
+            [loads.FR, loads.RR] = obj.transferLongitudinalLoad( ...
+                loads.FR, loads.RR, additionalTransfer.longitudinal / 2);
 
             obj.frontLeft.state.tireNormalForce = loads.FL;
             obj.frontRight.state.tireNormalForce = loads.FR;
             obj.rearLeft.state.tireNormalForce = loads.RL;
             obj.rearRight.state.tireNormalForce = loads.RR;
+        end
+
+        function [leftLoad, rightLoad] = transferAxleLoad(~, leftLoad, rightLoad, requestedTransfer)
+            leftLoad = max(leftLoad, 0);
+            rightLoad = max(rightLoad, 0);
+            actualTransfer = lts.util.clamp( ...
+                requestedTransfer, -rightLoad, leftLoad);
+            leftLoad = leftLoad - actualTransfer;
+            rightLoad = rightLoad + actualTransfer;
+        end
+
+        function [frontLoad, rearLoad] = transferLongitudinalLoad(~, ...
+                frontLoad, rearLoad, requestedTransfer)
+            frontLoad = max(frontLoad, 0);
+            rearLoad = max(rearLoad, 0);
+            actualTransfer = lts.util.clamp( ...
+                requestedTransfer, -rearLoad, frontLoad);
+            frontLoad = frontLoad - actualTransfer;
+            rearLoad = rearLoad + actualTransfer;
         end
 
         function transfer = readChassisGeometricTransfer(~, chassis)
@@ -720,6 +796,31 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             end
         end
 
+        function transfer = readChassisAdditionalTransfer(~, chassis)
+            transfer = struct('longitudinal', 0, ...
+                'frontLateral', 0, 'rearLateral', 0);
+            if isempty(chassis) || ~isprop(chassis, 'state') || isempty(chassis.state)
+                return;
+            end
+
+            state = chassis.state;
+            if isprop(state, 'additionalLongitudinalLoadTransfer')
+                transfer.longitudinal = state.additionalLongitudinalLoadTransfer;
+            end
+            if isprop(state, 'frontAdditionalLateralLoadTransfer')
+                transfer.frontLateral = state.frontAdditionalLateralLoadTransfer;
+            end
+            if isprop(state, 'rearAdditionalLateralLoadTransfer')
+                transfer.rearLateral = state.rearAdditionalLateralLoadTransfer;
+            end
+            names = fieldnames(transfer);
+            for idx = 1:numel(names)
+                if ~isfinite(transfer.(names{idx}))
+                    transfer.(names{idx}) = 0;
+                end
+            end
+        end
+
         function value = scaledRollCenterLateral(obj, lateralAt1g, axleAy)
             value = lateralAt1g * axleAy / max(abs(obj.g), eps);
             if ~isfinite(value)
@@ -728,9 +829,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         end
 
         function bar = makeWheelRateBar(~, wheelRate)
-            % MAKEWHEELRATEBAR Build a unit-ratio ARB whose wheel-rate roll
-            % stiffness equals the requested value [N/m]. Used by
-            % setAntiRollBarRates so the input is interpreted as Kw_bar.
+            % MAKEWHEELRATEBAR Build a unit-ratio ARB whose differential
+            % wheel-coupling rate equals the requested value [N/m].
             wheelRate = max(0, wheelRate);
             if wheelRate <= 0
                 bar = lts.components.Suspension.AntiRollBar();
@@ -759,14 +859,70 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
 
         function wheelTravel = computeAntiRollBarTravel(~, cornerUnit)
             cornerState = cornerUnit.state;
-            motionRatio = cornerUnit.motionRatio;
-            if cornerState.motionRatioEffective > 0
-                motionRatio = cornerState.motionRatioEffective;
-            end
-            wheelTravel = cornerState.damperPosition / max(motionRatio, eps);
+            % damperPosition is the historical telemetry name for the
+            % wheel-domain relative suspension displacement. The ARB coupling
+            % rate is already referenced to wheel travel, so no motion-ratio
+            % conversion belongs here.
+            wheelTravel = cornerState.damperPosition;
             if ~isfinite(wheelTravel)
                 wheelTravel = 0;
             end
+        end
+
+        function rollAngle = readChassisRollAngle(obj, cornerName)
+            rollAngle = 0;
+            if isempty(obj.chassis) || ~isprop(obj.chassis, 'state') || ...
+                    isempty(obj.chassis.state)
+                return;
+            end
+
+            state = obj.chassis.state;
+            hasSplitRoll = isprop(state, 'frontRollAngle') && ...
+                isprop(state, 'rearRollAngle');
+            if hasSplitRoll
+                if startsWith(upper(cornerName), 'F')
+                    rollAngle = state.frontRollAngle;
+                else
+                    rollAngle = state.rearRollAngle;
+                end
+
+                % Preserve compatibility with initializers that populate
+                % only the legacy whole-car roll state.
+                if state.frontRollAngle == 0 && state.rearRollAngle == 0 && ...
+                        isprop(state, 'rollAngle') && state.rollAngle ~= 0
+                    rollAngle = state.rollAngle;
+                end
+            elseif isprop(state, 'rollAngle')
+                rollAngle = state.rollAngle;
+            end
+
+            if ~isfinite(rollAngle)
+                rollAngle = 0;
+            end
+        end
+
+        function camber = applyChassisRollCamber(~, camber, wheelHeading, ...
+                cornerName, rollAngle)
+            if rollAngle == 0 || ~isfinite(camber) || ~isfinite(wheelHeading)
+                return;
+            end
+
+            if endsWith(upper(cornerName), 'L')
+                side = 1;
+            else
+                side = -1;
+            end
+
+            % Reconstruct the wheel-top vector from tire-facing camber,
+            % rotate it by positive right-side-down chassis roll about +x,
+            % then measure its outward lean against the road vertical.
+            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
+            top = outward * sin(camber) + [0, 0, cos(camber)];
+            c = cos(rollAngle);
+            s = sin(rollAngle);
+            topRoad = [top(1), c * top(2) - s * top(3), ...
+                s * top(2) + c * top(3)];
+            camber = atan2(dot(topRoad, outward), topRoad(3));
         end
     end
 end

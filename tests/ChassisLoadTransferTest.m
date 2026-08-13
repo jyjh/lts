@@ -39,6 +39,86 @@ verifyGreaterThan(testCase, chassis.getRollAngle(), 0);
 verifyGreaterThan(testCase, rightLoad, leftLoad);
 end
 
+function testLinkedChassisConservesSteadyVerticalForce(testCase)
+config = lts.vehicles.R25();
+[vehicle, suspension, chassis] = createVehicleWithChassis(config);
+dt = 0.001;
+aeroForces = struct( ...
+    'Fz_front', 1500, ...
+    'Fz_rear', 1600, ...
+    'F_drag', 0, ...
+    'dragHeight', 0);
+
+for idx = 1:6000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(0, 0, aeroForces, dt, 0);
+end
+
+travel = [suspension.frontLeft.state.damperPosition, ...
+    suspension.frontRight.state.damperPosition, ...
+    suspension.rearLeft.state.damperPosition, ...
+    suspension.rearRight.state.damperPosition];
+verifyTrue(testCase, all(travel < config.suspension.bumpStopLength));
+verifyEqual(testCase, totalNormalLoad(loads), ...
+    vehicle.totalMass * lts.vehicle.VehicleManager.g + ...
+    aeroForces.Fz_front + aeroForces.Fz_rear, 'AbsTol', 2);
+end
+
+function testLinkedChassisVerticalForceIdentityIncludesUnsprungInertia(testCase)
+[vehicle, suspension, chassis] = createVehicleWithChassis(lts.vehicles.R25());
+dt = 0.001;
+aeroForces = struct( ...
+    'Fz_front', 3000, ...
+    'Fz_rear', 3000, ...
+    'F_drag', 0, ...
+    'dragHeight', 0);
+
+for idx = 1:1000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(0, 0, aeroForces, dt, 0);
+end
+
+suspensionForces = [ ...
+    suspension.frontLeft.state.suspensionForce, ...
+    suspension.frontRight.state.suspensionForce, ...
+    suspension.rearLeft.state.suspensionForce, ...
+    suspension.rearRight.state.suspensionForce];
+tireForces = [loads.FL, loads.FR, loads.RL, loads.RR];
+travel = [suspension.frontLeft.state.damperPosition, ...
+    suspension.frontRight.state.damperPosition, ...
+    suspension.rearLeft.state.damperPosition, ...
+    suspension.rearRight.state.damperPosition];
+verifyTrue(testCase, any(travel > suspension.frontLeft.bumpStopLength));
+
+% Downward-positive point-mass balance. For each unsprung mass,
+% m_u*z_u_ddot = F_suspension - F_tire; adding that to the chassis heave
+% inertia must equal the net external vertical force exactly.
+totalVerticalInertia = chassis.sprungMass * chassis.state.heaveAccel + ...
+    sum(suspensionForces - tireForces);
+netExternalDownwardForce = ...
+    vehicle.totalMass * lts.vehicle.VehicleManager.g + ...
+    aeroForces.Fz_front + aeroForces.Fz_rear - sum(tireForces);
+verifyEqual(testCase, totalVerticalInertia, netExternalDownwardForce, ...
+    'AbsTol', 1e-9);
+end
+
+function testGeometricTransferAtWheelLiftConservesAxleLoad(testCase)
+[vehicle, suspension, chassis] = createVehicleWithChassis(lts.vehicles.R25());
+frontTotal = vehicle.totalMass * lts.vehicle.VehicleManager.g * ...
+    vehicle.staticFrontWeight;
+rearTotal = vehicle.totalMass * lts.vehicle.VehicleManager.g * ...
+    (1 - vehicle.staticFrontWeight);
+chassis.state.frontGeometricLateralLoadTransfer = frontTotal;
+chassis.state.rearGeometricLateralLoadTransfer = rearTotal;
+
+loads = suspension.computeCornerLoadsFromChassis(chassis, 0, 0);
+
+verifyEqual(testCase, loads.FL, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, loads.RL, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, loads.FL + loads.FR, frontTotal, 'AbsTol', 1e-9);
+verifyEqual(testCase, loads.RL + loads.RR, rearTotal, 'AbsTol', 1e-9);
+end
+
 function testYawAccelerationCreatesOpposedAxleRollExcitation(testCase)
 [~, ~, chassis] = createVehicleWithChassis();
 zeroAero = zeroAeroForces();
@@ -94,13 +174,131 @@ function testDragAboveCgCreatesPositivePitchMoment(testCase)
 [~, ~, chassis] = createVehicleWithChassis();
 aeroForces = zeroAeroForces();
 aeroForces.F_drag = 100;
+aeroForces.F_drag_longitudinal = 100;
 aeroForces.dragHeight = 0.5;
 
 chassis.updateFromAccelerations(0, 0, aeroForces, 0.001);
 
-verifyEqual(testCase, chassis.state.dragPitchMoment, 50, 'AbsTol', 1e-12);
-verifyEqual(testCase, chassis.state.aeroPitchMoment, 50, 'AbsTol', 1e-12);
+expectedMoment = aeroForces.F_drag_longitudinal * ...
+    (aeroForces.dragHeight - chassis.cgHeight);
+verifyEqual(testCase, chassis.state.dragPitchMoment, expectedMoment, 'AbsTol', 1e-12);
+verifyEqual(testCase, chassis.state.aeroPitchMoment, expectedMoment, 'AbsTol', 1e-12);
 verifyGreaterThan(testCase, chassis.getPitchAngle(), 0);
+end
+
+function testDragThroughCgDoesNotCreatePitch(testCase)
+[~, ~, chassis] = createVehicleWithChassis();
+drag = 500;
+aeroForces = zeroAeroForces();
+aeroForces.F_drag = drag;
+aeroForces.F_drag_longitudinal = drag;
+aeroForces.dragHeight = chassis.cgHeight;
+dragOnlyAx = -drag / chassis.totalMass;
+
+chassis.updateFromAccelerations(dragOnlyAx, 0, aeroForces, 0.001);
+
+verifyEqual(testCase, chassis.state.dragPitchMoment, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, chassis.state.pitchAccel, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, chassis.getPitchAngle(), 0, 'AbsTol', 1e-12);
+end
+
+function testLateralDragThroughCgDoesNotCreateRoll(testCase)
+[~, ~, chassis] = createVehicleWithChassis();
+drag = 400;
+aeroForces = zeroAeroForces();
+aeroForces.F_drag = drag;
+aeroForces.F_drag_longitudinal = 0;
+aeroForces.F_drag_lateral = drag;
+aeroForces.dragHeight = chassis.cgHeight;
+aeroForces.dragXPosition = 0;
+dragOnlyAy = -drag / chassis.totalMass;
+
+chassis.updateFromAccelerations(0, dragOnlyAy, aeroForces, 0.001, 0);
+
+verifyEqual(testCase, chassis.state.frontRollAccel, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, chassis.state.rearRollAccel, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, chassis.getRollAngle(), 0, 'AbsTol', 1e-12);
+end
+
+function testAeroResultantUsesAbsoluteHeightAndWeightedXPosition(testCase)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.wheelbase = 1.6;
+vehicle.staticFrontWeight = 0.5;
+vehicle.cgHeight = 0.3;
+vehicle.airDensity = 1.2;
+state = lts.simulation.VehicleState('speed', 10, 'vx', 10);
+state.vehicleManager = vehicle;
+
+front = lts.components.Aero.WholeCarAero(0.4, 0.2, 0, 1, 0);
+rear = lts.components.Aero.WholeCarAero(-0.2, 0.5, 0, 3, 0);
+aero = lts.components.Aero.AeroManager();
+aero = aero.addComponent(front);
+aero = aero.addComponent(rear);
+forces = aero.computeForces(state);
+
+verifyEqual(testCase, forces.dragHeight, 0.425, 'AbsTol', 1e-12);
+verifyEqual(testCase, forces.dragXPosition, -0.05, 'AbsTol', 1e-12);
+end
+
+function testWingHeightSensitivityIsFractionPerCentimeter(testCase)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.airDensity = 1.2;
+state = lts.simulation.VehicleState('speed', 10, 'vx', 10);
+state.vehicleManager = vehicle;
+front = lts.components.Aero.FrontWing(0.5, 0.2, 1, 0, 0, 0.3);
+rear = lts.components.Aero.RearWing(-0.5, 0.2, 1, 0, 0, 0.15);
+
+state.rideHeight = 0;
+frontNominal = front.computeDownforce(state);
+rearNominal = rear.computeDownforce(state);
+state.rideHeight = 0.01;
+
+verifyEqual(testCase, front.computeDownforce(state) / frontNominal, ...
+    0.7, 'AbsTol', 1e-12);
+verifyEqual(testCase, rear.computeDownforce(state) / rearNominal, ...
+    0.85, 'AbsTol', 1e-12);
+end
+
+function testInfiniteTorsionalRigidityEnforcesExactConstraint(testCase)
+[~, ~, chassis] = createVehicleWithChassis();
+chassis.torsionalRigidity = Inf;
+chassis.state.frontRollAngle = 0.1;
+chassis.state.rearRollAngle = -0.04;
+chassis.state.frontRollRate = 0.3;
+chassis.state.rearRollRate = -0.2;
+zeroAero = zeroAeroForces();
+
+for idx = 1:200
+    chassis.updateFromAccelerations(0, 6, zeroAero, 0.001, 2);
+    verifyEqual(testCase, chassis.state.frontRollAngle, ...
+        chassis.state.rearRollAngle, 'AbsTol', 0);
+    verifyEqual(testCase, chassis.state.frontRollRate, ...
+        chassis.state.rearRollRate, 'AbsTol', 0);
+end
+
+verifyEqual(testCase, chassis.getTwistAngle(), 0, 'AbsTol', 0);
+verifyEqual(testCase, chassis.getTwistRate(), 0, 'AbsTol', 0);
+verifyTrue(testCase, isfinite(chassis.getRollAngle()));
+verifyLessThan(testCase, abs(chassis.getRollAngle()), 1);
+end
+
+function testChassisRollContributesOppositeRoadFrameCamber(testCase)
+config = lts.vehicles.baseline();
+config.suspension.geometry.front.camberCurve = [0 0 0];
+config.suspension.geometry.rear.camberCurve = [0 0 0];
+config.suspension.geometry.front.toeCurve = [0 0 0];
+config.suspension.geometry.rear.toeCurve = [0 0 0];
+[~, suspension, chassis] = createVehicleWithChassis(config);
+chassis.state.frontRollAngle = 0.05;
+chassis.state.rearRollAngle = -0.02;
+
+suspension.updateGeometry(0);
+kin = suspension.getCornerKinematics();
+
+verifyEqual(testCase, kin.FL.camberAngle, -0.05, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.FR.camberAngle, 0.05, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.RL.camberAngle, 0.02, 'AbsTol', 1e-12);
+verifyEqual(testCase, kin.RR.camberAngle, -0.02, 'AbsTol', 1e-12);
 end
 
 function testVehicleConfigBuildLinksChassisAndUsesSprungMass(testCase)
@@ -390,75 +588,61 @@ verifyEqual(testCase, kin.RL.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
 verifyEqual(testCase, kin.RR.rollCenterLateral, 0.022, 'AbsTol', 1e-12);
 end
 
-function testDerivedHeaveStiffnessMatchesSuspensionSprings(testCase)
-% When heaveStiffness is NaN (derive), the chassis should settle to the
-% same heave equilibrium as if the derived value were set explicitly:
-% at steady state with constant downforce, heave_eq = Fz / Kheave.
-config = lts.vehicles.baseline();
-[~, suspension, chassis] = createVehicleWithChassis(config);
+function testChassisPathUsesTotalMassForLongitudinalTransfer(testCase)
+[vehicle, suspension, chassis] = createVehicleWithChassis(lts.vehicles.R25());
 zeroAero = zeroAeroForces();
 dt = 0.001;
+ax = 4;
 
-% Symmetric downforce step (equal front/rear to minimize pitch coupling).
-FzStep = 2000;
-aeroStep = struct('Fz_front', FzStep / 2, 'Fz_rear', FzStep / 2, ...
-    'F_drag', 0, 'dragHeight', 0);
-
-for idx = 1:5000
-    chassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
+for idx = 1:6000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(ax, 0, zeroAero, dt, 0);
 end
 
-% Compute expected Kheave from the suspension springs + motion ratios.
-susp = suspension;
-mrF = susp.frontLeft.motionRatio;
-if susp.frontLeft.state.motionRatioEffective > 0
-    mrF = susp.frontLeft.state.motionRatioEffective;
-end
-mrR = susp.rearLeft.motionRatio;
-if susp.rearLeft.state.motionRatioEffective > 0
-    mrR = susp.rearLeft.state.motionRatioEffective;
-end
-expectedKheave = 2 * (susp.frontLeft.springRate * mrF^2 + ...
-                      susp.rearLeft.springRate * mrR^2);
-
-expectedHeave = FzStep / expectedKheave;
-verifyGreaterThan(testCase, expectedKheave, 0);
-verifyTrue(testCase, isfinite(chassis.state.heave));
-verifyEqual(testCase, chassis.state.heave, expectedHeave, 'RelTol', 0.02);
+staticFrontLoad = vehicle.totalMass * lts.vehicle.VehicleManager.g * ...
+    vehicle.staticFrontWeight;
+expectedTransfer = vehicle.totalMass * ax * vehicle.cgHeight / vehicle.wheelbase;
+actualTransfer = staticFrontLoad - (loads.FL + loads.FR);
+verifyEqual(testCase, actualTransfer, expectedTransfer, 'AbsTol', 2);
+verifyEqual(testCase, totalNormalLoad(loads), ...
+    vehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 2);
 end
 
-function testExplicitHeaveStiffnessOverrideIsRespected(testCase)
-% A finite heaveStiffness override must be used instead of the derived
-% value. A very stiff override should produce less heave than the derived.
-configDerived = lts.vehicles.baseline();
-configStiff = lts.vehicles.baseline();
-configStiff.chassis.heaveStiffness = 1e7;
-
-[~, ~, derivedChassis] = createVehicleWithChassis(configDerived);
-[~, ~, stiffChassis] = createVehicleWithChassis(configStiff);
-
-FzStep = 2000;
-aeroStep = struct('Fz_front', FzStep / 2, 'Fz_rear', FzStep / 2, ...
-    'F_drag', 0, 'dragHeight', 0);
+function testChassisPathUsesTotalMassForLateralTransfer(testCase)
+config = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
+[vehicle, suspension, chassis] = createVehicleWithChassis(config);
+zeroAero = zeroAeroForces();
 dt = 0.001;
+ay = 6;
 
-for idx = 1:5000
-    derivedChassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
-    stiffChassis.updateFromAccelerations(0, 0, aeroStep, dt, 0);
+for idx = 1:6000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(0, ay, zeroAero, dt, 0);
 end
 
-verifyLessThan(testCase, abs(stiffChassis.state.heave), ...
-    abs(derivedChassis.state.heave));
+expectedRightMinusLeft = 2 * vehicle.totalMass * ay * ...
+    vehicle.cgHeight / vehicle.trackWidth;
+verifyEqual(testCase, rightMinusLeft(loads), expectedRightMinusLeft, 'AbsTol', 2);
+verifyEqual(testCase, totalNormalLoad(loads), ...
+    vehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 2);
 end
 
-function testInfTorsionalRigidityIsRejected(testCase)
-config = lts.vehicles.baseline();
-config.chassis.torsionalRigidity = Inf;
-[~, ~, chassis] = createVehicleWithChassis(config);
+function testOverAckermannIsNotClippedToIdeal(testCase)
+config = lts.vehicles.R25();
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+overGeometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
+    config.suspension.geometry, vehicle);
+idealGeometry = overGeometry;
+idealGeometry.ackermann = 1;
 
-verifyError(testCase, @() chassis.updateFromAccelerations( ...
-    0, 0, zeroAeroForces(), 0.001, 0), ...
-    'lts_components_Chassis_SimpleChassis:InfTorsionalRigidity');
+overSteer = overGeometry.computeSteeringAngles(0.2);
+idealSteer = idealGeometry.computeSteeringAngles(0.2);
+
+verifyGreaterThan(testCase, overSteer.FL, idealSteer.FL);
+verifyLessThan(testCase, overSteer.FR, idealSteer.FR);
 end
 
 function [vehicle, suspension, chassis] = createVehicleWithChassis(config)
@@ -555,5 +739,8 @@ aeroForces = struct( ...
     'Fz_front', 0, ...
     'Fz_rear', 0, ...
     'F_drag', 0, ...
-    'dragHeight', 0);
+    'F_drag_longitudinal', 0, ...
+    'F_drag_lateral', 0, ...
+    'dragHeight', 0, ...
+    'dragXPosition', 0);
 end

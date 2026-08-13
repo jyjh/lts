@@ -44,7 +44,8 @@ parser.FunctionName = 'tire_sensitivity';
 parser.addParameter('NormalLoads', 200:50:1000, @validateNormalLoads);
 parser.addParameter('SlipAnglesDeg', 0:2:12, @validateSlipAngles);
 parser.addParameter('SlipRatios', 0.02:0.02:0.12, @validateSlipRatios);
-parser.addParameter('SurfaceMu', [], @validateSurfaceMu);
+% Retained as an ignored compatibility option; all surfaces are unity.
+parser.addParameter('SurfaceMu', 1.0, @validateSurfaceMu);
 parser.addParameter('OutputFile', '', @(x) ischar(x) || isstring(x));
 parser.addParameter('LateralOutputFile', defaultLateralOutput, ...
     @(x) ischar(x) || isstring(x));
@@ -91,10 +92,7 @@ if isempty(slipRatios)
 end
 
 tire = lts.components.Tire.PacejkaTire(tirFile);
-surfaceMu = opts.SurfaceMu;
-if isempty(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
+surfaceMu = 1.0;
 
 Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, surfaceMu);
 muY = Fy ./ max(normalLoads, eps);
@@ -236,10 +234,9 @@ loadTransfer = struct( ...
     'frontLoadTransferDistribution', frontLoadTransferDistribution);
 end
 
-function Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, surfaceMu)
+function Fy = computeLateralForceGrid(tire, normalLoads, slipAnglesDeg, ~)
 normalLoads = normalLoads(:);
 Fy = zeros(numel(normalLoads), numel(slipAnglesDeg));
-surfaceScale = tireSurfaceScale(tire, surfaceMu);
 active = normalLoads > 0;
 if ~any(active)
     return;
@@ -268,7 +265,7 @@ for startIdx = 1:maxRowsPerCall:nRows
         repmat(tire.tireConstants.refVelocity, numel(idx), 1), ...
         repmat(tire.tireConstants.nomPressure, numel(idx), 1)];
     outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
-    FyActive(idx) = -outputs(:, 2) * surfaceScale;
+    FyActive(idx) = -outputs(:, 2);
 end
 
 Fy(active, :) = FyActive;
@@ -599,10 +596,9 @@ point = struct( ...
     'bestSlipAngleDeg', NaN);
 end
 
-function Fx = computeLongitudinalForceGrid(tire, normalLoads, slipRatios, surfaceMu)
+function Fx = computeLongitudinalForceGrid(tire, normalLoads, slipRatios, ~)
 normalLoads = normalLoads(:);
 Fx = zeros(numel(normalLoads), numel(slipRatios));
-surfaceScale = tireSurfaceScale(tire, surfaceMu);
 active = normalLoads > 0;
 for j = 1:numel(slipRatios)
     if any(active)
@@ -616,16 +612,9 @@ for j = 1:numel(slipRatios)
             repmat(tire.tireConstants.refVelocity, nActive, 1), ...
             repmat(tire.tireConstants.nomPressure, nActive, 1)];
         outputs = mfeval(tire.tireConstants.params, inputsMF, 111);
-        Fx(active, j) = outputs(:, 1) * surfaceScale;
+        Fx(active, j) = outputs(:, 1);
     end
 end
-end
-
-function scale = tireSurfaceScale(tire, surfaceMu)
-if isempty(surfaceMu) || ~isfinite(surfaceMu)
-    surfaceMu = tire.surfaceMuReference;
-end
-scale = max(surfaceMu, 0) / max(tire.surfaceMuReference, eps);
 end
 
 function fig = plotMassAccelerationCurve(curve, highlight, tireFilePath, ...

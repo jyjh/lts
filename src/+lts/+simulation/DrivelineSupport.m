@@ -8,14 +8,20 @@ classdef DrivelineSupport
                 baseI = vehicleManager.tire.wheelInertia;
             end
 
-            drivenI = baseI;
+            reflectedRotorInertia = 0;
             if ~isempty(vehicleManager.powertrain) && ...
                     isa(vehicleManager.powertrain, 'lts.components.Powertrain.PowertrainComponent') && ...
                     ismethod(vehicleManager.powertrain, 'getReflectedRotorInertia')
-                drivenI = baseI + 0.5 * vehicleManager.powertrain.getReflectedRotorInertia();
+                reflectedRotorInertia = ...
+                    vehicleManager.powertrain.getReflectedRotorInertia();
             end
 
-            inertia = struct('FL', baseI, 'FR', baseI, 'RL', drivenI, 'RR', drivenI);
+            % Rotor inertia is coupled through differential-carrier speed;
+            % it cannot be split into two independent wheel inertias without
+            % incorrectly resisting differential wheel-speed motion.
+            inertia = struct('FL', baseI, 'FR', baseI, ...
+                'RL', baseI, 'RR', baseI, ...
+                'reflectedRotorInertia', reflectedRotorInertia);
         end
 
         function out = solveDifferential(vehicleManager, totalDriveTorque, totalCoastdownTorque, ...

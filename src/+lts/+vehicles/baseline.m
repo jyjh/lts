@@ -118,18 +118,19 @@ function cfg = baseline()
         'maxWheelSteerAngle', 0.6, ...                      % [rad] (~34 deg) road-wheel cap
         'rearSteerRatio',     0.0);
 
-    % Anti-roll bars: described by end stiffness, motion ratio, and
-    % drop-link lever arm; wheel-rate roll stiffness is added to the axle's
-    % wheel springs to derive the F/R elastic load-transfer split.
-    % Wheel-rate target: front ~25 kN/m, rear ~15 kN/m (stiffer front is the
+    % Anti-roll bars: described by torsional stiffness, motion ratio, and
+    % drop-link lever arm; its differential coupling rate contributes twice
+    % that value to the axle's equivalent per-corner roll rate. Together with
+    % the wheel springs, this derives the F/R elastic load-transfer split.
+    % Coupling-rate target: front ~25 kN/m, rear ~15 kN/m (stiffer front is the
     % common FSAE setup to suppress front roll and tune steady-state balance).
     cfg.suspension.frontArb = struct( ...
-        'stiffness', 1800, ...           % [N/m] at the bar end
+        'stiffness', 1800, ...           % Torsional bar rate [N*m/rad]
         'motionRatio', 0.95, ...         % wheel <-> bar end
         'leverArm', 0.26, ...            % [m] bar axis to drop-link
         'enabled', true);
     cfg.suspension.rearArb = struct( ...
-        'stiffness', 1100, ...           % [N/m] at the bar end (softer than front)
+        'stiffness', 1100, ...           % Torsional bar rate [N*m/rad] (softer)
         'motionRatio', 0.95, ...         % wheel <-> bar end
         'leverArm', 0.26, ...            % [m] bar axis to drop-link
         'enabled', true);

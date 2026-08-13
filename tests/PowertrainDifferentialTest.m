@@ -5,6 +5,22 @@ function tests = PowertrainDifferentialTest
 tests = functiontests(localfunctions);
 end
 
+function testMotoringEfficiencyCurveInterpolatesAndClampsRPM(testCase)
+pt = lts.components.Powertrain.EMRAX228Powertrain();
+pt = pt.setMotoringEfficiencyCurve([1000 2000 3000], [0.75 0.90 0.80]);
+
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(500), 0.75, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(1500), 0.825, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(-2500), 0.85, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(4000), 0.80, 'AbsTol', 1e-12);
+end
+
+function testEmptyMotoringEfficiencyCurveUsesScalar(testCase)
+pt = lts.components.Powertrain.EMRAX228Powertrain('', 0.87);
+
+verifyEqual(testCase, pt.getMotoringEfficiencyAtRPM(2500), 0.87, 'AbsTol', 1e-12);
+end
+
 function testDefaultLCMapLoadsLowercaseTorqueField(testCase)
 pt = createPowertrain();
 verifyEqual(testCase, pt.totalGearRatio, 3.36, 'RelTol', 1e-12);
@@ -88,7 +104,7 @@ verifyGreaterThan(testCase, expectedDriven, 0);
 verifyGreaterThan(testCase, expectedDriven, 0.5);
 end
 
-function testSimulatorSplitsReflectedRotorInertiaAcrossRearWheels(testCase)
+function testSimulatorKeepsReflectedRotorInertiaAsCarrierCoupling(testCase)
 pt = createPowertrain();
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.wheelInertia = 0.5;
@@ -96,11 +112,46 @@ vehicle = lts.vehicle.VehicleManager([], [], pt, tire, []);
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 inertia = simulator.getWheelInertia();
 
-expectedRear = tire.wheelInertia + 0.5 * pt.getReflectedRotorInertia();
 verifyEqual(testCase, inertia.FL, tire.wheelInertia, 'RelTol', 1e-12);
 verifyEqual(testCase, inertia.FR, tire.wheelInertia, 'RelTol', 1e-12);
-verifyEqual(testCase, inertia.RL, expectedRear, 'RelTol', 1e-12);
-verifyEqual(testCase, inertia.RR, expectedRear, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.RL, tire.wheelInertia, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.RR, tire.wheelInertia, 'RelTol', 1e-12);
+verifyEqual(testCase, inertia.reflectedRotorInertia, ...
+    pt.getReflectedRotorInertia(), 'RelTol', 1e-12);
+end
+
+function testReflectedRotorInertiaOnlyResistsCarrierAcceleration(testCase)
+tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+tire.rollingResistanceCoeff = 0;
+tire.bearingDragCoeff = 0;
+tire.RL.normalForce = 0;
+tire.RR.normalForce = 0;
+tire.RL.Fx = 0;
+tire.RR.Fx = 0;
+tire.RL.angularVelocity = 20;
+tire.RR.angularVelocity = 20;
+wheelInertia = 0.5;
+reflectedInertia = 0.8;
+dt = 0.01;
+
+% Equal-and-opposite torque changes differential speed without moving the
+% carrier, so rotor inertia must have no effect.
+tire.updateDrivenWheelPairDynamics(tire.RL, tire.RR, 10, -10, 0, 0, ...
+    dt, wheelInertia, wheelInertia, reflectedInertia, 0, 0);
+verifyEqual(testCase, tire.RL.angularVelocity, ...
+    20 + 10 / wheelInertia * dt, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.RR.angularVelocity, ...
+    20 - 10 / wheelInertia * dt, 'AbsTol', 1e-12);
+
+% Common torque accelerates the carrier and therefore sees half the total
+% reflected inertia in each wheel equation.
+tire.RL.angularVelocity = 20;
+tire.RR.angularVelocity = 20;
+tire.updateDrivenWheelPairDynamics(tire.RL, tire.RR, 10, 10, 0, 0, ...
+    dt, wheelInertia, wheelInertia, reflectedInertia, 0, 0);
+expectedOmega = 20 + 10 / (wheelInertia + reflectedInertia / 2) * dt;
+verifyEqual(testCase, tire.RL.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.RR.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
 end
 
 function testGetMaxTorqueAgreesWithDrivePath(testCase)
@@ -110,9 +161,38 @@ pt = createPowertrain();
 rpm = 3000;
 Tmax = pt.getMaxTorque(rpm);
 fWheel = pt.lookupTractiveForceByRPM(rpm);
-TfromForce = fWheel * pt.wheelRadius / (pt.totalGearRatio * pt.drivetrainEfficiency);
+TfromForce = fWheel * pt.mapWheelRadius / pt.totalGearRatio;
 verifyEqual(testCase, Tmax, TfromForce, 'RelTol', 1e-9);
 verifyGreaterThan(testCase, Tmax, 0);
+end
+
+function testConfiguredWheelRadiusKeepsPlannerAndLiveDriveConsistent(testCase)
+pt = createPowertrain();
+mapRadius = pt.mapWheelRadius;
+actualRadius = 0.241935;
+pt = pt.setDrivenWheelRadius(actualRadius);
+speed = 10;
+
+pt.updateStateFromVehicleSpeed(speed);
+liveWheelTorque = pt.computeDriveTorque(speed, 1);
+plannerForce = pt.computeMaxDriveForce(speed);
+
+verifyEqual(testCase, pt.mapWheelRadius, mapRadius, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.wheelRadius, actualRadius, 'AbsTol', 1e-12);
+verifyEqual(testCase, plannerForce, liveWheelTorque / actualRadius, ...
+    'RelTol', 1e-12);
+end
+
+function testVehicleManagerSynchronizesPowertrainToTireRadius(testCase)
+cfg = lts.vehicle.VehicleConfig();
+cfg.tire.wheelRadius = 0.267;
+vehicle = lts.vehicle.VehicleManager.fromConfig( ...
+    cfg, lts.components.TestTrack('straight10'), 0.001);
+
+verifyEqual(testCase, vehicle.powertrain.wheelRadius, cfg.tire.wheelRadius, ...
+    'AbsTol', 1e-12);
+verifyNotEqual(testCase, vehicle.powertrain.mapWheelRadius, ...
+    vehicle.powertrain.wheelRadius);
 end
 
 function testLockedDiffReturnsMeanCarrierAndEqualSplit(testCase)
@@ -137,25 +217,52 @@ verifyEqual(testCase, out.TL + out.TR, 0, 'AbsTol', 1e-12);
 end
 
 function testLSDConservesTotalTorqueAtLowCommand(testCase)
-% Fix 4: with a high preload relative to a small commanded torque, the old
-% code drove the fast side negative and broke TL+TR == T_total after the
-% non-negative clamp. The Tlock cap now prevents this.
+% Preload is an internal equal-and-opposite torque. It may brake the fast
+% wheel at a small external drive command, but cannot change axle total.
 diff = lts.components.Powertrain.ClutchLSDDifferential('preload', 20);
-T_total = 10;   % preload (20) >> base (5) → would invert the fast side pre-fix
+T_total = 10;
 out = diff.solveDrive(T_total, 40, 60, 0.5, 0.001);
 verifyEqual(testCase, out.TL + out.TR, T_total, 'AbsTol', 1e-9);
-verifyGreaterThanOrEqual(testCase, out.TL, 0);
-verifyGreaterThanOrEqual(testCase, out.TR, 0);
+verifyGreaterThan(testCase, out.TL, 0);
+verifyLessThan(testCase, out.TR, 0);
 end
 
-function testLSDZeroTorqueCannotProduceNegativeTorque(testCase)
+function testLSDPreloadActsAsZeroNetTorqueOffThrottle(testCase)
 diff = lts.components.Powertrain.ClutchLSDDifferential('preload', 20);
 
 out = diff.solveDrive(0, 40, 60, 0.5, 0.001);
 
 verifyEqual(testCase, out.TL + out.TR, 0, 'AbsTol', 1e-12);
-verifyGreaterThanOrEqual(testCase, out.TL, 0);
-verifyGreaterThanOrEqual(testCase, out.TR, 0);
+verifyGreaterThan(testCase, out.TL, 0);
+verifyLessThan(testCase, out.TR, 0);
+end
+
+function testLSDEqualWheelSpeedsHaveSymmetricSplit(testCase)
+diff = lts.components.Powertrain.ClutchLSDDifferential( ...
+    'preload', 20, 'ramp', 0.5, 'speedGain', 2);
+
+out = diff.solveDrive(400, 50, 50, 0.5, 0.001);
+
+verifyEqual(testCase, out.TL, 200, 'AbsTol', 1e-12);
+verifyEqual(testCase, out.TR, 200, 'AbsTol', 1e-12);
+end
+
+function testLSDInternalTorqueDampsTinySlipAcrossFixedPointIterations(testCase)
+diff = lts.components.Powertrain.ClutchLSDDifferential( ...
+    'preload', 20, 'ramp', 0.5, 'speedGain', 2, ...
+    'relativeSpeedDamping', 0.5);
+wheelInertia = 0.5;
+dt = 0.001;
+startSlip = 0.005;
+guessSlip = startSlip;
+
+for iter = 1:8
+    out = diff.solveDriveline(0, 0, 50, 50 + guessSlip, ...
+        wheelInertia, dt);
+    guessSlip = startSlip + (out.TR - out.TL) / wheelInertia * dt;
+    verifyGreaterThan(testCase, guessSlip, 0);
+    verifyLessThan(testCase, guessSlip, startSlip);
+end
 end
 
 function testLSDBiasesTowardSlowerWheel(testCase)
@@ -257,6 +364,28 @@ out = diff.solveDriveline(0, 0, 30, 60, 0.5, 0.001);
 
 verifyEqual(testCase, out.TL, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, out.TR, 0, 'AbsTol', 1e-12);
+end
+
+function testDrexlerTinySlipIsStableAcrossFixedPointIterations(testCase)
+% A sign-only full-preload kick at arbitrarily small slip used to flip and
+% amplify the wheel-speed difference under the simulator's repeated solve.
+diff = createCalibratedDrexler( ...
+    'preloadBreakawayTorqueNm', 10, ...
+    'rampTorqueScale', 1, ...
+    'slipSmoothingRadPerSec', 0, ...
+    'relativeSpeedDamping', 0.5);
+wheelInertia = 0.5;
+dt = 0.001;
+startSlip = 0.005;
+guessSlip = startSlip;
+
+for iter = 1:8
+    out = diff.solveDriveline(0, 0, 50, 50 + guessSlip, ...
+        wheelInertia, dt);
+    guessSlip = startSlip + (out.TR - out.TL) / wheelInertia * dt;
+    verifyGreaterThan(testCase, guessSlip, 0);
+    verifyLessThan(testCase, guessSlip, startSlip);
+end
 end
 
 function testDrexlerFluidMetadataDoesNotChangePhysics(testCase)
@@ -376,6 +505,30 @@ verifyError(testCase, @() pt.computeDriveTorque(12, 0.5), ...
     'EMRAX228Powertrain:InvalidThrottleMap');
 end
 
+function testPedalForTorqueFractionInvertsMapAndDeadband(testCase)
+pt = createPowertrain();
+pt.throttleDeadband = 0.2;
+pt.throttleMapInput = [0 0.5 1];
+pt.throttleMapOutput = [0 0.25 1];
+speed = 12;
+
+pt.updateStateFromVehicleSpeed(speed);
+fullTorque = pt.computeDriveTorque(speed, 1);
+fractions = [0 0.1 0.25 0.5 1];
+for fraction = fractions
+    pedal = pt.pedalForTorqueFraction(fraction);
+    pt.updateStateFromVehicleSpeed(speed);
+    actualTorque = pt.computeDriveTorque(speed, pedal);
+    verifyEqual(testCase, actualTorque, fraction * fullTorque, ...
+        'RelTol', 1e-10, 'AbsTol', 1e-10);
+end
+
+verifyEqual(testCase, pt.pedalForTorqueFraction(0), 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.pedalForTorqueFraction(0.25), 0.6, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.pedalForTorqueFraction(-1), 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, pt.pedalForTorqueFraction(2), 1, 'AbsTol', 1e-12);
+end
+
 function testThrottleMapRejectsEmptyBreakpoints(testCase)
 pt = createPowertrain();
 pt.throttleMapInput = [];
@@ -384,6 +537,20 @@ pt.updateStateFromVehicleSpeed(12);
 
 verifyError(testCase, @() pt.computeDriveTorque(12, 0.5), ...
     'EMRAX228Powertrain:InvalidThrottleMap');
+end
+
+function testPedalInverseSupportsMonotonicThrottleMapPlateau(testCase)
+pt = createPowertrain();
+pt.throttleMapInput = [0 0.2 0.5 1];
+pt.throttleMapOutput = [0 0.2 0.2 1];
+
+verifyEqual(testCase, pt.pedalForTorqueFraction(0.2), 0.2, 'AbsTol', 1e-12);
+pedal = pt.pedalForTorqueFraction(0.3);
+pt.updateStateFromVehicleSpeed(12);
+fullTorque = pt.computeDriveTorque(12, 1);
+pt.updateStateFromVehicleSpeed(12);
+verifyEqual(testCase, pt.computeDriveTorque(12, pedal), 0.3 * fullTorque, ...
+    'RelTol', 1e-10);
 end
 
 function testVehicleConfigDoesNotHideEmptyThrottleMap(testCase)
@@ -423,6 +590,18 @@ verifyTrue(testCase, pt.reverseCapable);
 pt.regenEnabled = false;
 pt.motoringDragTorque = 5;
 verifyTrue(testCase, pt.reverseCapable);
+end
+
+function testThrottleModeRegenUsesWheelToMotorEfficiencyDirection(testCase)
+pt = createPowertrain();
+pt.regenEnabled = true;
+pt.regenTorqueLimitNm = 30;
+pt.regenEfficiency = 0.8;
+pt.updateStateFromVehicleSpeed(20);
+
+actual = pt.computeCoastdownTorque(20, 0);
+expected = -pt.regenTorqueLimitNm * pt.totalGearRatio / pt.regenEfficiency;
+verifyEqual(testCase, actual, expected, 'RelTol', 1e-12);
 end
 
 % ---------- helpers ----------

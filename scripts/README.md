@@ -181,6 +181,18 @@ lts.app.run_correlation( ...
     'PowertrainMode', 'motor_torque_command')
 ```
 
+R25 logs also expose BAMOCAR `Iq`. When the normalized replay contains
+`motor_torque_delivered_nm`, prefer the measured shaft-torque path:
+the unitless CAN value is converted with `0.5 Arms/count` and the EMRAX 228 MV
+constant of `0.48 Nm/Arms`, for a combined scale of `0.24 Nm/count`.
+
+```matlab
+lts.app.run_correlation( ...
+    'ReplayCsv', 'exports/correlation_lap5_replay.csv', ...
+    'PowertrainMode', 'motor_torque_delivered', ...
+    'LimitMotorTorqueByPackPower', false)
+```
+
 ## compare_sim_runs.py
 
 Compares two exported simulator telemetry CSVs over the same track and prints a
@@ -210,3 +222,25 @@ Useful options:
 | `--corner-curvature-threshold` | `0.01` | Absolute curvature threshold `[1/m]` used to identify corner samples. |
 | `--throttle-threshold` | `50` | Minimum throttle `%` for acceleration-zone samples when throttle exists. |
 | `--brake-threshold` | `5` | Minimum brake `%` for braking-zone samples when brake exists. |
+
+## correlation_surrogate.py
+
+This helper is called by `lts.app.tune_correlation`. `initial` creates a
+deterministic Latin-hypercube design with the configured baseline as candidate
+1. `propose` trains an Extra Trees regressor from checkpoint history and
+selects a diverse batch using predicted score minus ensemble uncertainty.
+
+```bash
+python scripts/correlation_surrogate.py initial \
+  --space config/correlation/lap5_ml_parameter_space.json \
+  --count 256 --seed 25 --output exports/initial_candidates.csv
+```
+
+Normal users should launch the MATLAB tuning entry point instead; the direct
+CLI exists for testing, inspection, and reproducibility.
+
+The MATLAB entry point evaluates mixed 3/6/12-second horizons by default and
+keeps every horizon from one anchor in the same train/validation split. When
+GPS latitude/longitude are available, it derives the scored trajectory,
+vehicle speed, and body-frame accelerations from the smoothed GPS trace before
+calling this surrogate helper.

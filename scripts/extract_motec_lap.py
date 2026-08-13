@@ -22,6 +22,7 @@ REPLAY_COLUMNS = [
     "brake_pressure_rear_bar",
     "regen_torque_nm",
     "motor_torque_command_nm",
+    "motor_torque_delivered_nm",
     "motor_rpm",
     "pack_voltage_v",
     "pack_current_a",
@@ -677,6 +678,237 @@ def integrate_distance(time_s: np.ndarray, speed_mps: np.ndarray) -> np.ndarray:
     return distance
 
 
+def centered_moving_average(values: np.ndarray, sample_count: int) -> np.ndarray:
+    sample_count = min(len(values), max(1, int(sample_count)))
+    if sample_count % 2 == 0:
+        sample_count = max(1, sample_count - 1)
+    kernel = np.ones(sample_count, dtype=float)
+    finite = np.isfinite(values)
+    numerator = np.convolve(np.where(finite, values, 0.0), kernel, mode="same")
+    denominator = np.convolve(finite.astype(float), kernel, mode="same")
+    result = np.full(np.asarray(values).shape, np.nan)
+    usable = denominator > 0
+    result[usable] = numerator[usable] / denominator[usable]
+    return result
+
+
+def derive_gps_kinematics(
+    table: dict[str, np.ndarray],
+    config: dict | None,
+) -> dict:
+    """Derive local trace, speed, and body accelerations from GPS position."""
+    if not config or not bool(config.get("enabled", False)):
+        return {"status": "disabled", "sample_count": 0}
+    time_s = np.asarray(table.get("time_s", []), dtype=float)
+    latitude = np.asarray(table.get("gps_lat_deg", []), dtype=float)
+    longitude = np.asarray(table.get("gps_lon_deg", []), dtype=float)
+    valid = np.isfinite(time_s) & np.isfinite(latitude) & np.isfinite(longitude)
+    if np.count_nonzero(valid) < 5:
+        return {"status": "unavailable", "sample_count": int(np.count_nonzero(valid))}
+
+    valid_time = time_s[valid]
+    latitude = np.interp(time_s, valid_time, latitude[valid])
+    longitude = np.interp(time_s, valid_time, longitude[valid])
+    origin = int(np.flatnonzero(valid)[0])
+    earth_radius_m = 6371008.8
+    latitude_origin_rad = np.deg2rad(latitude[origin])
+    east_m = (
+        earth_radius_m
+        * np.deg2rad(longitude - longitude[origin])
+        * np.cos(latitude_origin_rad)
+    )
+    north_m = earth_radius_m * np.deg2rad(latitude - latitude[origin])
+
+    positive_dt = np.diff(time_s)
+    positive_dt = positive_dt[np.isfinite(positive_dt) & (positive_dt > 0)]
+    if positive_dt.size == 0:
+        return {"status": "unavailable", "sample_count": 0}
+    smoothing_s = float(config.get("smoothing_window_s", 0.35))
+    sample_count = max(3, int(round(smoothing_s / np.median(positive_dt))))
+    # Preserve the measured trace. Smooth its derivatives rather than the
+    # position itself so endpoint windows do not bias the initial speed.
+    velocity_east = centered_moving_average(
+        np.gradient(east_m, time_s), sample_count
+    )
+    velocity_north = centered_moving_average(
+        np.gradient(north_m, time_s), sample_count
+    )
+    speed_mps = np.hypot(velocity_east, velocity_north)
+    acceleration_east = centered_moving_average(
+        np.gradient(velocity_east, time_s), sample_count
+    )
+    acceleration_north = centered_moving_average(
+        np.gradient(velocity_north, time_s), sample_count
+    )
+
+    minimum_speed = float(config.get("minimum_speed_mps", 1.0))
+    moving = np.isfinite(speed_mps) & (speed_mps >= minimum_speed)
+    long_accel = np.full(speed_mps.shape, np.nan)
+    lat_accel = np.full(speed_mps.shape, np.nan)
+    long_accel[moving] = (
+        velocity_east[moving] * acceleration_east[moving]
+        + velocity_north[moving] * acceleration_north[moving]
+    ) / speed_mps[moving]
+    lat_accel[moving] = (
+        velocity_east[moving] * acceleration_north[moving]
+        - velocity_north[moving] * acceleration_east[moving]
+    ) / speed_mps[moving]
+
+    table["x_m"] = east_m
+    table["y_m"] = north_m
+    table["speed_mps"] = np.maximum(speed_mps, 0.0)
+    table["long_accel_g"] = long_accel / 9.80665
+    table["lat_accel_g"] = lat_accel / 9.80665
+    table["distance_m"] = integrate_distance(time_s, table["speed_mps"])
+    return {
+        "status": "applied",
+        "sample_count": int(np.count_nonzero(np.isfinite(speed_mps))),
+        "smoothing_window_s": smoothing_s,
+        "minimum_speed_mps": minimum_speed,
+        "position_frame": "local_east_north",
+        "overridden_channels": [
+            "x_m",
+            "y_m",
+            "distance_m",
+            "speed_mps",
+            "long_accel_g",
+            "lat_accel_g",
+        ],
+    }
+
+
+def repair_power_inconsistent_regen(
+    table: dict[str, np.ndarray],
+    config: dict | None,
+) -> dict | None:
+    """Replace only Iq samples that violate regenerative power conservation."""
+    if not config or not bool(config.get("enabled", False)):
+        return None
+
+    required = (
+        "time_s",
+        "regen_torque_nm",
+        "motor_torque_command_nm",
+        "motor_torque_delivered_nm",
+        "motor_rpm",
+        "pack_voltage_v",
+        "pack_current_a",
+    )
+    if any(name not in table for name in required):
+        return {
+            "status": "unavailable",
+            "reason": "missing required torque, speed, or pack-power columns",
+        }
+
+    time_s = np.asarray(table["time_s"], dtype=float)
+    delivered_nm = np.asarray(table["motor_torque_delivered_nm"], dtype=float).copy()
+    # The regen channel is a negative-torque capability/limit, not evidence
+    # that regen is active. The signed motor command is authoritative when
+    # available; fall back to the regen channel only for missing commands.
+    regen_limit_nm = np.asarray(table["regen_torque_nm"], dtype=float)
+    regen_request_nm = np.asarray(
+        table["motor_torque_command_nm"], dtype=float
+    ).copy()
+    missing_request = ~np.isfinite(regen_request_nm)
+    regen_request_nm[missing_request] = regen_limit_nm[missing_request]
+    motor_rpm = np.abs(np.asarray(table["motor_rpm"], dtype=float))
+    pack_power_w = (
+        np.asarray(table["pack_voltage_v"], dtype=float)
+        * np.asarray(table["pack_current_a"], dtype=float)
+    )
+
+    pack_advance_s = float(config.get("pack_power_advance_s", 0.0))
+    if pack_advance_s:
+        finite_power = np.isfinite(time_s) & np.isfinite(pack_power_w)
+        if np.count_nonzero(finite_power) >= 2:
+            pack_power_w = np.interp(
+                time_s + pack_advance_s,
+                time_s[finite_power],
+                pack_power_w[finite_power],
+                left=pack_power_w[finite_power][0],
+                right=pack_power_w[finite_power][-1],
+            )
+
+    charging_power_w = np.maximum(0.0, -pack_power_w)
+    motor_omega_radps = motor_rpm * 2.0 * np.pi / 60.0
+    measured_regen_power_w = (
+        np.maximum(0.0, -delivered_nm) * motor_omega_radps
+    )
+
+    minimum_charging_power_w = float(
+        config.get("minimum_charging_power_w", 1000.0)
+    )
+    minimum_motor_speed_rpm = float(config.get("minimum_motor_speed_rpm", 300.0))
+    request_threshold_nm = float(config.get("regen_request_threshold_nm", 5.0))
+    power_tolerance_w = float(config.get("power_tolerance_w", 500.0))
+    maximum_efficiency = float(config.get("maximum_regen_efficiency", 1.0))
+    if not 0.0 < maximum_efficiency <= 1.0:
+        raise ValueError("maximum_regen_efficiency must be in (0, 1]")
+
+    active = (
+        np.isfinite(delivered_nm)
+        & np.isfinite(regen_request_nm)
+        & np.isfinite(charging_power_w)
+        & np.isfinite(motor_omega_radps)
+        & (regen_request_nm <= -request_threshold_nm)
+        & (charging_power_w >= minimum_charging_power_w)
+        & (motor_rpm >= minimum_motor_speed_rpm)
+    )
+    sign_contradiction = active & (delivered_nm >= 0.0)
+    power_deficit = active & (
+        charging_power_w
+        > maximum_efficiency * measured_regen_power_w + power_tolerance_w
+    )
+    repair_mask = sign_contradiction | power_deficit
+
+    minimum_torque_nm = np.full(delivered_nm.shape, np.nan, dtype=float)
+    positive_speed = motor_omega_radps > np.finfo(float).eps
+    minimum_torque_nm[positive_speed] = -charging_power_w[positive_speed] / (
+        maximum_efficiency * motor_omega_radps[positive_speed]
+    )
+    max_torque_nm = float(config.get("maximum_reconstructed_torque_nm", np.inf))
+    if math.isfinite(max_torque_nm):
+        minimum_torque_nm = np.maximum(minimum_torque_nm, -abs(max_torque_nm))
+
+    repaired_nm = delivered_nm.copy()
+    repaired_nm[repair_mask] = np.minimum(
+        delivered_nm[repair_mask],
+        minimum_torque_nm[repair_mask],
+    )
+    table["motor_torque_delivered_nm"] = repaired_nm
+
+    remaining_power_deficit = repair_mask & (
+        charging_power_w
+        > maximum_efficiency
+        * np.maximum(0.0, -repaired_nm)
+        * motor_omega_radps
+        + power_tolerance_w
+    )
+    sample_dt_s = float(np.median(np.diff(time_s))) if len(time_s) >= 2 else 0.0
+    correction_nm = repaired_nm - delivered_nm
+    return {
+        "status": "ok",
+        "method": "charging_power_minimum_shaft_torque",
+        "pack_power_advance_s": pack_advance_s,
+        "maximum_regen_efficiency": maximum_efficiency,
+        "power_tolerance_w": power_tolerance_w,
+        "repaired_sample_count": int(np.count_nonzero(repair_mask)),
+        "repaired_duration_s": float(np.count_nonzero(repair_mask) * sample_dt_s),
+        "sign_contradiction_sample_count": int(np.count_nonzero(sign_contradiction)),
+        "power_deficit_sample_count": int(np.count_nonzero(power_deficit)),
+        "remaining_power_deficit_sample_count": int(
+            np.count_nonzero(remaining_power_deficit)
+        ),
+        "maximum_torque_correction_nm": float(
+            np.max(np.abs(correction_nm[repair_mask]))
+        )
+        if np.any(repair_mask)
+        else 0.0,
+        "corrected_minimum_torque_nm": float(np.nanmin(repaired_nm)),
+        "corrected_maximum_torque_nm": float(np.nanmax(repaired_nm)),
+    }
+
+
 def public_laps_to_ldparser(laps: str | None) -> str | None:
     """Convert public 1-based lap/range text to ldparser's 0-based contract."""
     if laps is None:
@@ -788,6 +1020,18 @@ def main() -> int:
     else:
         table["distance_m"] = table["distance_m"] - table["distance_m"][0]
 
+    postprocessing = {}
+    postprocessing["gps_kinematics"] = derive_gps_kinematics(
+        table,
+        channel_map.get("gps_kinematics"),
+    )
+    regen_repair = repair_power_inconsistent_regen(
+        table,
+        channel_map.get("delivered_regen_power_repair"),
+    )
+    if regen_repair is not None:
+        postprocessing["delivered_regen_power_repair"] = regen_repair
+
     write_csv(output_file, table)
 
     manifest = {
@@ -800,6 +1044,7 @@ def main() -> int:
         "sample_frequency_hz": output_frequency,
         "sample_count": int(len(time_out)),
         "duration_s": float(time_out[-1]) if len(time_out) else 0.0,
+        "postprocessing": postprocessing,
         "channels": {
             name: None
             if signal is None

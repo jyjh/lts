@@ -26,6 +26,11 @@ classdef DrexlerRampPlateDifferential < lts.components.Powertrain.DifferentialCo
         % Optional numerical smoothing near zero relative wheel speed [rad/s].
         % 0 keeps the ideal Coulomb-style lock response.
         slipSmoothingRadPerSec = 0
+
+        % Maximum fraction of relative wheel speed corrected by one explicit
+        % torque evaluation. Values below one make the wheel solver's fixed-
+        % point iterations contractive at the Coulomb sign transition.
+        relativeSpeedDamping = 0.5
     end
 
     methods
@@ -50,7 +55,8 @@ classdef DrexlerRampPlateDifferential < lts.components.Powertrain.DifferentialCo
                 max(0, totalWheelTorque), 0, omegaL, omegaR, wheelInertia, dt);
         end
 
-        function out = solveDriveline(obj, driveWheelTorque, coastdownWheelTorque, omegaL, omegaR, ~, ~)
+        function out = solveDriveline(obj, driveWheelTorque, coastdownWheelTorque, ...
+                omegaL, omegaR, wheelInertia, dt)
             obj.validateCalibration();
 
             driveWheelTorque = max(0, driveWheelTorque);
@@ -67,12 +73,11 @@ classdef DrexlerRampPlateDifferential < lts.components.Powertrain.DifferentialCo
 
             % Bias torque opposes relative output speed: if the right wheel is
             % faster (dw > 0), torque is shifted to the left/slower wheel.
+            % The available Coulomb clutch torque is also bounded by the
+            % equal-and-opposite impulse required to damp relative speed. This
+            % removes the discontinuous full-preload kick that used to flip
+            % the sign of tiny slip on every fixed-point iteration.
             dw = omegaR - omegaL;
-            if abs(dw) <= eps
-                biasSign = 0;
-            else
-                biasSign = sign(dw);
-            end
 
             smoothing = max(0, obj.slipSmoothingRadPerSec);
             if smoothing > 0
@@ -81,11 +86,15 @@ classdef DrexlerRampPlateDifferential < lts.components.Powertrain.DifferentialCo
                 slipScale = 1;
             end
 
-            biasTorque = 0.5 * lockTorqueDifference * slipScale;
-            out.TL = base + biasSign * biasTorque;
-            out.TR = base - biasSign * biasTorque;
+            availableBias = 0.5 * lockTorqueDifference * slipScale;
+            biasMagnitude = obj.boundedBiasMagnitude( ...
+                availableBias, dw, wheelInertia, dt);
+            biasTorque = sign(dw) * biasMagnitude;
+            out.TL = base + biasTorque;
+            out.TR = base - biasTorque;
             out.carrierOmega = 0.5 * (omegaL + omegaR);
-            out.lockTorqueDifference = lockTorqueDifference * slipScale;
+            out.lockTorqueDifference = 2 * biasMagnitude;
+            out.availableLockTorqueDifference = lockTorqueDifference * slipScale;
             out.accelRampAngleDeg = obj.accelRampAngleDeg;
             out.decelRampAngleDeg = obj.decelRampAngleDeg;
         end
@@ -112,6 +121,25 @@ classdef DrexlerRampPlateDifferential < lts.components.Powertrain.DifferentialCo
     end
 
     methods (Access = private)
+        function magnitude = boundedBiasMagnitude(obj, capacity, dw, wheelInertia, dt)
+            if abs(dw) <= eps || capacity <= 0
+                magnitude = 0;
+                return;
+            end
+
+            magnitude = capacity;
+            if isfinite(wheelInertia) && wheelInertia > 0 && ...
+                    isfinite(dt) && dt > 0
+                damping = obj.relativeSpeedDamping;
+                if ~isfinite(damping)
+                    damping = 0.5;
+                end
+                damping = lts.util.clamp(damping, 0, 0.95);
+                impulseCapacity = 0.5 * damping * wheelInertia * abs(dw) / dt;
+                magnitude = min(magnitude, impulseCapacity);
+            end
+        end
+
         function multiplier = rampMultiplier(~, angleDeg)
             multiplier = 1 / tand(angleDeg);
         end

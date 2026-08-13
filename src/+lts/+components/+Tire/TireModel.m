@@ -11,6 +11,9 @@ classdef (Abstract) TireModel
     % Standalone query methods (computeLateralForce, computeLongitudinalForce,
     % getPeakFriction) are used by scripts and diagnostics, not the main loop.
     %
+    % The mu arguments are retained for source compatibility; the built-in
+    % model derives grip entirely from tire data and ignores surface mu.
+    %
     % Concrete implementations:
     %   - PacejkaTire — Pacejka Magic Formula model via MFeval
 

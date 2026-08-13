@@ -1,8 +1,7 @@
 classdef AeroManager < lts.components.Aero.AeroComponent
     % AEROMANAGER Aggregates multiple AeroComponent objects
     % Resolves each component's downforce to front/rear axle loads via
-    % moment balance, and computes total drag with its effective height
-    % above the CG.
+    % moment balance, and computes the drag-weighted center of pressure.
     %
     % Usage:
     %   mgr = AeroManager();
@@ -12,7 +11,8 @@ classdef AeroManager < lts.components.Aero.AeroComponent
     %     forces.Fz_front    - Downforce resolved to front axle [N]
     %     forces.Fz_rear     - Downforce resolved to rear axle [N]
     %     forces.F_drag      - Total drag force [N]
-    %     forces.dragHeight  - Drag resultant height above CG [m]
+    %     forces.dragHeight    - Drag resultant height above ground [m]
+    %     forces.dragXPosition - Drag resultant position from CG [m]
     
     properties
         components = {}       % Cell array of AeroComponent objects
@@ -75,7 +75,8 @@ classdef AeroManager < lts.components.Aero.AeroComponent
             %     Fz_front    - Downforce on front axle [N]
             %     Fz_rear     - Downforce on rear axle [N]
             %     F_drag      - Total drag force [N]
-            %     dragHeight  - Height of drag resultant above CG [m]
+            %     dragHeight    - Absolute height of drag resultant [m]
+            %     dragXPosition - Longitudinal drag position from CG [m]
             %
             %   Each component's downforce is split between front and rear
             %   axles using moment balance about the CG:
@@ -84,20 +85,20 @@ classdef AeroManager < lts.components.Aero.AeroComponent
             %   where xi is the component's longitudinal position from CG
             %   (positive forward), a = CG-to-front-axle, b = CG-to-rear-axle.
             %
-            %   Drag height is the weighted-average component height minus
-            %   the CG height.
+            %   Drag height and longitudinal position are drag-force-weighted
+            %   resultants. Height is absolute above the ground reference;
+            %   longitudinal position is relative to the CG.
             
             wb = vehicleState.vehicleManager.wheelbase;
-            cgHeight = vehicleState.vehicleManager.cgHeight;
             frontWeightFrac = vehicleState.vehicleManager.staticFrontWeight;
             
-            a = wb * (1 - frontWeightFrac);  % CG to front axle [m]
             b = wb * frontWeightFrac;         % CG to rear axle [m]
             
             Fz_front = 0;
             Fz_rear = 0;
             F_drag = 0;
-            dragMoment = 0;  % Sum of Di * zi for weighted average height
+            dragHeightMoment = 0;  % Sum of Di * zi
+            dragXMoment = 0;       % Sum of Di * xi
             
             for i = 1:numel(obj.components)
                 comp = obj.components{i};
@@ -113,27 +114,30 @@ classdef AeroManager < lts.components.Aero.AeroComponent
                 
                 % Resolve downforce to axles via moment balance about CG
                 frontFrac = (b + xi) / wb;
-                frontFrac = lts.util.saturate(frontFrac);
                 
                 Fz_front = Fz_front + Fi * frontFrac;
                 Fz_rear  = Fz_rear  + Fi * (1 - frontFrac);
                 
                 % Accumulate drag and height-weighted drag
                 F_drag = F_drag + Di;
-                dragMoment = dragMoment + Di * zi;
+                dragHeightMoment = dragHeightMoment + Di * zi;
+                dragXMoment = dragXMoment + Di * xi;
             end
             
-            % Drag resultant height above CG
+            % Drag resultant center of pressure.
             if F_drag > 0
-                dragHeight = dragMoment / F_drag - cgHeight;
+                dragHeight = dragHeightMoment / F_drag;
+                dragXPosition = dragXMoment / F_drag;
             else
                 dragHeight = 0;
+                dragXPosition = 0;
             end
             
             forces.Fz_front   = Fz_front;
             forces.Fz_rear    = Fz_rear;
             forces.F_drag     = F_drag;
             forces.dragHeight = dragHeight;
+            forces.dragXPosition = dragXPosition;
         end
     end
 end

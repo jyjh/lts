@@ -2,30 +2,33 @@ classdef AntiRollBar
     % ANTIROLLBAR Anti-roll bar (sway bar / stabilizer bar) parameter model
     %
     % A pure-data value class describing one axle's anti-roll bar. It carries
-    % no dynamics; it exposes the bar's effective wheel-rate roll stiffness
-    % Kw_bar [N/m] — the ARB's contribution to that axle's roll stiffness,
-    % already referenced to the wheel (including motion ratio and the
-    % drop-link / control-arm lever arm).
+    % no dynamics; it exposes the bar's differential wheel-coupling rate
+    % B_bar [N/m], already referenced to wheel travel (including motion ratio
+    % and the drop-link / control-arm lever arm).
     %
     % Used by SuspensionManager to derive the front/rear elastic load-
     % transfer split from actual spring + ARB stiffness, replacing the
     % legacy fixed roll-stiffness-distribution scalar.
     %
-    % Wheel-rate conversion (standard ARB-at-the-wheel formula):
-    %   Kw_bar = stiffness * motionRatio^2 / leverArm^2
+    % Differential wheel-coupling conversion for a torsional bar:
+    %   B_bar = stiffness * motionRatio^2 / leverArm^2
+    %   F_right = B_bar * (z_right - z_left), F_left = -F_right
     % Dimensional check with stiffness as a torsional rate [N*m/rad]:
     %   (N*m/rad) * (-)^2 / (m^2) = N/(m*rad) = N/m at the wheel
     % (radians are dimensionless). A bar-end linear rate [N/m] would NOT
     % produce a dimensionally consistent wheel rate through this formula.
+    % The equivalent independent-corner rate used for axle roll is 2*B_bar
+    % because both equal-and-opposite forces contribute to the roll moment.
     %
-    % Set enabled = false (or stiffness = 0) to disable the bar; Kw_bar then
+    % Set enabled = false (or stiffness = 0) to disable the bar; B_bar then
     % returns 0 and the axle's roll stiffness is just its wheel springs.
 
     properties
         % Torsional stiffness of the bar about its axis [N*m/rad]. This is
         % the torque per radian of bar twist (T_bar = stiffness * theta),
-        % not a linear end rate. The wheel-rate conversion divides by
-        % leverArm^2 to resolve it to the contact patch.
+        % not a linear end rate. The lever-arm division in
+        % getWheelRateStiffness converts torque per bar angle into a
+        % differential force rate at the wheel.
         stiffness = 0
 
         % Installation motion ratio between wheel travel and the ARB end
@@ -47,6 +50,7 @@ classdef AntiRollBar
             %   AntiRollBar()                              % disabled
             %   AntiRollBar(stiffness, motionRatio, leverArm)
             %   AntiRollBar(stiffness, motionRatio, leverArm, enabled)
+            %   stiffness is torsional rate [N*m/rad].
             if nargin >= 1 && ~isempty(stiffness)
                 obj.stiffness = max(0, stiffness);
             end
@@ -62,9 +66,9 @@ classdef AntiRollBar
         end
 
         function kw = getWheelRateStiffness(obj)
-            % GETWHEELRATESTIFFNESS Effective wheel-rate roll stiffness [N/m].
-            % The ARB's contribution to this axle's roll stiffness at the
-            % wheel. Zero when disabled or when stiffness is zero.
+            % GETWHEELRATESTIFFNESS Differential wheel-coupling rate [N/m].
+            % This is the force at either wheel per left-right travel
+            % difference. Zero when disabled or when stiffness is zero.
             if ~obj.enabled || obj.stiffness <= 0
                 kw = 0;
                 return;
