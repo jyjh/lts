@@ -51,8 +51,6 @@ classdef CorrelationReplayProfile
     properties (Access = private)
         timeSampleCache = struct()
         distanceSampleCache = struct()
-        timeFastSampleCache = struct()
-        distanceFastSampleCache = struct()
     end
 
     methods
@@ -63,87 +61,30 @@ classdef CorrelationReplayProfile
 
             parser = inputParser;
             parser.addParameter('SourceFile', '', @(x) ischar(x) || isstring(x));
-            parser.addParameter('Time', [], @isnumeric);
-            parser.addParameter('Distance', [], @isnumeric);
-            parser.addParameter('Throttle', [], @isnumeric);
-            parser.addParameter('Brake', [], @isnumeric);
-            parser.addParameter('BrakePressureFrontBar', [], @isnumeric);
-            parser.addParameter('BrakePressureRearBar', [], @isnumeric);
-            parser.addParameter('RegenTorqueNm', [], @isnumeric);
-            parser.addParameter('MotorTorqueCommandNm', [], @isnumeric);
-            parser.addParameter('MotorTorqueDeliveredNm', [], @isnumeric);
-            parser.addParameter('MotorRpm', [], @isnumeric);
-            parser.addParameter('PackVoltageV', [], @isnumeric);
-            parser.addParameter('PackCurrentA', [], @isnumeric);
-            parser.addParameter('Steer', [], @isnumeric);
-            parser.addParameter('Speed', [], @isnumeric);
-            parser.addParameter('WheelSpeedFL', [], @isnumeric);
-            parser.addParameter('WheelSpeedFR', [], @isnumeric);
-            parser.addParameter('WheelSpeedRL', [], @isnumeric);
-            parser.addParameter('WheelSpeedRR', [], @isnumeric);
-            parser.addParameter('Vx', [], @isnumeric);
-            parser.addParameter('Vy', [], @isnumeric);
-            parser.addParameter('BodySlip', [], @isnumeric);
-            parser.addParameter('Yaw', [], @isnumeric);
-            parser.addParameter('YawRate', [], @isnumeric);
-            parser.addParameter('X', [], @isnumeric);
-            parser.addParameter('Y', [], @isnumeric);
-            parser.addParameter('GpsLat', [], @isnumeric);
-            parser.addParameter('GpsLon', [], @isnumeric);
-            parser.addParameter('GpsCourse', [], @isnumeric);
-            parser.addParameter('LatAccelG', [], @isnumeric);
-            parser.addParameter('FrontLatAccelG', [], @isnumeric);
-            parser.addParameter('RearLatAccelG', [], @isnumeric);
-            parser.addParameter('FrontLongAccelG', [], @isnumeric);
-            parser.addParameter('RearLongAccelG', [], @isnumeric);
-            parser.addParameter('LongAccelG', [], @isnumeric);
+            channelNames = { ...
+                'Time','Distance','Throttle','Brake','BrakePressureFrontBar', ...
+                'BrakePressureRearBar','RegenTorqueNm','MotorTorqueCommandNm', ...
+                'MotorTorqueDeliveredNm','MotorRpm','PackVoltageV','PackCurrentA', ...
+                'Steer','Speed','WheelSpeedFL','WheelSpeedFR','WheelSpeedRL', ...
+                'WheelSpeedRR','Vx','Vy','BodySlip','Yaw','YawRate','X','Y', ...
+                'GpsLat','GpsLon','GpsCourse','LatAccelG','FrontLatAccelG', ...
+                'RearLatAccelG','FrontLongAccelG','RearLongAccelG','LongAccelG'};
+            for i = 1:numel(channelNames)
+                parser.addParameter(channelNames{i}, [], @isnumeric);
+            end
             parser.parse(varargin{:});
 
             obj.sourceFile = char(parser.Results.SourceFile);
-            obj.time = parser.Results.Time(:);
-            obj.distance = parser.Results.Distance(:);
-            obj.throttle = parser.Results.Throttle(:);
-            obj.brake = parser.Results.Brake(:);
-            obj.brakePressureFrontBar = parser.Results.BrakePressureFrontBar(:);
-            obj.brakePressureRearBar = parser.Results.BrakePressureRearBar(:);
-            obj.regenTorqueNm = parser.Results.RegenTorqueNm(:);
-            obj.motorTorqueCommandNm = parser.Results.MotorTorqueCommandNm(:);
-            obj.motorTorqueDeliveredNm = parser.Results.MotorTorqueDeliveredNm(:);
-            obj.motorRpm = parser.Results.MotorRpm(:);
-            obj.packVoltageV = parser.Results.PackVoltageV(:);
-            obj.packCurrentA = parser.Results.PackCurrentA(:);
-            obj.steer = parser.Results.Steer(:);
-            obj.speed = parser.Results.Speed(:);
-            obj.wheelSpeedFL = parser.Results.WheelSpeedFL(:);
-            obj.wheelSpeedFR = parser.Results.WheelSpeedFR(:);
-            obj.wheelSpeedRL = parser.Results.WheelSpeedRL(:);
-            obj.wheelSpeedRR = parser.Results.WheelSpeedRR(:);
-            obj.vx = parser.Results.Vx(:);
-            obj.vy = parser.Results.Vy(:);
-            obj.bodySlip = parser.Results.BodySlip(:);
-            obj.yaw = parser.Results.Yaw(:);
-            obj.yawRate = parser.Results.YawRate(:);
-            obj.x = parser.Results.X(:);
-            obj.y = parser.Results.Y(:);
-            obj.gpsLat = parser.Results.GpsLat(:);
-            obj.gpsLon = parser.Results.GpsLon(:);
-            obj.gpsCourse = parser.Results.GpsCourse(:);
-            obj.latAccelG = parser.Results.LatAccelG(:);
-            obj.frontLatAccelG = parser.Results.FrontLatAccelG(:);
-            obj.rearLatAccelG = parser.Results.RearLatAccelG(:);
-            obj.frontLongAccelG = parser.Results.FrontLongAccelG(:);
-            obj.rearLongAccelG = parser.Results.RearLongAccelG(:);
-            obj.longAccelG = parser.Results.LongAccelG(:);
+            for i = 1:numel(channelNames)
+                property = channelNames{i};
+                property(1) = lower(property(1));
+                obj.(property) = parser.Results.(channelNames{i})(:);
+            end
             obj = obj.validateAndComplete();
         end
 
         function input = sampleByTime(obj, time)
-            if isfield(obj.timeFastSampleCache, 'useFast') && ...
-                    obj.timeFastSampleCache.useFast
-                input = obj.fastSampleAt(obj.timeFastSampleCache, time);
-            else
-                input = obj.sampleAt(obj.time, obj.timeSampleCache, time);
-            end
+            input = obj.sampleAt(obj.time, obj.timeSampleCache, time);
         end
 
         function input = sampleByDistance(obj, distance)
@@ -151,12 +92,7 @@ classdef CorrelationReplayProfile
                 error('lts_correlation_CorrelationReplayProfile:MissingDistance', ...
                     'Distance-domain replay requires a distance_m channel or speed-derived distance.');
             end
-            if isfield(obj.distanceFastSampleCache, 'useFast') && ...
-                    obj.distanceFastSampleCache.useFast
-                input = obj.fastSampleAt(obj.distanceFastSampleCache, distance);
-            else
-                input = obj.sampleAt(obj.distance, obj.distanceSampleCache, distance);
-            end
+            input = obj.sampleAt(obj.distance, obj.distanceSampleCache, distance);
         end
 
         function value = initialSpeed(obj)
@@ -438,8 +374,8 @@ classdef CorrelationReplayProfile
             alignedVoltage = obj.shiftTimeChannel(obj.packVoltageV, queryTime);
             alignedCurrent = obj.shiftTimeChannel(obj.packCurrentA, queryTime);
             chargingPowerW = max(0, -alignedVoltage .* alignedCurrent);
-            motorRpm = abs(obj.motorRpm);
-            motorOmega = motorRpm * (2 * pi / 60);
+            rpmMagnitude = abs(obj.motorRpm);
+            motorOmega = rpmMagnitude * (2 * pi / 60);
             measuredTorqueNm = obj.motorTorqueDeliveredNm;
             measuredRegenPowerW = max(0, -measuredTorqueNm) .* motorOmega;
             % The R25 regen channel is the available negative-torque limit,
@@ -456,7 +392,7 @@ classdef CorrelationReplayProfile
                 isfinite(chargingPowerW) & isfinite(motorOmega) & ...
                 regenRequestNm <= -double(opts.RegenRequestThresholdNm) & ...
                 chargingPowerW >= double(opts.MinimumChargingPowerW) & ...
-                motorRpm >= double(opts.MinimumMotorSpeedRpm);
+                rpmMagnitude >= double(opts.MinimumMotorSpeedRpm);
             signContradiction = active & measuredTorqueNm >= 0;
             powerDeficit = active & chargingPowerW > ...
                 double(opts.MaximumRegenEfficiency) .* measuredRegenPowerW + ...
@@ -608,32 +544,21 @@ classdef CorrelationReplayProfile
 
             obj.throttle = obj.clamp01(obj.requireColumnLength(obj.throttle, n, 'throttle'));
             obj.brake = obj.clamp01(obj.requireColumnLength(obj.brake, n, 'brake'));
-            obj.brakePressureFrontBar = obj.optionalColumn( ...
-                obj.brakePressureFrontBar, n, NaN, 'brakePressureFrontBar');
-            obj.brakePressureRearBar = obj.optionalColumn( ...
-                obj.brakePressureRearBar, n, NaN, 'brakePressureRearBar');
-            obj.regenTorqueNm = obj.optionalColumn( ...
-                obj.regenTorqueNm, n, NaN, 'regenTorqueNm');
-            obj.motorTorqueCommandNm = obj.optionalColumn( ...
-                obj.motorTorqueCommandNm, n, NaN, 'motorTorqueCommandNm');
-            obj.motorTorqueDeliveredNm = obj.optionalColumn( ...
-                obj.motorTorqueDeliveredNm, n, NaN, 'motorTorqueDeliveredNm');
-            obj.motorRpm = obj.optionalColumn( ...
-                obj.motorRpm, n, NaN, 'motorRpm');
-            obj.packVoltageV = obj.optionalColumn( ...
-                obj.packVoltageV, n, NaN, 'packVoltageV');
-            obj.packCurrentA = obj.optionalColumn( ...
-                obj.packCurrentA, n, NaN, 'packCurrentA');
+            optionalFields = { ...
+                'brakePressureFrontBar','brakePressureRearBar','regenTorqueNm', ...
+                'motorTorqueCommandNm','motorTorqueDeliveredNm','motorRpm', ...
+                'packVoltageV','packCurrentA'};
+            for i = 1:numel(optionalFields)
+                field = optionalFields{i};
+                obj.(field) = obj.optionalColumn(obj.(field), n, NaN, field);
+            end
             obj.steer = obj.requireColumnLength(obj.steer, n, 'steer');
             obj.speed = max(0, obj.requireColumnLength(obj.speed, n, 'speed'));
-            obj.wheelSpeedFL = obj.nonnegativeOptionalColumn( ...
-                obj.wheelSpeedFL, n, 'wheelSpeedFL');
-            obj.wheelSpeedFR = obj.nonnegativeOptionalColumn( ...
-                obj.wheelSpeedFR, n, 'wheelSpeedFR');
-            obj.wheelSpeedRL = obj.nonnegativeOptionalColumn( ...
-                obj.wheelSpeedRL, n, 'wheelSpeedRL');
-            obj.wheelSpeedRR = obj.nonnegativeOptionalColumn( ...
-                obj.wheelSpeedRR, n, 'wheelSpeedRR');
+            wheelFields = {'wheelSpeedFL','wheelSpeedFR','wheelSpeedRL','wheelSpeedRR'};
+            for i = 1:numel(wheelFields)
+                field = wheelFields{i};
+                obj.(field) = obj.nonnegativeOptionalColumn(obj.(field), n, field);
+            end
 
             if isempty(obj.distance) || all(~isfinite(obj.distance))
                 obj.distance = obj.integrateDistanceFromSpeed();
@@ -642,25 +567,17 @@ classdef CorrelationReplayProfile
                 obj.distance = obj.distance - obj.distance(1);
             end
 
-            obj.vx = obj.optionalColumn(obj.vx, n, NaN, 'vx');
-            obj.vy = obj.optionalColumn(obj.vy, n, NaN, 'vy');
-            obj.bodySlip = obj.optionalColumn(obj.bodySlip, n, NaN, 'bodySlip');
-            obj.yaw = obj.optionalColumn(obj.yaw, n, NaN, 'yaw');
-            obj.yawRate = obj.optionalColumn(obj.yawRate, n, NaN, 'yawRate');
-            obj.x = obj.optionalColumn(obj.x, n, NaN, 'x');
-            obj.y = obj.optionalColumn(obj.y, n, NaN, 'y');
-            obj.gpsLat = obj.optionalColumn(obj.gpsLat, n, NaN, 'gpsLat');
-            obj.gpsLon = obj.optionalColumn(obj.gpsLon, n, NaN, 'gpsLon');
-            obj.gpsCourse = obj.optionalColumn(obj.gpsCourse, n, NaN, 'gpsCourse');
-            obj.latAccelG = obj.optionalColumn(obj.latAccelG, n, NaN, 'latAccelG');
-            obj.frontLatAccelG = obj.optionalColumn(obj.frontLatAccelG, n, NaN, 'frontLatAccelG');
-            obj.rearLatAccelG = obj.optionalColumn(obj.rearLatAccelG, n, NaN, 'rearLatAccelG');
+            optionalFields = { ...
+                'vx','vy','bodySlip','yaw','yawRate','x','y','gpsLat','gpsLon', ...
+                'gpsCourse','latAccelG','frontLatAccelG','rearLatAccelG', ...
+                'frontLongAccelG','rearLongAccelG','longAccelG'};
+            for i = 1:numel(optionalFields)
+                field = optionalFields{i};
+                obj.(field) = obj.optionalColumn(obj.(field), n, NaN, field);
+            end
             if all(~isfinite(obj.frontLatAccelG)) && any(isfinite(obj.latAccelG))
                 obj.frontLatAccelG = obj.latAccelG;
             end
-            obj.frontLongAccelG = obj.optionalColumn(obj.frontLongAccelG, n, NaN, 'frontLongAccelG');
-            obj.rearLongAccelG = obj.optionalColumn(obj.rearLongAccelG, n, NaN, 'rearLongAccelG');
-            obj.longAccelG = obj.optionalColumn(obj.longAccelG, n, NaN, 'longAccelG');
             if all(~isfinite(obj.frontLongAccelG)) && any(isfinite(obj.longAccelG))
                 obj.frontLongAccelG = obj.longAccelG;
             end
@@ -717,7 +634,7 @@ classdef CorrelationReplayProfile
             % calls (each with their own lookup overhead) with one vectorised op.
             if ~isempty(cache.batchAxis)
                 q = max(cache.batchAxis(1), min(cache.batchAxis(end), query));
-                row = interp1(cache.batchAxis, cache.batchMatrix, q, 'linear', 'nearest');
+                row = interp1(cache.batchAxis, cache.batchMatrix, q, 'linear');
                 input = obj.sampleRowToInput(row);
                 return;
             end
@@ -744,80 +661,40 @@ classdef CorrelationReplayProfile
         function obj = buildSampleCaches(obj)
             obj.timeSampleCache = obj.buildAxisCache(obj.time);
             obj.distanceSampleCache = obj.buildAxisCache(obj.distance);
-            obj.timeFastSampleCache = obj.buildFastSampleCache(obj.time);
-            obj.distanceFastSampleCache = obj.buildFastSampleCache(obj.distance);
         end
 
         function cache = buildAxisCache(obj, axis)
-            cache = struct( ...
-                'throttle', obj.buildInterpCache(axis, obj.throttle), ...
-                'brake', obj.buildInterpCache(axis, obj.brake), ...
-                'brakePressureFrontBar', obj.buildInterpCache(axis, obj.brakePressureFrontBar), ...
-                'brakePressureRearBar', obj.buildInterpCache(axis, obj.brakePressureRearBar), ...
-                'regenTorqueNm', obj.buildInterpCache(axis, obj.regenTorqueNm), ...
-                'motorTorqueCommandNm', obj.buildInterpCache(axis, obj.motorTorqueCommandNm), ...
-                'motorTorqueDeliveredNm', obj.buildInterpCache(axis, obj.motorTorqueDeliveredNm), ...
-                'motorRpm', obj.buildInterpCache(axis, obj.motorRpm), ...
-                'packVoltageV', obj.buildInterpCache(axis, obj.packVoltageV), ...
-                'packCurrentA', obj.buildInterpCache(axis, obj.packCurrentA), ...
-                'steer', obj.buildInterpCache(axis, obj.steer), ...
-                'speed', obj.buildInterpCache(axis, obj.speed), ...
-                'time', obj.buildInterpCache(axis, obj.time), ...
-                'distance', obj.buildInterpCache(axis, obj.distance));
-
-            % P4-A: Build a unified N×13 channel matrix so sampleAt() can use
-            % a single interp1 call instead of 12 individual griddedInterpolants.
-            % The matrix is evaluated on the interpolant axes already cleaned up
-            % by buildInterpCache, so it inherits the same NaN filtering and
-            % deduplication without repeating that work.
             fields = obj.sampleFieldOrder();
-            cacheFields = {'throttle','brake','brakePressureFrontBar', ...
-                'brakePressureRearBar','regenTorqueNm','motorTorqueCommandNm', ...
-                'motorTorqueDeliveredNm', ...
-                'motorRpm','packVoltageV','packCurrentA','steer','speed', ...
-                'time','distance'};
-            batchAxis   = [];
-            batchMatrix = [];
-            try
-                % Use the axis from the first non-missing, non-scalar channel.
-                for fi = 1:numel(cacheFields)
-                    ch = cache.(cacheFields{fi});
-                    if ~ch.isMissing && ~ch.isScalar && numel(ch.axis) >= 2
-                        batchAxis = ch.axis(:);
-                        break;
-                    end
-                end
-                if numel(batchAxis) >= 2
-                    nPts   = numel(batchAxis);
-                    nCh    = numel(fields);
-                    batchMatrix = NaN(nPts, nCh);
-                    for fi = 1:nCh
-                        ch = cache.(cacheFields{fi});
-                        if ch.isMissing
-                            % Leave column as NaN (treated as missing by sampleRowToInput).
-                        elseif ch.isScalar
-                            batchMatrix(:, fi) = ch.values(1);
-                        else
-                            % Evaluate the already-built griddedInterpolant on
-                            % the common axis — this runs once at construction,
-                            % not once per simulation step.
-                            q = max(ch.axis(1), min(ch.axis(end), batchAxis));
-                            batchMatrix(:, fi) = ch.interpolant(q);
-                        end
-                    end
-                end
-            catch err
-                % Non-fatal: fall back to per-channel lookup path, but emit a
-                % one-shot warning so a config/encoding bug is diagnosable
-                % rather than appearing as a silent "no_scorable_channels".
-                warning('lts_correlation_CorrelationReplayProfile:BatchCacheFailed', ...
-                    'Batch sample-cache build failed (%s); falling back to per-channel lookup.', ...
-                    err.identifier);
-                batchAxis   = [];
-                batchMatrix = [];
+            cache = struct();
+            for i = 1:numel(fields)
+                field = fields{i};
+                cache.(field) = obj.buildInterpCache(axis, obj.(field));
             end
-            cache.batchAxis   = batchAxis;
-            cache.batchMatrix = batchMatrix;
+
+            cache.batchAxis = [];
+            cache.batchMatrix = [];
+            for i = 1:numel(fields)
+                channel = cache.(fields{i});
+                if ~channel.isMissing && ~channel.isScalar
+                    cache.batchAxis = channel.axis(:);
+                    break;
+                end
+            end
+            if isempty(cache.batchAxis)
+                return;
+            end
+
+            cache.batchMatrix = NaN(numel(cache.batchAxis), numel(fields));
+            for i = 1:numel(fields)
+                channel = cache.(fields{i});
+                if channel.isScalar
+                    cache.batchMatrix(:, i) = channel.values(1);
+                elseif ~channel.isMissing
+                    query = max(channel.axis(1), ...
+                        min(channel.axis(end), cache.batchAxis));
+                    cache.batchMatrix(:, i) = channel.interpolant(query);
+                end
+            end
         end
 
         function cache = buildInterpCache(~, axis, values)
@@ -831,15 +708,13 @@ classdef CorrelationReplayProfile
             keep = isfinite(axis(:)) & isfinite(values);
             axis = axis(keep);
             values = values(keep);
-            % P1-D: unique('sorted') deduplicates and sorts in a single pass,
-            % replacing the previous unique('stable') + sort two-step sequence.
             [axis, ia] = unique(axis, 'sorted');
             values = values(ia);
 
             if isempty(axis)
                 cache = struct('axis', [], 'values', [], ...
                     'interpolant', [], 'isMissing', true, 'isScalar', false);
-            elseif numel(axis) == 1
+            elseif isscalar(axis)
                 cache = struct('axis', axis, 'values', values, ...
                     'interpolant', [], 'isMissing', false, 'isScalar', true);
             else
@@ -858,73 +733,6 @@ classdef CorrelationReplayProfile
                 query = max(cache.axis(1), min(cache.axis(end), query));
                 value = cache.interpolant(query);
             end
-        end
-
-        function cache = buildFastSampleCache(obj, axis)
-            fields = obj.sampleFieldOrder();
-            fullAxis = double(axis(:));
-            validAxis = isfinite(fullAxis);
-            filteredAxis = fullAxis(validAxis);
-            if numel(filteredAxis) < 2
-                cache = struct('useFast', false);
-                return;
-            end
-
-            [uniqueAxis, ia] = unique(filteredAxis, 'stable');
-            [axis, order] = sort(uniqueAxis);
-            validIdx = find(validAxis);
-            sourceRows = validIdx(ia(order));
-            if numel(axis) < 2
-                cache = struct('useFast', false);
-                return;
-            end
-
-            dAxis = diff(axis);
-            step = median(dAxis);
-            isUniform = isfinite(step) && step > 0 && ...
-                max(abs(dAxis - step)) <= max(1e-10, 1e-7 * step);
-            if ~isUniform
-                cache = struct('useFast', false);
-                return;
-            end
-
-            values = NaN(numel(axis), numel(fields));
-            sourceAxis = double(axis(:));
-            for i = 1:numel(fields)
-                raw = obj.(fields{i});
-                raw = double(raw(:));
-                raw = raw(sourceRows);
-                values(:, i) = obj.fillChannelOnAxis(sourceAxis, raw, sourceAxis);
-            end
-
-            cache = struct( ...
-                'useFast', true, ...
-                'axis0', axis(1), ...
-                'axisEnd', axis(end), ...
-                'step', step, ...
-                'invStep', 1 / step, ...
-                'n', numel(axis), ...
-                'values', values);
-        end
-
-        function input = fastSampleAt(obj, cache, query)
-            query = double(query);
-            if ~isfinite(query)
-                query = cache.axis0;
-            end
-            if query <= cache.axis0 || cache.n == 1
-                row = cache.values(1, :);
-            elseif query >= cache.axisEnd
-                row = cache.values(cache.n, :);
-            else
-                pos = (query - cache.axis0) * cache.invStep + 1;
-                idx0 = floor(pos);
-                frac = pos - idx0;
-                idx0 = max(1, min(idx0, cache.n - 1));
-                row = cache.values(idx0, :) + ...
-                    frac .* (cache.values(idx0 + 1, :) - cache.values(idx0, :));
-            end
-            input = obj.sampleRowToInput(row);
         end
 
         function input = sampleRowToInput(~, row)
@@ -953,27 +761,6 @@ classdef CorrelationReplayProfile
                 'motorTorqueDeliveredNm', 'motorRpm', ...
                 'packVoltageV', 'packCurrentA', 'steer', 'speed', ...
                 'time', 'distance'};
-        end
-
-        function values = fillChannelOnAxis(~, commonAxis, rawValues, sourceAxis)
-            values = NaN(size(commonAxis));
-            keep = isfinite(sourceAxis) & isfinite(rawValues);
-            if ~any(keep)
-                return;
-            end
-            x = sourceAxis(keep);
-            y = rawValues(keep);
-            [x, ia] = unique(x, 'stable');
-            y = y(ia);
-            [x, order] = sort(x);
-            y = y(order);
-            if numel(x) == 1
-                values(:) = y(1);
-                return;
-            end
-            values = interp1(x, y, commonAxis, 'linear', NaN);
-            values(commonAxis < x(1)) = y(1);
-            values(commonAxis > x(end)) = y(end);
         end
 
         function values = shiftTimeChannel(obj, sourceValues, queryTime)

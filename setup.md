@@ -492,7 +492,16 @@ cfg.chassis.torsionalRigidity
 cfg.chassis.torsionalDamping
 ```
 
-Use physical test data where possible.
+In the normal coupled vehicle built by `VehicleManager.fromConfig`, the first
+six values are legacy standalone fallbacks only. The linked chassis reacts
+against the current four-corner suspension forces, so heave/pitch/roll
+stiffness and damping come from the configured springs, dampers, motion ratios,
+anti-roll bars, and bump stops without duplicating them here. The two torsional
+values always remain active chassis properties.
+
+Use physical test data where possible. A value of `Inf` for
+`torsionalRigidity` is supported and is solved as an exact rigid constraint,
+not as a large penalty spring.
 
 Be careful with torsional rigidity units:
 
@@ -500,10 +509,8 @@ Be careful with torsional rigidity units:
 N·m/degree × 180/π = N·m/rad
 ```
 
-Avoid counting the same stiffness twice. For example, if suspension springs and
-ARBs already produce the roll stiffness, do not also force a duplicate chassis
-roll stiffness into load transfer without understanding how the model combines
-them.
+Standalone `SimpleChassis` use without a linked suspension may still use the
+six fallback coefficients. Such construction must pass sprung mass explicitly.
 
 ## 9. Powertrain and differential
 

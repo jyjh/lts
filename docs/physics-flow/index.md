@@ -351,13 +351,19 @@ Rolling resistance is already included as a wheel torque and therefore appears t
 
 After tire forces determine `ax`, `ay`, and `yawAccel`, `SimpleChassis.updateFromAccelerations` advances platform attitude for the next step.
 
-Heave is driven by aero downforce and resisted by platform stiffness/damping:
+With the normal linked suspension, heave is driven by aero downforce and
+resisted by the sum of the current corner suspension reactions above static
+equilibrium:
 
 ```text
 heaveForce = Fz_aero_front + Fz_aero_rear
-           - K_heave * heave
-           - C_heave * heaveRate
+           - sum(cornerSuspensionForce - cornerStaticLoad)
 ```
+
+Those reactions already contain the corner spring, compression/rebound damper,
+motion-ratio, bump-stop, and anti-roll-bar effects. The configured chassis
+heave/pitch/roll stiffness and damping coefficients are used only by a
+standalone chassis with no linked suspension.
 
 The aerodynamic resultant reports absolute height above ground. The chassis
 removes drag from the net acceleration before forming the ground-force term,
@@ -368,24 +374,24 @@ ax_non_aero = ax + F_drag_longitudinal / totalMass
 M_pitch = sprungMass * ax_non_aero * cg_height
         + (Fz_rear*a_rear - Fz_front*a_front)
         + F_drag_longitudinal * (dragHeight - cg_height)
-        - K_pitch*pitch
-        - C_pitch*pitchRate
+        + (reaction_front*a_front - reaction_rear*a_rear)
 ```
 
-Roll is split into front and rear roll degrees of freedom. Each axle receives the lateral roll moment from its own axle-center lateral acceleration, is resisted by axle roll stiffness, and is coupled to the other axle by chassis torsional rigidity:
+Roll is split into front and rear roll degrees of freedom. Each axle receives
+the lateral roll moment from its own axle-center lateral acceleration, is
+resisted by the actual left/right suspension-reaction moment, and is coupled to
+the other axle by chassis torsional rigidity:
 
 ```text
 ay_front = ay + yawAccel*frontArm
 ay_rear = ay - yawAccel*rearArm
 twist = frontRoll - rearRoll
 M_front_roll = sprungMass*frontWeight*ay_front*cg_height
-             - K_roll_front*frontRoll
-             - C_roll_front*frontRollRate
+             + (reaction_FL - reaction_FR)*track/2
              - K_torsion*twist
              - C_torsion*twistRate
 M_rear_roll = sprungMass*rearWeight*ay_rear*cg_height
-             - K_roll_rear*rearRoll
-             - C_roll_rear*rearRollRate
+             + (reaction_RL - reaction_RR)*track/2
              + K_torsion*twist
              + C_torsion*twistRate
 ```

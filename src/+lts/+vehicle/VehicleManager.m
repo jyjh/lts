@@ -284,9 +284,14 @@ classdef VehicleManager
             suspension.warmup(vehicle.totalMass, dt);
 
             %% ---- Chassis attitude model (heave/pitch/roll DOFs) ----
-            sprungMass = max(config.totalMass - 4 * config.unsprungMass, eps);
+            % VehicleConfig.validate guarantees this is strictly positive;
+            % do not mask an invalid mass breakdown with an epsilon clamp.
+            sprungMass = config.totalMass - 4 * config.unsprungMass;
             chassis = lts.components.Chassis.SimpleChassis(vehicle, sprungMass);
-            % Apply configured platform stiffness/damping.
+            % Apply legacy standalone fallbacks. Once the suspension is
+            % linked below, SimpleChassis bypasses these six coefficients and
+            % reacts against the actual corner spring/damper/bump-stop/ARB
+            % forces. Torsional rigidity/damping remain chassis properties.
             chassis.heaveStiffness     = config.chassis.heaveStiffness;
             chassis.heaveDamping       = config.chassis.heaveDamping;
             chassis.pitchStiffness     = config.chassis.pitchStiffness;

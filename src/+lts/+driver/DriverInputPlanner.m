@@ -156,7 +156,7 @@ classdef DriverInputPlanner
 
             % Iterating lets speed-dependent aero influence the GGV envelope
             % without turning this into a full trajectory optimization.
-            for iter = 1:3 %#ok<NASGU>
+            for iter = 1:3
                 for i = 1:n
                     if abs(curvature(i)) > 1e-6
                         limits = obj.estimateGGVLimits( ...
@@ -174,7 +174,7 @@ classdef DriverInputPlanner
             % decel requests bounded by the car's local capability rather than
             % by a stale pre-sweep speed guess.
             maxBrakeAccel = zeros(n, 1);
-            maxDriveAccel = zeros(n, 1);   % filled in during the forward sweep
+            driveAccelCap = zeros(n, 1);
             F_drive_full = zeros(n, 1);
             F_resistance = zeros(n, 1);
             brakeForceAccel = zeros(n, 1);
@@ -204,7 +204,7 @@ classdef DriverInputPlanner
                 % at a corner apex little longitudinal capacity remains, so the
                 % plan commands coast/partial instead of saturating throttle.
                 limits = obj.estimateGGVLimits(speedPlan(i), initialState, curvature(i));
-                maxDriveAccel(i) = limits.maxDriveAccel;
+                driveAccelCap(i) = limits.maxDriveAccel;
                 F_drive_full(i) = limits.F_drive_full;
                 F_resistance(i) = limits.F_resistance;
                 brakeForceAccel(i) = limits.brakeForceAccel;
@@ -212,7 +212,7 @@ classdef DriverInputPlanner
                 brakeScale(i) = limits.brakeScale;
                 if i < n
                     ds = max(lineDs(i), 0.001);
-                    axCap = max(maxDriveAccel(i), 0);
+                    axCap = max(driveAccelCap(i), 0);
                     reachableSpeed = sqrt(speedPlan(i)^2 + 2 * axCap * ds);
                     speedPlan(i+1) = min(vTarget(i+1), reachableSpeed);
                 end
@@ -223,7 +223,7 @@ classdef DriverInputPlanner
                 ds = max(lineDs(i), 0.001);
                 axRaw = (speedPlan(i+1)^2 - speedPlan(i)^2) / (2 * ds);
                 axRef(i) = max(-maxBrakeAccel(i), ...
-                    min(maxDriveAccel(i), axRaw));
+                    min(driveAccelCap(i), axRaw));
             end
             axRef(n) = axRef(max(n-1, 1));
 
@@ -597,15 +597,7 @@ classdef DriverInputPlanner
         end
 
         function [J, kappa] = curvatureJacobian(obj, points, normalX, normalY, offset, closed)
-            % CURVATUREJACOBIAN Sparse tridiagonal Jacobian of curvature.
-            %
-            % Returns J (NxN sparse) where J(i,j) = d kappa_i / d n_j, and the
-            % residual kappa = kappa(offset). Each kappa_i depends only on
-            % offsets (n_{i-1}, n_i, n_{i+1}), so J has three nonzero bands.
-            % Computed by perturbing each offset j and reading the change in
-            % the three curvature rows it touches -- O(N) curvature evaluations
-            % total. J is exact to a central finite difference of kappa, so
-            % Gauss-Newton steps derived from it match the true cost gradient.
+            % Sparse finite-difference curvature Jacobian.
             n = numel(offset);
             J = spalloc(n, n, 3 * n);
             kappa = obj.offsetPolylineCurvature( ...
@@ -623,13 +615,10 @@ classdef DriverInputPlanner
                 om = offset; om(j) = om(j) - epsStep;
                 kp = obj.offsetPolylineCurvature(points, normalX, normalY, op, closed);
                 km = obj.offsetPolylineCurvature(points, normalX, normalY, om, closed);
-                dk = (kp - km) / (2 * epsStep);   % d kappa(row) / d n_j
+                dk = (kp - km) / (2 * epsStep);
                 rows = obj.neighborRows(j, n, closed);
-                for r = rows(:).'
-                    if isfinite(dk(r))
-                        J(r, j) = dk(r);
-                    end
-                end
+                rows = rows(isfinite(dk(rows)));
+                J(rows, j) = dk(rows); %#ok<SPRIX>
             end
         end
 
@@ -714,7 +703,7 @@ classdef DriverInputPlanner
             % only improves feasibility.
             alpha = 1 / 16;
             offset = zeros(n, 1);
-            for iter = 1:200 %#ok<NASGU>
+            for iter = 1:200
                 grad = A * offset;
                 newOffset = offset - alpha * grad;
                 newOffset = max(lower, min(upper, newOffset));
@@ -924,29 +913,19 @@ classdef DriverInputPlanner
             F_drive_full = min(F_drive_full, F_traction_rear);
 
             F_resistance = F_drag + rollingResistance;
-            maxDriveAccel = max(0, (F_drive_full - F_resistance) / vm.totalMass);
-            % Coasting (lift-off) deceleration comes for free from drag +
-            % rolling resistance; no brake needed if the required decel is at
-            % or below this. brakeForceAccel is hydraulic-brake decel only
-            % (drag adds on top during actual braking), used to map a required
-            % decel onto a gradual [0,1] brake command.
+            availableDriveAccel = max(0, ...
+                (F_drive_full - F_resistance) / vm.totalMass);
+            % Lift-off deceleration comes from drag and rolling resistance.
             coastDecel = F_resistance / vm.totalMass;
             brakeForceAccel = max(0.1, brakingUsage * brakeForce / vm.totalMass);
 
             limits.maxLatAccel = max(0.1, corneringUsage * tireAccel);
             limits.maxBrakeAccel = max(0.1, brakingUsage * min(tireAccel, brakeAccel));
-            % --- Capability fields consumed by the physics-based pedal map ---
-            limits.F_drive_full = F_drive_full;        % Full-throttle wheel force, traction-capped [N]
-            limits.F_resistance = F_resistance;        % Drag + rolling resistance at this speed [N]
-            limits.maxDriveAccel = maxDriveAccel;      % Net forward accel capability [m/s^2]
-            limits.coastDecel = coastDecel;            % Free lift-off decel [m/s^2]
-            limits.brakeForceAccel = brakeForceAccel;  % Hydraulic-brake-only decel per unit brake [m/s^2]
-            % Traction-circle output caps applied to the planned pedals: at a
-            % corner apex the lateral grip demand leaves little longitudinal
-            % capacity, so the throttle is capped toward driveScale (0 -> coast)
-            % and the brake toward brakeScale (trail-brake). driveScale is a
-            % torque fraction and is converted through the inverse pedal map
-            % before it caps the pedal output.
+            limits.F_drive_full = F_drive_full;
+            limits.F_resistance = F_resistance;
+            limits.maxDriveAccel = availableDriveAccel;
+            limits.coastDecel = coastDecel;
+            limits.brakeForceAccel = brakeForceAccel;
             limits.driveScale = driveScale;
             limits.brakeScale = brakeScale;
         end
@@ -955,29 +934,7 @@ classdef DriverInputPlanner
     methods (Static)
         function [throttle, brake] = computePedals(axRef, F_drive_full, ...
                 F_resistance, mass, brakeForceAccel, powertrain, driveForceScale)
-            % COMPUTEPEDALS Map a required longitudinal accel onto pedal commands.
-            %
-            %   [throttle, brake] = lts.driver.DriverInputPlanner.computePedals( ...
-            %       axRef, F_drive_full, F_resistance, mass, brakeForceAccel, ...
-            %       powertrain, driveForceScale)
-            %
-            %   Pure (stateless) physics-based pedal map that produces all three
-            %   regimes a real driver uses:
-            %     - WOT when the required drive force meets/exceeds full-throttle,
-            %     - partial throttle to maintain speed against drag/rolling (cruise),
-            %     - coast (both pedals zero) when drag alone provides the decel,
-            %     - gradual brake proportional to the decel beyond coast.
-            %
-            %   Inputs:
-            %     axRef           - required longitudinal accel [m/s^2] (+ = drive)
-            %     F_drive_full    - full-throttle wheel force, traction-capped [N]
-            %     F_resistance    - drag + rolling resistance at this speed [N]
-            %     mass            - vehicle mass [kg]
-            %     brakeForceAccel - decel per unit brake command [m/s^2]
-            %     powertrain      - optional component with inverse pedal map
-            %     driveForceScale - optional combined-grip torque multiplier
-            %
-            %   Pedals are mutually exclusive (never both > 0), clamped to [0,1].
+            % Map requested acceleration to mutually exclusive pedal commands.
             mass = max(mass, eps);
             brakeForceAccel = max(brakeForceAccel, eps);
             if nargin < 6
@@ -989,57 +946,25 @@ classdef DriverInputPlanner
             end
             driveForceScale = lts.util.saturate(driveForceScale);
 
-            % Force the wheels must apply at the contact patch to net axRef,
-            % i.e. invert  ax = (F_drive - F_resistance) / mass.
             F_req = axRef * mass + F_resistance;
-
-            % Coast deadband: a real driver lifts rather than holding a few
-            % percent throttle or dabbing a few percent brake. When the required
-            % force magnitude is below this fraction of the drive/brake scale,
-            % snap to coast. The threshold is small enough (a few %) that it
-            % only suppresses negligible pedal commands, never genuine cruise
-            % throttle (which on this car is ~10%+ to overcome drag).
             coastFraction = 0.03;
 
             throttle = 0;
             brake = 0;
             if F_req <= 0
-                % No drive force needed: the car must hold speed or slow down.
-                requiredDecel = max(0, -axRef);
-                coastDecel = F_resistance / mass;
-                brakeForceTotal = brakeForceAccel * mass;
-                if requiredDecel <= coastDecel
-                    % Drag/rolling resistance alone covers the decel -> coast.
-                    throttle = 0;
-                    brake = 0;
-                elseif brakeForceTotal > 0 && ...
-                        (requiredDecel - coastDecel) < coastFraction * brakeForceAccel
-                    % Required brake is negligible -> coast.
-                    throttle = 0;
-                    brake = 0;
-                else
-                    % Hydraulic brake fills the gap beyond coast, gradually.
-                    brake = (requiredDecel - coastDecel) / brakeForceAccel;
-                    brake = lts.util.saturate(brake);
+                excessDecel = max(0, -axRef) - F_resistance / mass;
+                if excessDecel >= coastFraction * brakeForceAccel
+                    brake = lts.util.saturate(excessDecel / brakeForceAccel);
                 end
             elseif F_drive_full <= 0
-                % No tractive capability recorded (e.g. at/over rev limit) but
-                % drive was requested: ask for the combined-grip-limited
-                % fraction and let the powertrain return whatever it can.
-                if driveForceScale < coastFraction
-                    throttle = 0;
-                else
+                if driveForceScale >= coastFraction
                     throttle = lts.driver.DriverInputPlanner.pedalForTorqueFraction( ...
                         powertrain, driveForceScale);
                 end
             else
                 torqueFraction = lts.util.saturate( ...
                     F_req / F_drive_full) * driveForceScale;
-                % Apply the coast threshold in force/torque space. With a
-                % nonlinear pedal map, pedal position is not a force fraction.
-                if torqueFraction < coastFraction
-                    throttle = 0;
-                else
+                if torqueFraction >= coastFraction
                     throttle = lts.driver.DriverInputPlanner.pedalForTorqueFraction( ...
                         powertrain, torqueFraction);
                 end

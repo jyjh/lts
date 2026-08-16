@@ -350,6 +350,26 @@ classdef VehicleConfig
                         f, fractions.(f), dispValue(value));
                 end
             end
+
+            % The chassis attitude model is a sprung-mass model. Do not let
+            % the builder silently clamp an impossible mass breakdown to eps.
+            sprungMass = config.totalMass - 4 * config.unsprungMass;
+            if sprungMass <= 0
+                error('lts_vehicle_VehicleConfig:InvalidMassBreakdown', ...
+                    ['totalMass (%g kg) must exceed four times unsprungMass ' ...
+                    '(%g kg/corner).'], config.totalMass, config.unsprungMass);
+            end
+
+            % +Inf is a supported exact rigid-torsion constraint. Other
+            % non-finite and all negative values are invalid.
+            torsion = config.chassis.torsionalRigidity;
+            if ~isnumeric(torsion) || ~isreal(torsion) || ~isscalar(torsion) || ...
+                    isnan(torsion) || torsion < 0 || torsion == -Inf
+                error('lts_vehicle_VehicleConfig:InvalidTorsionalRigidity', ...
+                    ['VehicleConfig.chassis.torsionalRigidity must be a ' ...
+                    'nonnegative real scalar or +Inf (got %s).'], ...
+                    dispValue(torsion));
+            end
         end
     end
 end
