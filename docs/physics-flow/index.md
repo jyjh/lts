@@ -286,6 +286,16 @@ alpha = alpha_steady - (alpha_steady - alpha_previous) * exp(-V*dt/sigma)
 
 The same form is applied to `kappa`. `sigma` is `relaxationLength`.
 
+The same exponential lag is also applied to the normal load the Magic
+Formula sees when `normalLoadRelaxationLength` is positive: the contact
+patch pressure profile rebuilds only as the patch rolls onto a load change
+(one contact-length transit). This gives the tire force a finite
+high-frequency response to Fz, which breaks the algebraic positive-feedback
+loop `Fx -> ax -> chassis attitude -> Fz -> Cx/mu*Fz -> Fx` that otherwise
+sustains a nonphysical ~10-15 Hz pitch/load oscillation under heavy
+longitudinal loading. Steady-state forces are unchanged (the filter passes
+DC); `normalForce` on the tire state stays instantaneous.
+
 Forces are evaluated through MFeval combined-slip mode:
 
 ```text

@@ -257,6 +257,95 @@ verifyGreaterThan(testCase, tire.FL.slipRatio / targetKappa, ...
     tire.FL.slipAngle / targetAlpha);
 end
 
+function testNormalLoadRelaxationLagsForceEvaluationLoad(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+tire.normalLoadRelaxationLength = 0.25;
+dt = 0.01;
+speed = 10;
+lowLoad = 800;
+highLoad = 1600;
+% First evaluation seeds the lagged load at the incoming load.
+tire.updateAllCorners(lowLoad, lowLoad, lowLoad, lowLoad, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, lowLoad, 'AbsTol', 1e-12);
+
+% A load step is tracked with the exact exponential patch lag.
+expectedLoad = highLoad - (highLoad - lowLoad) * ...
+    exp(-speed * dt / tire.normalLoadRelaxationLength);
+tire.updateAllCorners(highLoad, highLoad, highLoad, highLoad, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, expectedLoad, ...
+    'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.normalForce, highLoad, 'AbsTol', 1e-12);
+
+% The force matches a steady evaluation at the lagged load, not the
+% instantaneous one: a load change alone must not change force instantly.
+steadyAtExpected = lts.components.Tire.PacejkaTire( ...
+    tire.tireConstants.tirFilePath);
+steadyAtExpected.relaxationLength = 0;
+steadyAtExpected.normalLoadRelaxationLength = 0;
+steadyAtExpected.updateAllCorners(expectedLoad, expectedLoad, ...
+    expectedLoad, expectedLoad, 0, 0, 0, 0, ...
+    0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    0, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'steady');
+verifyEqual(testCase, tire.FL.Fx, steadyAtExpected.FL.Fx, 'RelTol', 1e-9);
+
+% Contact loss clears the lagged load without a decay tail.
+tire.updateAllCorners(0, 0, 0, 0, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.Fx, 0, 'AbsTol', 1e-12);
+end
+
+function testNormalLoadRelaxationPreviewDoesNotCommitLaggedLoad(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+tire.normalLoadRelaxationLength = 0.25;
+dt = 0.01;
+speed = 10;
+tire.updateAllCorners(800, 800, 800, 800, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+
+% Preview evaluates at the advanced load but leaves the committed state
+% untouched so the next physics step advances the lag exactly once.
+tire.updateAllCorners(1600, 1600, 1600, 1600, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'preview');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, 800, 'AbsTol', 1e-12);
+
+tire.updateAllCorners(1600, 1600, 1600, 1600, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+expectedLoad = 1600 - (1600 - 800) * ...
+    exp(-speed * dt / tire.normalLoadRelaxationLength);
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, expectedLoad, ...
+    'AbsTol', 1e-12);
+end
+
+function testNormalLoadRelaxationDisabledByDefaultKeepsLegacyForce(testCase)
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+verifyEqual(testCase, tire.normalLoadRelaxationLength, 0);
+
+steadyAtLoad = lts.components.Tire.PacejkaTire( ...
+    tire.tireConstants.tirFilePath);
+steadyAtLoad.relaxationLength = 0;
+steadyAtLoad.normalLoadRelaxationLength = 0;
+args = {1000, 1000, 1000, 1000, 0.03, 0.03, 0.03, 0.03, ...
+    0.04, 0.04, 0.04, 0.04, 0, 0, 0, 0};
+tire.updateAllCorners(args{:}, 0.001, repmat(15, 4, 1), ...
+    tire.surfaceMuReference, false, 'advance');
+steadyAtLoad.updateAllCorners(args{:}, 0.001, repmat(15, 4, 1), ...
+    tire.surfaceMuReference, false, 'steady');
+verifyEqual(testCase, tire.FL.Fx, steadyAtLoad.FL.Fx, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.Fy, steadyAtLoad.FL.Fy, 'AbsTol', 1e-12);
+end
+
 function testPerCornerLateralStiffnessScaleChangesForceNotSlipState(testCase)
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
@@ -334,8 +423,12 @@ expectedInertia = 0.5 * p.MASS1 * ...
     (assemblyMass - p.MASS1) * rimRadius^2;
 verifyEqual(testCase, cfg.tire.wheelInertia, expectedInertia, 'AbsTol', 1e-12);
 verifyEqual(testCase, cfg.tire.relaxationLength, 0.255, 'AbsTol', 1e-12);
-verifyEqual(testCase, cfg.tire.longitudinalRelaxationLength, ...
-    0.05, 'AbsTol', 1e-12);
+% NaN shares the lateral length: the former 0.05 m stability de-tune is
+% replaced by the contact-patch load response below.
+verifyTrue(testCase, isscalar(cfg.tire.longitudinalRelaxationLength) && ...
+    isnan(cfg.tire.longitudinalRelaxationLength));
+verifyEqual(testCase, cfg.tire.normalLoadRelaxationLength, ...
+    cfg.tire.relaxationLength, 'AbsTol', 1e-12);
 end
 
 function tire = createPacejkaTire()

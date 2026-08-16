@@ -32,6 +32,12 @@ classdef TireState < handle
         
         % Inclination (camber) angle [rad] (positive = top tilted outward)
         camberAngle     = 0
+
+        % Lagged normal load fed to the Magic Formula [N]. Tracks
+        % normalForce through the contact-patch load-response lag (see
+        % PacejkaTire.normalLoadRelaxationLength). NaN until seeded by the
+        % first evaluation; normalForce above stays instantaneous.
+        relaxedNormalLoad = NaN
         
         % --- Wheel rotational state ---
         
@@ -76,6 +82,7 @@ classdef TireState < handle
             obj.ssSlipAngle     = 0;
             obj.ssSlipRatio     = 0;
             obj.camberAngle     = 0;
+            obj.relaxedNormalLoad = NaN;
             obj.angularVelocity = 0;
             % wheelRadius keeps its default (0.241935 m); lts.vehicle.VehicleManager.fromConfig
             % overrides it from config.tire.wheelRadius when building via a config.
@@ -97,6 +104,7 @@ classdef TireState < handle
             obj.ssSlipAngle     = 0;
             obj.ssSlipRatio     = 0;
             obj.camberAngle     = 0;
+            obj.relaxedNormalLoad = NaN;
             obj.angularVelocity = 0;
             obj.Fy              = 0;
             obj.Fx              = 0;

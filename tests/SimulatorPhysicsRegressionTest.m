@@ -650,7 +650,12 @@ fine = numel(dts);
 for idx = 1:fine-1
     verifyEqual(testCase, lapTimes(idx), lapTimes(fine), 'AbsTol', 0.003);
     verifyEqual(testCase, finalSpeeds(idx), finalSpeeds(fine), 'RelTol', 5e-4);
-    verifyEqual(testCase, finalX(idx), finalX(fine), 'AbsTol', 0.005);
+    % Terminal position carries stop-phase quantization: the run ends on
+    % the first step whose projected arc length crosses the track end, so
+    % the world x overshoots by up to one coarse step of travel
+    % (~12 m/s * 0.001 s = 12 mm). Keep the tolerance above that floor;
+    % finalSpeed is the sharp trajectory-convergence metric.
+    verifyEqual(testCase, finalX(idx), finalX(fine), 'AbsTol', 0.015);
     verifyEqual(testCase, finalS(idx), finalS(fine), 'AbsTol', 0.005);
 end
 

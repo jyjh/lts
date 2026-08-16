@@ -177,6 +177,10 @@ classdef VehicleManager
                 tire.longitudinalRelaxationLength = ...
                     config.tire.longitudinalRelaxationLength;
             end
+            if isfield(config.tire, 'normalLoadRelaxationLength')
+                tire.normalLoadRelaxationLength = ...
+                    config.tire.normalLoadRelaxationLength;
+            end
             if isfield(config.tire, 'lateralStiffnessScale')
                 tire.lateralStiffnessScale = config.tire.lateralStiffnessScale;
             end

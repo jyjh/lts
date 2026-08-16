@@ -48,6 +48,22 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % carcass/contact-patch response on the driven-wheel torque loop.
         longitudinalRelaxationLength = NaN
 
+        % Contact-patch load-response length [m]. Tire forces do not follow
+        % a normal-load step instantaneously: the patch pressure profile
+        % rebuilds as the contact geometry rolls onto the new load, so the
+        % force response to Fz changes lags on a contact-patch transit time
+        % scale (sigma_Fz / V). Filtering the load the Magic Formula sees
+        % with the same exact exponential lag used for slip gives:
+        %   - identical steady-state forces (no static distortion), and
+        %   - a finite high-frequency Fz->Fx/Fy gain, which breaks the
+        %     algebraic positive-feedback loop
+        %     Fx -> ax -> chassis attitude -> Fz -> Cx/mu*Fz -> Fx
+        %     that otherwise sustains a nonphysical ~10-15 Hz pitch/load
+        %     oscillation under heavy longitudinal loading.
+        % 0 (the default) disables the filter and evaluates at the
+        % instantaneous load (legacy behavior).
+        normalLoadRelaxationLength = 0
+
         % Multiplier on force-evaluation slip angle. This is a correlation
         % knob for cornering-stiffness sensitivity; stored kinematic and
         % relaxed slip states remain in physical radians.
@@ -151,6 +167,9 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % the transient slip equals the steady-state slip (baseline).
             [alpha, kappa] = obj.applyRelaxation( ...
                 cornerState, ssAlpha, ssKappa, longSpeed, dt, relaxationMode);
+            FzEval = obj.applyLoadRelaxation({cornerState}, normalLoad, ...
+                longSpeed, dt, relaxationMode, ...
+                strcmp(relaxationMode, 'hold'));
 
             cornerState.ssSlipAngle = ssAlpha;
             cornerState.ssSlipRatio = ssKappa;
@@ -163,7 +182,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             end
             cornerState.camberAngle = camberAngle;
 
-            if normalLoad <= 0
+            if FzEval <= 0
                 cornerState.Fy = 0;
                 cornerState.Fx = 0;
                 cornerState.Mx = 0;
@@ -176,7 +195,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Unpack for MFeval call. Evaluate at the contact-patch
             % longitudinal speed (speed-sensitive Pacejka) so load/speed
             % dependence is captured; this matches updateAllCorners.
-            Fz    = normalLoad;
+            Fz    = FzEval;
             gamma = camberAngle;
             V     = obj.computeMFevalSpeed(longSpeed);
             P     = obj.tireConstants.nomPressure;
@@ -576,9 +595,18 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
             P = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
+            advanceMode = strcmp(relaxationMode, 'advance');
+            holdMode = strcmp(relaxationMode, 'hold');
+            % Contact-patch load response: the Magic Formula evaluates at a
+            % load that tracks the suspension Fz through the same exact
+            % exponential lag used for slip. Committed with the same
+            % advance/preview/hold/steady semantics as the slip states.
+            FzEval = obj.applyLoadRelaxation(states, Fz, longSpeed, dt, ...
+                relaxationMode, holdMode);
+
             if computePeakMu
                 peakVx = obj.computeMFevalSpeed(longSpeed);
-                peakFzKey = round(Fz / 10) * 10;
+                peakFzKey = round(FzEval / 10) * 10;
                 peakGammaKey = round(gamma * 1000) / 1000;
                 peakVxKey = round(peakVx * 10) / 10;
                 peakNumericKey = obj.packPeakMuCacheKey( ...
@@ -597,8 +625,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                              obj.RL.slipRatio; obj.RR.slipRatio];
             sigmaAlpha = obj.relaxationLength;
             sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
-            advanceMode = strcmp(relaxationMode, 'advance');
-            holdMode = strcmp(relaxationMode, 'hold');
             if holdMode
                 alpha = ssAlpha;
                 kappa = ssKappa;
@@ -646,13 +672,13 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 end
             end
 
-            active = Fz > 0;
+            active = FzEval > 0;
             if any(active)
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
                 alphaEval = obj.evaluationSlipAnglesByCorner(alpha);
                 alphaEval([2, 4]) = -alphaEval([2, 4]);
-                inputsMF = [Fz(active), kappa(active), alphaEval(active), ...
+                inputsMF = [FzEval(active), kappa(active), alphaEval(active), ...
                     gamma(active), zeros(nActive, 1), ...
                     Vx, repmat(P, nActive, 1)];
                 outputs = mfeval(params, inputsMF, 111);
@@ -670,7 +696,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                             states{i}.rawPeakMu = rawPeakMu;
                         else
                             rawPeakMu = obj.computePeakMuInternal( ...
-                                Fz(i), gamma(i), P, params, peakVx(i));
+                                FzEval(i), gamma(i), P, params, peakVx(i));
                             obj.peakMuNumericCache(numericKey) = rawPeakMu;
                             key = sprintf('%.0f_%.3f_%.0f_%.1f', ...
                                 peakFzKey(i), peakGammaKey(i), P, peakVxKey(i));
@@ -813,6 +839,79 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
                     ~isfinite(sigma) || sigma < 0
                 sigma = obj.relaxationLength;
+            end
+        end
+
+        function sigma = resolvedNormalLoadRelaxationLength(obj)
+            % NaN/negative/empty disables the load-response filter (legacy
+            % instantaneous-Fz behavior); a finite positive value is used
+            % directly. Unlike the longitudinal slip length there is no
+            % shared value to inherit: 0 is the explicit "off" default.
+            sigma = obj.normalLoadRelaxationLength;
+            if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
+                    ~isfinite(sigma) || sigma < 0
+                sigma = 0;
+            end
+        end
+
+        function FzEval = applyLoadRelaxation(obj, states, Fz, longSpeed, ...
+                dt, relaxationMode, holdMode)
+            % APPLYLOADRELAXATION Contact-patch load-response lag.
+            %   FzEval = applyLoadRelaxation(states, Fz, longSpeed, dt, mode)
+            %
+            % Exact exponential first-order lag on the normal load the
+            % Magic Formula sees, sigma_Fz/V time constant, mirroring
+            % applyRelaxation's advance/preview/hold/steady semantics:
+            %   advance — lag advanced and committed to the corner state
+            %   preview — lag advanced for evaluation only (no commit)
+            %   hold    — evaluate at the previously committed lagged load
+            %   steady  — evaluate at the instantaneous load, no commit
+            % A corner whose true load has reached zero loses its lagged
+            % load immediately (contact loss is unambiguous), and the
+            % filter seeds from the incoming load on first evaluation so a
+            % run does not start with a synthetic load transient.
+            Fz = Fz(:);
+            n = numel(Fz);
+            FzEval = Fz;
+            sigmaFz = obj.resolvedNormalLoadRelaxationLength();
+            if sigmaFz <= 0
+                % Filter disabled: keep the mirrored state coherent, but
+                % avoid handle writes in the hot loop once seeded.
+                for i = 1:n
+                    if ~(states{i}.relaxedNormalLoad == Fz(i))
+                        states{i}.relaxedNormalLoad = Fz(i);
+                    end
+                end
+                return;
+            end
+
+            previousFz = nan(n, 1);
+            for i = 1:n
+                previousFz(i) = states{i}.relaxedNormalLoad;
+            end
+            needsSeed = isnan(previousFz);
+            previousFz(needsSeed) = Fz(needsSeed);
+
+            if holdMode
+                FzEval = previousFz;
+            elseif dt <= 0 || strcmp(relaxationMode, 'steady')
+                FzEval = Fz;
+            else
+                V_eff = max(abs(longSpeed(:)), 1.0);
+                decayFz = exp(-V_eff * dt / sigmaFz);
+                FzEval = Fz - (Fz - previousFz) .* decayFz;
+            end
+
+            % Contact loss clears the lagged load without a decay tail.
+            airborne = Fz <= 0;
+            FzEval(airborne) = 0;
+            FzEval = max(FzEval, 0);
+
+            advanceMode = strcmp(relaxationMode, 'advance');
+            for i = 1:n
+                if advanceMode && dt > 0
+                    states{i}.relaxedNormalLoad = FzEval(i);
+                end
             end
         end
 
