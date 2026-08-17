@@ -44,6 +44,7 @@ classdef Simulator < handle
         cachedRearArm = NaN
         cachedRollingResistanceCoeff = NaN
         cachedPowertrainHasCoastdown
+        cachedPowertrainHasResolver
         cachedMaxSteeringAngle
         cachedSteeringRampTime
         cachedPowertrainMode = []
@@ -880,6 +881,13 @@ classdef Simulator < handle
         end
 
         function [totalDriveTorque, totalCoastdownTorque] = computePowertrainTorques(obj, state, input, throttle)
+            % Resolve the active torque-control mode into driven-axle torque.
+            % Mode orchestration lives here; the torque-control math belongs
+            % to the powertrain component (see PowertrainComponent's optional
+            % resolveTorques contract), which also records the per-step
+            % motor/limit telemetry on powertrain.state for the stateLog
+            % (motorTorqueRequested, motorTorquePowerLimitNm, pack channels,
+            % rpmLimitActive, ...).
             vm = obj.vehicleManager;
             % Cache the normalized mode for the run.
             modeSource = string(obj.powertrainMode);
@@ -891,293 +899,51 @@ classdef Simulator < handle
             end
             mode = obj.cachedPowertrainMode;
 
-            switch mode
-                case "throttle"
-                    totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
+            if isempty(obj.cachedPowertrainHasResolver)
+                obj.cachedPowertrainHasResolver = ...
+                    ismethod(vm.powertrain, 'resolveTorques');
+            end
+            if obj.cachedPowertrainHasResolver
+                [totalDriveTorque, totalCoastdownTorque] = ...
+                    vm.powertrain.resolveTorques( ...
+                    mode, input, state, throttle, ...
+                    obj.limitMotorTorqueByPackPower, ...
+                    obj.drivenTireWheelRadius());
+                return;
+            end
 
-                    % Off-throttle motoring/regen drag on the driven axle
-                    % (opt-in via the powertrain component; 0 when off). This
-                    % is signed driveline torque so ramp-plate LSDs can use
-                    % their decel ramps. Hydraulic brake torque is separate.
-                    totalCoastdownTorque = 0;
-                    if isempty(obj.cachedPowertrainHasCoastdown)
-                        obj.cachedPowertrainHasCoastdown = ...
-                            ismethod(vm.powertrain, 'computeCoastdownTorque');
-                    end
-                    if obj.cachedPowertrainHasCoastdown
-                        totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
-                            state.speed, throttle);
-                    end
-
-                case "motor_torque_command"
-                    motorTorqueCommandNm = localGetField(input, ...
-                        'motorTorqueCommandNm', NaN);
-                    if ~isfinite(motorTorqueCommandNm)
-                        error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
-                            ['PowertrainMode "motor_torque_command" requires a finite ' ...
-                            'motorTorqueCommandNm input from the replay profile.']);
-                    end
-
-                    motorTorqueRequestNm = obj.selectDirectMotorTorqueRequest( ...
-                        motorTorqueCommandNm, input);
-                    wheelTorque = obj.applyMotorTorqueCommand( ...
-                        motorTorqueRequestNm, throttle, input);
-                    totalDriveTorque = max(0, wheelTorque);
-                    totalCoastdownTorque = min(0, wheelTorque);
-
-                case "motor_torque_delivered"
-                    deliveredMotorTorqueNm = localGetField(input, ...
-                        'motorTorqueDeliveredNm', NaN);
-                    if ~isfinite(deliveredMotorTorqueNm)
-                        error('lts_simulation_Simulator:MissingMotorTorqueDelivered', ...
-                            ['PowertrainMode "motor_torque_delivered" requires a finite ' ...
-                            'motorTorqueDeliveredNm input from the replay profile.']);
-                    end
-                    wheelTorque = obj.applyDeliveredMotorTorque( ...
-                        deliveredMotorTorqueNm, throttle, input);
-                    totalDriveTorque = max(0, wheelTorque);
-                    totalCoastdownTorque = min(0, wheelTorque);
-
-                otherwise
-                    error('lts_simulation_Simulator:InvalidPowertrainMode', ...
-                        ['PowertrainMode must be "throttle", "motor_torque_command", ' ...
-                        'or "motor_torque_delivered".']);
+            % Legacy powertrain contract (throttle only): drive torque via
+            % the abstract interface plus the optional coastdown hook.
+            % Off-throttle motoring/regen drag on the driven axle is signed
+            % driveline torque so ramp-plate LSDs can use their decel ramps.
+            % Hydraulic brake torque is separate.
+            if mode ~= "throttle"
+                error('lts_simulation_Simulator:PowertrainResolverRequired', ...
+                    ['PowertrainMode "%s" requires a powertrain implementing ' ...
+                    'the resolveTorques contract.'], mode);
+            end
+            totalDriveTorque = vm.powertrain.computeDriveTorque( ...
+                state.speed, throttle);
+            totalCoastdownTorque = 0;
+            if isempty(obj.cachedPowertrainHasCoastdown)
+                obj.cachedPowertrainHasCoastdown = ...
+                    ismethod(vm.powertrain, 'computeCoastdownTorque');
+            end
+            if obj.cachedPowertrainHasCoastdown
+                totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
+                    state.speed, throttle);
             end
         end
 
-        function wheelTorque = applyDeliveredMotorTorque( ...
-                obj, deliveredMotorTorqueNm, throttle, input)
+        function radius = drivenTireWheelRadius(obj)
+            % Driven-tire rolling radius [m] as seen by the live tire model;
+            % [] when no tire model is wired, in which case the powertrain
+            % falls back to its own configured wheelRadius.
+            radius = [];
             vm = obj.vehicleManager;
-            ratio = vm.powertrain.getTotalGearRatio();
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ismethod(vm.powertrain, 'getDeliveredTorqueDrivetrainEfficiency')
-                efficiency = vm.powertrain.getDeliveredTorqueDrivetrainEfficiency();
+            if ~isempty(vm) && ~isempty(vm.tire) && isprop(vm.tire, 'RL')
+                radius = vm.tire.RL.wheelRadius;
             end
-            if deliveredMotorTorqueNm >= 0
-                wheelTorque = deliveredMotorTorqueNm * ratio * efficiency;
-            else
-                wheelTorque = deliveredMotorTorqueNm * ratio / max(efficiency, eps);
-            end
-
-            driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
-            requestedMotorTorqueNm = localGetField(input, ...
-                'motorTorqueCommandNm', deliveredMotorTorqueNm);
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
-            vm.powertrain.state.updateOutputs( ...
-                throttle, deliveredMotorTorqueNm, wheelTorque, driveForce, ...
-                efficiency, false);
-            vm.powertrain.state.requestedMotorTorque = requestedMotorTorqueNm;
-            vm.powertrain.state.motorTorquePowerLimitNm = NaN;
-            vm.powertrain.state.motorTorquePowerLimitActive = false;
-            vm.powertrain.state.packVoltageV = packVoltageV;
-            vm.powertrain.state.packCurrentA = packCurrentA;
-            vm.powertrain.state.packPowerW = packVoltageV * packCurrentA;
-        end
-
-        function wheelTorque = applyMotorTorqueCommand(obj, motorTorqueCommandNm, throttle, input)
-            if nargin < 4 || isempty(input)
-                input = struct();
-            end
-
-            vm = obj.vehicleManager;
-            ratio = vm.powertrain.getTotalGearRatio();
-            efficiency = obj.motoringDrivetrainEfficiency(input);
-            regenEfficiency = obj.regenDrivetrainEfficiency();
-            [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
-                packCurrentA, packPowerW, powerLimitActive] = ...
-                obj.limitMotorTorqueCommandByPackPower(motorTorqueCommandNm, input);
-            [appliedMotorTorqueNm, rpmLimitActive] = ...
-                obj.limitDirectMotorTorqueByRpm( ...
-                motorTorqueCommandNm, appliedMotorTorqueNm);
-            if appliedMotorTorqueNm >= 0
-                wheelTorque = appliedMotorTorqueNm * ratio * efficiency;
-                stateEfficiency = efficiency;
-            else
-                % Reverse the loss direction for regen: wheel braking power
-                % must exceed the mechanical/electrical power reaching the
-                % motor/pack, not shrink below it as motoring torque does.
-                wheelTorque = appliedMotorTorqueNm * ratio / max(regenEfficiency, eps);
-                stateEfficiency = regenEfficiency;
-            end
-
-            driveForce = 0;
-            if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
-                driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
-            end
-
-            if ~isempty(vm.powertrain.state)
-                vm.powertrain.state.updateOutputs( ...
-                    throttle, appliedMotorTorqueNm, wheelTorque, driveForce, ...
-                    stateEfficiency, rpmLimitActive);
-                vm.powertrain.state.requestedMotorTorque = motorTorqueCommandNm;
-                vm.powertrain.state.motorTorquePowerLimitNm = powerLimitNm;
-                vm.powertrain.state.motorTorquePowerLimitActive = powerLimitActive;
-                vm.powertrain.state.packVoltageV = packVoltageV;
-                vm.powertrain.state.packCurrentA = packCurrentA;
-                vm.powertrain.state.packPowerW = packPowerW;
-            end
-        end
-
-        function efficiency = regenDrivetrainEfficiency(obj)
-            vm = obj.vehicleManager;
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ismethod(vm.powertrain, 'getRegenDrivetrainEfficiency')
-                efficiency = vm.powertrain.getRegenDrivetrainEfficiency();
-            elseif isprop(vm.powertrain, 'regenEfficiency') && ...
-                    isfinite(vm.powertrain.regenEfficiency)
-                efficiency = vm.powertrain.regenEfficiency;
-            end
-            efficiency = lts.util.saturate(efficiency);
-        end
-
-        function efficiency = motoringDrivetrainEfficiency(obj, input)
-            vm = obj.vehicleManager;
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ~ismethod(vm.powertrain, 'getMotoringEfficiencyAtRPM')
-                efficiency = lts.util.saturate(efficiency);
-                return;
-            end
-            motorRPM = localGetField(input, 'motorRpm', NaN);
-            if ~isfinite(motorRPM) && ~isempty(vm.powertrain.state)
-                motorRPM = vm.powertrain.state.motorRPM;
-            end
-            efficiency = vm.powertrain.getMotoringEfficiencyAtRPM(motorRPM);
-        end
-
-        function motorTorqueRequestNm = selectDirectMotorTorqueRequest(~, motorTorqueCommandNm, input)
-            motorTorqueRequestNm = motorTorqueCommandNm;
-            if motorTorqueCommandNm < 0
-                return;
-            end
-
-            regenTorqueNm = localGetField(input, 'regenTorqueNm', NaN);
-            if ~isfinite(regenTorqueNm) || regenTorqueNm >= 0
-                return;
-            end
-
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
-            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
-                return;
-            end
-
-            % The throttle-regen channel is a candidate/request and can be
-            % nonzero during motoring. Let it override Calculated Cmd only
-            % when the logged pack power confirms actual charging.
-            if packVoltageV * packCurrentA < -100
-                motorTorqueRequestNm = regenTorqueNm;
-            end
-        end
-
-        function [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
-                packCurrentA, packPowerW, powerLimitActive] = ...
-                limitMotorTorqueCommandByPackPower(obj, requestedMotorTorqueNm, input)
-            appliedMotorTorqueNm = requestedMotorTorqueNm;
-            powerLimitNm = NaN;
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
-            packPowerW = NaN;
-            powerLimitActive = false;
-
-            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
-                return;
-            end
-
-            packPowerW = packVoltageV * packCurrentA;
-            if ~obj.limitMotorTorqueByPackPower
-                return;
-            end
-            if ~isfinite(packPowerW) || requestedMotorTorqueNm == 0
-                return;
-            end
-
-            motorOmega = obj.motorAngularVelocityForPowerLimit(input);
-            if ~isfinite(motorOmega)
-                return;
-            end
-            motorOmega = max(abs(motorOmega), 1.0);
-
-            if requestedMotorTorqueNm > 0
-                powerLimitNm = max(0, packPowerW) / motorOmega;
-                appliedMotorTorqueNm = min(requestedMotorTorqueNm, powerLimitNm);
-            else
-                powerLimitNm = min(0, packPowerW) / motorOmega;
-                appliedMotorTorqueNm = max(requestedMotorTorqueNm, powerLimitNm);
-            end
-
-            toleranceNm = max(1e-9, 1e-6 * abs(requestedMotorTorqueNm));
-            powerLimitActive = abs(appliedMotorTorqueNm - requestedMotorTorqueNm) > toleranceNm;
-        end
-
-        function [appliedMotorTorqueNm, rpmLimitActive] = ...
-                limitDirectMotorTorqueByRpm(obj, requestedMotorTorqueNm, appliedMotorTorqueNm)
-            rpmLimitActive = false;
-            if requestedMotorTorqueNm <= 0
-                return;
-            end
-
-            vm = obj.vehicleManager;
-            if isempty(vm) || isempty(vm.powertrain) || isempty(vm.powertrain.state)
-                return;
-            end
-
-            motorRPM = vm.powertrain.state.motorRPM;
-            if ~isfinite(motorRPM)
-                return;
-            end
-
-            if ismethod(vm.powertrain, 'isRPMLimitActive')
-                rpmLimitActive = vm.powertrain.isRPMLimitActive(motorRPM);
-            elseif isprop(vm.powertrain, 'rpmLimitRPM')
-                limitRPM = vm.powertrain.rpmLimitRPM;
-                if isfinite(limitRPM) && limitRPM > 0
-                    releaseRPM = limitRPM;
-                    if vm.powertrain.state.rpmLimitActive && ...
-                            isprop(vm.powertrain, 'rpmLimitHysteresisRPM')
-                        releaseRPM = limitRPM - max(0, vm.powertrain.rpmLimitHysteresisRPM);
-                    end
-                    rpmLimitActive = motorRPM >= releaseRPM;
-                end
-            end
-
-            if rpmLimitActive
-                appliedMotorTorqueNm = min(appliedMotorTorqueNm, 0);
-            end
-        end
-
-        function motorOmega = motorAngularVelocityForPowerLimit(obj, input)
-            motorOmega = NaN;
-            vm = obj.vehicleManager;
-            loggedMotorRpm = localGetField(input, 'motorRpm', NaN);
-            if isfinite(loggedMotorRpm)
-                motorOmega = loggedMotorRpm * 2 * pi / 60;
-                return;
-            end
-
-            replaySpeed = localGetField(input, 'targetSpeed', NaN);
-            if isfinite(replaySpeed) && replaySpeed > 0 && ...
-                    ~isempty(vm) && ~isempty(vm.powertrain)
-                ratio = vm.powertrain.getTotalGearRatio();
-                wheelRadius = NaN;
-                if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
-                    wheelRadius = vm.tire.RL.wheelRadius;
-                elseif isprop(vm.powertrain, 'wheelRadius')
-                    wheelRadius = vm.powertrain.wheelRadius;
-                end
-                if isfinite(ratio) && ratio > 0 && isfinite(wheelRadius) && wheelRadius > 0
-                    motorOmega = replaySpeed / wheelRadius * ratio;
-                    return;
-                end
-            end
-
-            if ~isempty(vm) && ~isempty(vm.powertrain) && ~isempty(vm.powertrain.state)
-                motorOmega = vm.powertrain.state.motorAngularVelocity;
-                if isfinite(motorOmega)
-                    return;
-                end
-            end
-
         end
 
         function mode = validatePowertrainMode(~, mode)
@@ -1567,6 +1333,7 @@ classdef Simulator < handle
             obj.cachedRearArm = NaN;
             obj.cachedRollingResistanceCoeff = NaN;
             obj.cachedPowertrainHasCoastdown = [];
+            obj.cachedPowertrainHasResolver = [];
             obj.cachedMaxSteeringAngle = [];
             obj.cachedSteeringRampTime = [];
             obj.cachedPowertrainMode = [];

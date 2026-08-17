@@ -793,6 +793,9 @@ vehicle.maxSpeed = 80;
 end
 
 function testPowertrainModeCacheTracksRuntimePolicyChanges(testCase)
+% The Simulator delegates torque-control to the powertrain's (inherited)
+% resolveTorques contract using the CURRENT mode, so runtime
+% powertrainMode changes are honored on every call.
 [vehicle, ~, ~] = directTorqueVehicle();
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 state = lts.simulation.VehicleState('speed', 10, 'vx', 10, 'vy', 0);

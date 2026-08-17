@@ -8,6 +8,14 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
     % this model reads the full-throttle tractive-force map by motor RPM,
     % scales by throttle request and efficiency, and returns total rear-axle
     % wheel torque for the differential to split.
+    %
+    % Torque-control modes (throttle / motor_torque_command /
+    % motor_torque_delivered, pack-power and rev limiting) are resolved by
+    % the inherited PowertrainComponent.resolveTorques contract, which uses
+    % this model's optional hooks (getMotoringEfficiencyAtRPM,
+    % getRegenDrivetrainEfficiency, getDeliveredTorqueDrivetrainEfficiency,
+    % isRPMLimitActive, computeCoastdownTorque). Override resolveTorques or
+    % the hooks to add SoC/thermal/torque-map behavior.
     
     properties
         matFilePath = ""

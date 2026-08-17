@@ -427,6 +427,33 @@ pt.updateStateFromVehicleSpeed(20);
 verifyEqual(testCase, pt.computeCoastdownTorque(20, 0), 0, 'AbsTol', 1e-12);
 end
 
+function testResolveTorquesMatchesComponentTorquePaths(testCase)
+% Locks the public resolveTorques API (the Simulator's torque-control
+% entry point): throttle mode reproduces the component's own
+% computeDriveTorque/computeCoastdownTorque outputs, and the direct
+% command mode reproduces the replay path (regen loss direction
+% reflected through the gear ratio).
+pt = createPowertrain();
+reference = createPowertrain();
+speed = 12;
+
+[driveTorque, coastTorque] = pt.resolveTorques( ...
+    "throttle", struct(), struct('speed', speed), 0.4, false, []);
+verifyEqual(testCase, driveTorque, ...
+    reference.computeDriveTorque(speed, 0.4), 'AbsTol', 1e-9);
+verifyEqual(testCase, coastTorque, ...
+    reference.computeCoastdownTorque(speed, 0.4), 'AbsTol', 1e-12);
+
+[driveTorque, coastTorque] = pt.resolveTorques( ...
+    "motor_torque_command", struct('motorTorqueCommandNm', -20), ...
+    struct('speed', speed), 0, false, []);
+verifyEqual(testCase, driveTorque, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, coastTorque, ...
+    -20 * pt.getTotalGearRatio() / pt.getRegenDrivetrainEfficiency(), ...
+    'AbsTol', 1e-9);
+verifyEqual(testCase, pt.state.requestedMotorTorque, -20, 'AbsTol', 1e-12);
+end
+
 function testMotoringDragOpposesSpinWhenEnabled(testCase)
 % Fix 5c: motoring drag reflects motor-side torque through the ratio and
 % opposes the direction of rotation.
