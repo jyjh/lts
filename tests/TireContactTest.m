@@ -437,13 +437,11 @@ expectedInertia = 0.5 * p.MASS1 * ...
     (assemblyMass - p.MASS1) * rimRadius^2;
 verifyEqual(testCase, cfg.tire.wheelInertia, expectedInertia, 'AbsTol', 1e-12);
 verifyEqual(testCase, cfg.tire.relaxationLength, 0.255, 'AbsTol', 1e-12);
-% NaN shares the lateral length: the former 0.05 m stability de-tune is
-% gone. The load-response lag stays at 0.255: sweep shows launch traction
-% needs sigma >= ~0.10 (scripts/dbg_laptime.m) and 0.255 sits on the
-% converged plateau; the Simulator attitude predictor covers the
-% at-speed stagger on top of it.
-verifyTrue(testCase, isscalar(cfg.tire.longitudinalRelaxationLength) && ...
-    isnan(cfg.tire.longitudinalRelaxationLength));
+% Driven-wheel slip uses its own shorter lag: the lateral 0.255 m carcass
+% response was never physical for the torque loop; 0.10 m validated stable
+% with the attitude predictor + launch smoothing combination.
+verifyEqual(testCase, cfg.tire.longitudinalRelaxationLength, 0.10, ...
+    'AbsTol', 1e-12);
 verifyEqual(testCase, cfg.tire.normalLoadRelaxationLength, ...
     cfg.tire.relaxationLength, 'AbsTol', 1e-12);
 end

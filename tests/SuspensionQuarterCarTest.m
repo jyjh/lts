@@ -336,6 +336,45 @@ verifyEqual(testCase, barForces.FL, 10, 'AbsTol', 1e-12);
 verifyEqual(testCase, barForces.FR, -10, 'AbsTol', 1e-12);
 end
 
+function testReboundKneeOverrideAffectsReboundOnly(testCase)
+% The rebound knee override must change only the rebound side: at a
+% rebound speed beyond both knees the higher-knee corner keeps its
+% low-speed slope longer (more force), while compression remains shared.
+cfg = lts.vehicles.baseline();
+vm = lts.vehicle.VehicleManager([], [], [], [], []);
+vm.totalMass = cfg.totalMass;
+vm.wheelbase = cfg.wheelbase;
+vm.trackWidth = cfg.trackWidth;
+vm.cgHeight = cfg.cgHeight;
+vm.staticFrontWeight = cfg.staticFrontWeight;
+sprungCornerMass = (cfg.totalMass - 4 * cfg.unsprungMass) ...
+    * cfg.staticFrontWeight / 2;
+staticLoad = sprungCornerMass * 9.80665;
+
+lowReboundKnee = buildDamperCorner(vm, cfg, sprungCornerMass, 0.05, 0.25);
+highReboundKnee = buildDamperCorner(vm, cfg, sprungCornerMass, 0.05, 0.25);
+lowReboundKnee.dampingReboundKneeSpeed = 0.05;
+highReboundKnee.dampingReboundKneeSpeed = 0.30;
+
+lowReboundKnee.initializeStaticLoad(lowReboundKnee.state, staticLoad);
+highReboundKnee.initializeStaticLoad(highReboundKnee.state, staticLoad);
+lowReboundKnee.updateCornerFromChassis(lowReboundKnee.state, 0, -0.25, 0.001, 0);
+highReboundKnee.updateCornerFromChassis(highReboundKnee.state, 0, -0.25, 0.001, 0);
+
+lowReboundForce = abs(lowReboundKnee.state.suspensionForce - staticLoad);
+highReboundForce = abs(highReboundKnee.state.suspensionForce - staticLoad);
+verifyGreaterThan(testCase, highReboundForce, lowReboundForce, ...
+    'higher rebound knee must sustain more low-speed-slope force in rebound');
+
+lowReboundKnee.initializeStaticLoad(lowReboundKnee.state, staticLoad);
+highReboundKnee.initializeStaticLoad(highReboundKnee.state, staticLoad);
+lowReboundKnee.updateCornerFromChassis(lowReboundKnee.state, 0, 0.25, 0.001, 0);
+highReboundKnee.updateCornerFromChassis(highReboundKnee.state, 0, 0.25, 0.001, 0);
+verifyEqual(testCase, highReboundKnee.state.suspensionForce, ...
+    lowReboundKnee.state.suspensionForce, 'AbsTol', 1e-9, ...
+    'compression side must ignore the rebound knee override');
+end
+
 function [vehicle, suspension] = createSuspension(rateScale, ...
         frontAntiRollBarRate, rearAntiRollBarRate, config)
 if nargin < 2

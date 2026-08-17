@@ -36,6 +36,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         frontRollCenterLateral = 0
         rearRollCenterLateral = 0
 
+        % Longitudinal anti-geometry fractions [0-1], resolved from geometry
+        % at construction. Anti-dive: share of the sprung braking transfer
+        % reacted by the front links (no spring pitch). Anti-squat: share of
+        % the acceleration transfer reacted by the rear links. 0 = legacy
+        % spring-only pitch path. Read by SimpleChassis.updateFromAccelerations.
+        frontAntiDiveFraction = 0
+        rearAntiSquatFraction = 0
+
         % Anti-roll bars per axle, resolved from geometry at construction.
         % Their differential wheel-coupling rate is converted to an
         % equivalent independent-corner rate (2*B_bar) when deriving axle
@@ -49,6 +57,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         % SimpleSuspension. Defaults reproduce the legacy linear damper.
         dampingKneeSpeed = Inf       % wheel-domain low->high speed knee [m/s]
         dampingHighSpeedRatio = 1.0  % high-speed slope / low-speed slope [-]
+        % Rebound-side knee override [m/s]; NaN shares dampingKneeSpeed.
+        dampingReboundKneeSpeed = NaN
 
         % Optional override for the front elastic load-transfer fraction
         % [0-1]. When set (non-NaN), it is used directly and the spring+ARB
@@ -83,7 +93,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 motionRatio, bumpStopLength, bumpStopRate, ...
                 tireSpringRate, unsprungMass, geometry, ...
                 frontAntiRollBarRate, rearAntiRollBarRate, ...
-                dampingKneeSpeed, dampingHighSpeedRatio)
+                dampingKneeSpeed, dampingHighSpeedRatio, dampingReboundKneeSpeed)
             % SUSPENSIONMANAGER Construct with front/rear suspension parameters
             %   SuspensionManager(vehicleManager, ...
             %       frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
@@ -108,6 +118,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   rearAntiRollBarRate  - Rear ARB coupling rate B [N/m] (optional)
             %   dampingKneeSpeed      - Shared digressive-damper knee [m/s] (optional, Inf=linear)
             %   dampingHighSpeedRatio - Shared high-speed slope ratio [-] (optional, 1.0=linear)
+            %   dampingReboundKneeSpeed - Rebound knee override [m/s] (optional, NaN=shared)
             
             if nargin < 13 || isempty(geometry)
                 % Fallback when no geometry is supplied: a neutral kinematic
@@ -137,6 +148,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             end
             if isprop(geometry, 'rearRollCenterLateral')
                 obj.rearRollCenterLateral = geometry.rearRollCenterLateral;
+            end
+            if isprop(geometry, 'frontAntiDiveFraction')
+                obj.frontAntiDiveFraction = geometry.frontAntiDiveFraction;
+            end
+            if isprop(geometry, 'rearAntiSquatFraction')
+                obj.rearAntiSquatFraction = geometry.rearAntiSquatFraction;
             end
 
             % Resolve per-axle anti-roll bars from the geometry model.
@@ -174,6 +191,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                     && dampingHighSpeedRatio > 0
                 obj.dampingHighSpeedRatio = dampingHighSpeedRatio;
             end
+            if nargin >= 18 && ~isempty(dampingReboundKneeSpeed) && ...
+                    isnumeric(dampingReboundKneeSpeed) && isscalar(dampingReboundKneeSpeed) && ...
+                    (isinf(dampingReboundKneeSpeed) || ...
+                    (isfinite(dampingReboundKneeSpeed) && dampingReboundKneeSpeed > 0))
+                obj.dampingReboundKneeSpeed = dampingReboundKneeSpeed;
+            end
 
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
@@ -193,7 +216,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                     axle{1}, axle{2}, axle{3}, ...
                     motionRatio, bumpStopLength, bumpStopRate, ...
                     tireSpringRate, unsprungMass, axle{4}, ...
-                    obj.dampingKneeSpeed, obj.dampingHighSpeedRatio);
+                    obj.dampingKneeSpeed, obj.dampingHighSpeedRatio, ...
+                    obj.dampingReboundKneeSpeed);
             end
         end
         

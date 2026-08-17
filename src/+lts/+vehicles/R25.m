@@ -82,6 +82,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                            %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.034977, ...                     %   [CSV r33: 34.977 mm]
         'rollCenterLateral', 0.013469, ...                    %   [CSV r34: 13.469 mm lateral at 1g]
+        'antiDiveFraction', 0, ...                            %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.3); 0 = spring-only pitch path
         'casterAngle',      4 * pi / 180, ...                 %   [CSV r35: 4 deg]
         'mechanicalTrail',  0.0143, ...                       %   [CSV r35: 14.3 mm] [m]
         'scrubRadius',      0.02093, ...                      %   [CSV r35: 20.93 mm] [m]
@@ -94,6 +95,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                             %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.050496, ...                     %   [CSV r33: 50.496 mm]
         'rollCenterLateral', 0.024413, ...                    %   [CSV r34: 24.413 mm lateral at 1g]
+        'antiSquatFraction', 0, ...                           %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.4); 0 = spring-only pitch path
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
         'scrubRadius',      0, ...
@@ -198,7 +200,7 @@ function cfg = R25()
         'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7.tir', ... % measured source-tire prior; actual 43075 TIR unavailable
         'wheelInertia', wheelAssemblyInertia, ... % 0.13575 kg*m^2 from 13 lb assembly
         'relaxationLength', 0.255, ...   % lateral: 0.30 m * (6.2/7.3) [m]
-        'longitudinalRelaxationLength', NaN, ... % shared with lateral (see note above)
+        'longitudinalRelaxationLength', 0.10, ... % driven-wheel slip lag: shorter than the lateral carcass response (typ. 0.05-0.10 m); validated stable with the attitude predictor (was NaN/shared 0.255)
         'normalLoadRelaxationLength', 0.255, ... % dual role: patch-transport lag at speed; low-speed launch smoothing (sigma/V_eff floor ~ 0.26 s time constant at launch protects traction — predictor cannot cover this regime, see scripts/audit_stagger_validation.m + scripts/dbg_laptime.m)
         'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
         'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]

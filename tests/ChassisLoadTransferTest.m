@@ -605,11 +605,82 @@ end
 
 staticFrontLoad = vehicle.totalMass * lts.vehicle.VehicleManager.g * ...
     vehicle.staticFrontWeight;
-expectedTransfer = vehicle.totalMass * ax * vehicle.cgHeight / vehicle.wheelbase;
+% Sprung share acts at the CG, unsprung share at hub height (wheel
+% center); total mass participates in longitudinal transfer.
+sprungMass = chassis.sprungMass;
+additionalMass = vehicle.totalMass - sprungMass;
+expectedTransfer = (sprungMass * vehicle.cgHeight + ...
+    additionalMass * chassis.hubHeight) * ax / vehicle.wheelbase;
 actualTransfer = staticFrontLoad - (loads.FL + loads.FR);
 verifyEqual(testCase, actualTransfer, expectedTransfer, 'AbsTol', 2);
 verifyEqual(testCase, totalNormalLoad(loads), ...
     vehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 2);
+end
+
+function testAntiGeometryReducesPitchAndConservesTransfer(testCase)
+% Anti-squat moves a fraction of the acceleration transfer from the
+% springs (pitch) to the links (direct patch transfer): total transfer is
+% conserved while steady pitch shrinks by the same fraction.
+config = lts.vehicles.baseline();
+config.suspension.geometry.rear.antiSquatFraction = 0.4;
+[~, suspension, chassis] = createVehicleWithChassis(config);
+[plainVehicle, plainSuspension, plainChassis] = createVehicleWithChassis( ...
+    lts.vehicles.baseline());
+zeroAero = zeroAeroForces();
+dt = 0.001;
+ax = 4;
+
+for idx = 1:6000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(ax, 0, zeroAero, dt, 0);
+    plainLoads = plainSuspension.computeCornerLoadsFromChassis(plainChassis, 0, dt);
+    plainChassis.updateFromAccelerations(ax, 0, zeroAero, dt, 0);
+end
+
+verifyLessThan(testCase, abs(chassis.getPitchAngle()), ...
+    abs(plainChassis.getPitchAngle()) * 0.75, ...
+    'anti-squat must reduce squat pitch by roughly its fraction');
+sprungMass = chassis.sprungMass;
+additionalMass = plainVehicle.totalMass - sprungMass;
+expectedTransfer = (sprungMass * plainVehicle.cgHeight + ...
+    additionalMass * chassis.hubHeight) * ax / plainVehicle.wheelbase;
+staticRearLoad = plainVehicle.totalMass * ...
+    lts.vehicle.VehicleManager.g * (1 - plainVehicle.staticFrontWeight);
+actualTransfer = (loads.RL + loads.RR) - staticRearLoad;
+verifyEqual(testCase, actualTransfer, expectedTransfer, 'AbsTol', 2, ...
+    'link-path share must conserve total longitudinal transfer');
+end
+
+function testAntiDiveReducesBrakingPitchAndConservesTransfer(testCase)
+config = lts.vehicles.baseline();
+config.suspension.geometry.front.antiDiveFraction = 0.5;
+[vehicle, suspension, chassis] = createVehicleWithChassis(config);
+[~, plainSuspension, plainChassis] = createVehicleWithChassis( ...
+    lts.vehicles.baseline());
+zeroAero = zeroAeroForces();
+dt = 0.001;
+ax = -4;
+
+for idx = 1:6000
+    loads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt);
+    chassis.updateFromAccelerations(ax, 0, zeroAero, dt, 0);
+    plainLoads = plainSuspension.computeCornerLoadsFromChassis(plainChassis, 0, dt);
+    plainChassis.updateFromAccelerations(ax, 0, zeroAero, dt, 0);
+end
+
+verifyLessThan(testCase, chassis.getPitchAngle(), 0, 'braking pitches nose-down');
+verifyLessThan(testCase, abs(chassis.getPitchAngle()), ...
+    abs(plainChassis.getPitchAngle()) * 0.7, ...
+    'anti-dive must reduce dive pitch by roughly its fraction');
+sprungMass = chassis.sprungMass;
+additionalMass = vehicle.totalMass - sprungMass;
+expectedTransfer = -(sprungMass * vehicle.cgHeight + ...
+    additionalMass * chassis.hubHeight) * ax / vehicle.wheelbase;
+staticFrontLoad = vehicle.totalMass * lts.vehicle.VehicleManager.g * ...
+    vehicle.staticFrontWeight;
+actualTransfer = (loads.FL + loads.FR) - staticFrontLoad;
+verifyEqual(testCase, actualTransfer, expectedTransfer, 'AbsTol', 2, ...
+    'link-path share must conserve total longitudinal transfer');
 end
 
 function testChassisPathUsesTotalMassForLateralTransfer(testCase)
