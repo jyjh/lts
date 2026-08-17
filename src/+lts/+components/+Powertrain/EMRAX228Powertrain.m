@@ -73,8 +73,23 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             %   EMRAX228Powertrain(matFilePath, drivetrainEfficiency, motorRotorInertia)
 
             if nargin < 1 || isempty(matFilePath)
-                classDir = fileparts(mfilename('fullpath'));
-                matFilePath = fullfile(classDir, 'EMRAX228LC Single_3.36.mat');
+                matFilePath = 'EMRAX228LC Single_3.36.mat';
+            end
+            % Resolve relative names against the repository's
+            % data/powertrain/ folder (legacy class-folder fallback kept).
+            if ~startsWith(matFilePath, '/') && ~startsWith(matFilePath, '\') ...
+                    && ~contains(matFilePath, ':') && ~exist(matFilePath, 'file')
+                root = lts.util.repoRoot(mfilename('fullpath'));
+                candidates = { ...
+                    fullfile(root, 'data', 'powertrain', matFilePath); ...
+                    fullfile(fileparts(mfilename('fullpath')), matFilePath); ...
+                    fullfile(root, matFilePath)};
+                for i = 1:numel(candidates)
+                    if exist(candidates{i}, 'file')
+                        matFilePath = candidates{i};
+                        break;
+                    end
+                end
             end
             if nargin >= 2
                 obj.drivetrainEfficiency = lts.util.saturate(drivetrainEfficiency);

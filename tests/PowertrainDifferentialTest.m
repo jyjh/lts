@@ -646,5 +646,5 @@ end
 function path = powertrainMapPath(fileName)
 testDir = fileparts(mfilename('fullpath'));
 repoRoot = fileparts(testDir);
-path = fullfile(repoRoot, 'src', '+lts', '+components', '+Powertrain', fileName);
+path = fullfile(repoRoot, 'data', 'powertrain', fileName);
 end

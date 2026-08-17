@@ -36,30 +36,24 @@ classdef TireConstants
             % TIRECONSTANTS Construct from a .tir file
             %   TireConstants(tirFilePath)
             %
-            %   tirFilePath — path to the .tir file. If relative, resolved
-            %                 relative to this class's folder (+Tire/).
-            
-            % Resolve relative paths: search +Tire/ → src/ → project root
+            %   tirFilePath — path to the .tir file. Relative names resolve
+            %                 against the repository's data/tires/ folder
+            %                 (legacy locations are searched as fallbacks).
+
+            % Resolve relative paths: data/tires/ -> +Tire/ -> src/ -> root
             if ~startsWith(tirFilePath, '/') && ~startsWith(tirFilePath, '\') ...
                     && ~contains(tirFilePath, ':')
-                % Try +Tire/ folder first
-                tireFolder = fullfile(fileparts(mfilename('fullpath')), tirFilePath);
-                if exist(tireFolder, 'file')
-                    tirFilePath = tireFolder;
-                else
-                    % Try src/ folder
-                    srcFolder = fullfile(fileparts(fileparts(mfilename('fullpath'))), tirFilePath);
-                    if exist(srcFolder, 'file')
-                        tirFilePath = srcFolder;
-                    else
-                        % Try project root
-                        rootFolder = fullfile(lts.util.repoRoot(mfilename('fullpath')), tirFilePath);
-                        if exist(rootFolder, 'file')
-                            tirFilePath = rootFolder;
-                        else
-                            % Fall back to +Tire/ and let MFeval throw the error
-                            tirFilePath = tireFolder;
-                        end
+                root = lts.util.repoRoot(mfilename('fullpath'));
+                candidates = { ...
+                    fullfile(root, 'data', 'tires', tirFilePath); ...
+                    fullfile(fileparts(mfilename('fullpath')), tirFilePath); ...
+                    fullfile(fileparts(fileparts(mfilename('fullpath'))), tirFilePath); ...
+                    fullfile(root, tirFilePath)};
+                tirFilePath = candidates{1};
+                for i = 1:numel(candidates)
+                    if exist(candidates{i}, 'file')
+                        tirFilePath = candidates{i};
+                        break;
                     end
                 end
             end

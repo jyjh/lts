@@ -255,8 +255,8 @@ classdef VehicleConfig
             %   Pacejka Magic Formula (MF 6.1) via MFeval. Grip is set entirely
             %   by the tire data (including its load sensitivity). Track
             %   surface-friction scaling is intentionally unsupported.
-            %   tirFile lives in +Tire/.
-            %     tirFile:  Pacejka .tir filename in +Tire/
+            %   tirFile lives in data/tires/ at the repo root.
+            %     tirFile:  Pacejka .tir filename in data/tires/
             %     wheelInertia [kg*m^2] wheel+tire+brake rotating inertia/corner
             %     relaxationLength [m] lateral contact-patch slip lag
             %       (0 = steady-state)

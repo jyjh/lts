@@ -126,10 +126,10 @@ Standard library only — no dependencies.
 python scripts/generate_vehicle.py "2026_FSAE_Design_EV_Spec_Sheet.csv" --name R26
 ```
 
-writes `src/+lts/+vehicles/R26.m`, then reference it from `src/+lts/+app/run_simulation.m`:
+writes `src/+lts/+vehicles/R26.m`, then run it from the entry point:
 
 ```matlab
-config = lts.vehicles.R26();
+lts.app.run_simulation('Car', 'R26');
 ```
 
 ### What gets mapped
