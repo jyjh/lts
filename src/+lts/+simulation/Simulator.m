@@ -424,8 +424,9 @@ classdef Simulator < handle
                 maxSteps = max(maxSteps, ceil(max(0, obj.stopTime - initialState.time) / obj.dt) + 2);
             end
             maxSteps = max(maxSteps, 100000);
-            leanTelemetry = obj.isLeanTelemetry();
-            stateLog = localCreateStateLog(maxSteps, leanTelemetry);
+            stateLogBuilder = lts.telemetry.StateLogBuilder(vm, obj.telemetryMode);
+            stateLogBuilder.beginRun(maxSteps, trackData, ...
+                obj.isFreeReferenceMode());
             
             currentState = initialState;
             lts.simulation.DrivelineSupport.initializeWheelSpeeds( ...
@@ -477,127 +478,8 @@ classdef Simulator < handle
                 [newState, forces] = obj.step(currentState, input, ref);
                 
                 if step <= maxSteps
-                    inputSourceDist   = localGetField(input, 'sourceDistance',      currentState.s);
-                    inputSourceTime   = localGetField(input, 'sourceTime',          currentState.time);
-                    inputTargetSpeed  = localGetField(input, 'targetSpeed',         NaN);
-                    inputAxRef        = localGetField(input, 'axRef',               NaN);
-                    inputTargetLatErr = localGetField(input, 'targetLateralError',  NaN);
-                    inputLineCurv     = localGetField(input, 'lineCurvature',       NaN);
-                    inputSpeedError   = localGetField(input, 'speedError',          NaN);
-
-                    stateLog.time(step)        = newState.time;
-                    stateLog.s(step)           = newState.s;
-                    stateLog.controlS(step)    = inputSourceDist;
-                    stateLog.x(step)           = newState.x;
-                    stateLog.y(step)           = newState.y;
-                    stateLog.yaw(step)         = newState.yaw;
-                    stateLog.vx(step)          = newState.vx;
-                    stateLog.vy(step)          = newState.vy;
-                    stateLog.bodySlipAngle(step) = newState.bodySlipAngle;
-                    stateLog.speed(step)       = newState.speed;
-                    stateLog.speedKmh(step)    = newState.speed * 3.6;
-                    stateLog.controlTime(step) = inputSourceTime;
-                    stateLog.ax(step)          = newState.ax;
-                    stateLog.ay(step)          = newState.ay;
-                    stateLog.frontAxleAy(step) = newState.frontAxleAy;
-                    stateLog.rearAxleAy(step)  = newState.rearAxleAy;
-                    stateLog.yawRate(step)     = newState.yawRate;
-                    stateLog.yawAccel(step)    = newState.yawAccel;
-                    stateLog.refS(step)        = newState.refS;
-                    stateLog.refHeading(step)  = newState.refHeading;
-                    stateLog.refCurvature(step) = newState.refCurvature;
-                    stateLog.lateralError(step) = newState.lateralError;
-                    stateLog.onTrack(step)     = newState.onTrack;
-                    if obj.isFreeReferenceMode()
-                        stateLog.trackWidth(step) = 0;
-                        stateLog.trackLimitMargin(step) = 0;
-                    else
-                        refIdxStep = find(trackData.arcLen <= newState.refS, 1, 'last');
-                        if isempty(refIdxStep)
-                            refIdxStep = 1;
-                        end
-                        refIdxStep = max(1, min(refIdxStep, ...
-                            numel(trackData.trackLeftHalfWidth)));
-                        % Track width remains a scalar telemetry channel.
-                        stateLog.trackWidth(step) = ...
-                            trackData.trackLeftHalfWidth(refIdxStep) + ...
-                            trackData.trackRightHalfWidth(refIdxStep);
-                        [localLeft, localRight] = ...
-                            lts.simulation.TrackReference.sideHalfWidthsAt( ...
-                            trackData, refIdxStep);
-                        stateLog.trackLimitMargin(step) = ...
-                            lts.simulation.TrackReference.sideMargin( ...
-                            localLeft, localRight, newState.lateralError, ...
-                            trackData.trackHalfWidth);
-                    end
-                    stateLog.throttle(step)    = input.throttle;
-                    stateLog.brake(step)       = forces.brake;
-                    stateLog.brakeRequested(step) = forces.brakeCommand;
-                    stateLog.brakePressureMode(step) = forces.brakePressureMode;
-                    stateLog.brakePressureFrontBar(step) = forces.brakePressureFrontBar;
-                    stateLog.brakePressureRearBar(step) = forces.brakePressureRearBar;
-                    stateLog.steer(step)       = input.steer;
-                    stateLog.targetSpeed(step) = inputTargetSpeed;
-                    stateLog.axRef(step)       = inputAxRef;
-                    stateLog.targetLateralError(step) = inputTargetLatErr;
-                    stateLog.lineCurvature(step) = inputLineCurv;
-                    if isfinite(inputSpeedError)
-                        stateLog.speedError(step) = inputSpeedError;
-                    elseif isfinite(inputTargetSpeed)
-                        stateLog.speedError(step) = currentState.speed - inputTargetSpeed;
-                    end
-                    stateLog.curvature(step)   = newState.refCurvature;
-                    stateLog.heading(step)     = newState.heading;
-                    stateLog.F_downforce(step) = forces.F_downforce;
-                    stateLog.F_drag(step)      = forces.F_drag;
-                    stateLog.F_drive(step)     = forces.F_drive;
-                    stateLog.F_brake(step)     = forces.F_brake;
-                    stateLog.F_tire_long(step) = forces.F_tire_long;
-                    stateLog.F_tire_lat(step)  = forces.F_tire_lat;
-                    stateLog.yawMoment(step)   = forces.yawMoment;
-                    stateLog.rollResistance(step) = forces.rollResistance;
-                    stateLog.F_brake_front(step) = forces.F_brake_front;
-                    stateLog.F_brake_rear(step) = forces.F_brake_rear;
-                    stateLog.F_brake_FL(step)  = forces.F_brake_FL;
-                    stateLog.F_brake_FR(step)  = forces.F_brake_FR;
-                    stateLog.F_brake_RL(step)  = forces.F_brake_RL;
-                    stateLog.F_brake_RR(step)  = forces.F_brake_RR;
-                    stateLog.brakeGrip_FL(step) = forces.brakeGrip_FL;
-                    stateLog.brakeGrip_FR(step) = forces.brakeGrip_FR;
-                    stateLog.brakeGrip_RL(step) = forces.brakeGrip_RL;
-                    stateLog.brakeGrip_RR(step) = forces.brakeGrip_RR;
-                    stateLog.driveTorqueTotal(step) = forces.driveTorqueTotal;
-                    stateLog.driveTorque_RL(step) = forces.driveTorque_RL;
-                    stateLog.driveTorque_RR(step) = forces.driveTorque_RR;
-                    stateLog.brakeTorque_FL(step) = forces.brakeTorque_FL;
-                    stateLog.brakeTorque_FR(step) = forces.brakeTorque_FR;
-                    stateLog.brakeTorque_RL(step) = forces.brakeTorque_RL;
-                    stateLog.brakeTorque_RR(step) = forces.brakeTorque_RR;
-                    stateLog.motorRPM(step)    = forces.motorRPM;
-                    stateLog.motorTorque(step) = forces.motorTorque;
-                    stateLog.motorTorqueRequested(step) = forces.motorTorqueRequested;
-                    stateLog.motorTorquePowerLimitNm(step) = forces.motorTorquePowerLimitNm;
-                    stateLog.motorTorquePowerLimitActive(step) = forces.motorTorquePowerLimitActive;
-                    stateLog.wheelTorque(step) = forces.wheelTorque;
-                    stateLog.packVoltageV(step) = forces.packVoltageV;
-                    stateLog.packCurrentA(step) = forces.packCurrentA;
-                    stateLog.packPowerW(step) = forces.packPowerW;
-                    stateLog.drivenWheelRPM(step) = forces.drivenWheelRPM;
-                    stateLog.rpmLimitActive(step) = forces.rpmLimitActive;
-                    stateLog.pitchAngle(step)  = newState.pitchAngle;
-                    stateLog.rollAngle(step)   = newState.rollAngle;
-                    stateLog.rollRate(step)    = newState.rollRate;
-                    stateLog.frontRollAngle(step) = newState.frontRollAngle;
-                    stateLog.rearRollAngle(step)  = newState.rearRollAngle;
-                    stateLog.frontRollRate(step)  = newState.frontRollRate;
-                    stateLog.rearRollRate(step)   = newState.rearRollRate;
-                    stateLog.twistAngle(step)     = newState.twistAngle;
-                    stateLog.twistRate(step)      = newState.twistRate;
-                    stateLog.rideHeight(step)  = newState.rideHeight;
-                    stateLog.aeroFz_front(step) = forces.aeroFz_front;
-                    stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
-                    stateLog = localLogCornerTelemetry( ...
-                        stateLog, step, vm, leanTelemetry);
+                    stateLogBuilder.logStep(step, currentState, ...
+                        newState, input, forces);
                 end
                 
                 currentState = newState;
@@ -618,10 +500,7 @@ classdef Simulator < handle
             
             simulationSteps = step;
 
-            fields = fieldnames(stateLog);
-            for i = 1:numel(fields)
-                stateLog.(fields{i}) = stateLog.(fields{i})(1:step);
-            end
+            stateLog = stateLogBuilder.finish();
 
             % Replay-bounded runs use their complete time-domain window.
             if obj.isFreeReferenceMode() || isfinite(obj.stopTime)
@@ -742,89 +621,8 @@ classdef Simulator < handle
         end
 
         function stateLog = addReplayReferenceChannels(~, stateLog, profile)
-            if isempty(stateLog.time)
-                return;
-            end
-
-            if isfield(stateLog, 'controlTime')
-                queryTime = stateLog.controlTime(:);
-            else
-                queryTime = stateLog.time(:);
-            end
-
-            channels = { ...
-                'replayThrottle','throttle'; 'replayBrake','brake'; ...
-                'replaySteer','steer'; 'replaySpeed','speed'; ...
-                'replayYawRate','yawRate'};
-            for i = 1:size(channels, 1)
-                stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                    profile.time, profile.(channels{i, 2}), queryTime);
-            end
-            if profile.hasBrakePressure()
-                channels = { ...
-                    'replayBrakePressureFrontBar','brakePressureFrontBar'; ...
-                    'replayBrakePressureRearBar','brakePressureRearBar'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
-            optionalChannels = { ...
-                profile.hasRegenTorque(),'replayRegenTorqueNm','regenTorqueNm'; ...
-                profile.hasMotorTorqueCommand(),'replayMotorTorqueCommandNm','motorTorqueCommandNm'; ...
-                profile.hasMotorTorqueDelivered(),'replayMotorTorqueDeliveredNm','motorTorqueDeliveredNm'; ...
-                profile.hasMotorRpm(),'replayMotorRpm','motorRpm'};
-            for i = 1:size(optionalChannels, 1)
-                if optionalChannels{i, 1}
-                    stateLog.(optionalChannels{i, 2}) = localInterpProfileChannel( ...
-                        profile.time, profile.(optionalChannels{i, 3}), queryTime);
-                end
-            end
-            if profile.hasPackPower()
-                channels = { ...
-                    'replayPackVoltageV','packVoltageV'; ...
-                    'replayPackCurrentA','packCurrentA'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-                stateLog.replayPackPowerW = ...
-                    stateLog.replayPackVoltageV .* stateLog.replayPackCurrentA;
-            end
-            if profile.hasWheelSpeeds()
-                corners = {'FL','FR','RL','RR'};
-                for i = 1:numel(corners)
-                    corner = corners{i};
-                    replayField = ['replayWheelSpeed' corner];
-                    simulatedField = ['tireSpeed_' corner];
-                    stateLog.(replayField) = localInterpProfileChannel( ...
-                        profile.time, profile.(['wheelSpeed' corner]), queryTime);
-                    if isfield(stateLog, simulatedField)
-                        stateLog.(['wheelSpeedError' corner]) = ...
-                            stateLog.(simulatedField) - stateLog.(replayField);
-                    end
-                end
-            end
-            if profile.hasLatAccel()
-                channels = { ...
-                    'replayLatAccelG','latAccelG'; ...
-                    'replayFrontLatAccelG','frontLatAccelG'; ...
-                    'replayRearLatAccelG','rearLatAccelG'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
-            if profile.hasLongAccel()
-                channels = { ...
-                    'replayLongAccelG','longAccelG'; ...
-                    'replayFrontLongAccelG','frontLongAccelG'; ...
-                    'replayRearLongAccelG','rearLongAccelG'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
+            stateLog = lts.telemetry.StateLogBuilder.addReplayReferenceChannels( ...
+                stateLog, profile);
         end
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
@@ -1049,7 +847,7 @@ classdef Simulator < handle
         end
 
         function stateLog = createLeanStateLog(~, maxSteps)
-            stateLog = localCreateStateLog(maxSteps, true);
+            stateLog = lts.telemetry.StateLogBuilder.createStateLog(maxSteps, true);
         end
 
         function [points, curvature, mu, heading] = repeatClosedTrack(~, ...
@@ -1620,103 +1418,10 @@ classdef Simulator < handle
     end
 end
 
-function stateLog = localCreateStateLog(n, lean)
-zeroFields = { ...
-    'time','s','controlS','x','y','yaw','vx','vy','bodySlipAngle', ...
-    'speed','speedKmh','controlTime','ax','ay','frontAxleAy','rearAxleAy', ...
-    'yawRate','yawAccel','refS','refHeading','refCurvature','lateralError', ...
-    'trackWidth','trackLimitMargin','throttle','brake','brakeRequested','steer', ...
-    'curvature','heading','F_downforce','F_drag','F_drive','F_brake', ...
-    'F_tire_long','F_tire_lat','yawMoment','rollResistance','F_brake_front', ...
-    'F_brake_rear','F_brake_FL','F_brake_FR','F_brake_RL','F_brake_RR', ...
-    'brakeGrip_FL','brakeGrip_FR','brakeGrip_RL','brakeGrip_RR', ...
-    'driveTorqueTotal','driveTorque_RL','driveTorque_RR','brakeTorque_FL', ...
-    'brakeTorque_FR','brakeTorque_RL','brakeTorque_RR','motorRPM','motorTorque', ...
-    'motorTorqueRequested','wheelTorque','drivenWheelRPM','pitchAngle','rollAngle', ...
-    'rollRate','frontRollAngle','rearRollAngle','frontRollRate','rearRollRate', ...
-    'twistAngle','twistRate','rideHeight','aeroFz_front','aeroFz_rear', ...
-    'tireSpeed_FL','tireSpeed_FR','tireSpeed_RL','tireSpeed_RR'};
-nanFields = { ...
-    'brakePressureFrontBar','brakePressureRearBar','targetSpeed','axRef', ...
-    'targetLateralError','lineCurvature','speedError','motorTorquePowerLimitNm', ...
-    'packVoltageV','packCurrentA','packPowerW'};
-logicalFields = { ...
-    'onTrack','brakePressureMode','motorTorquePowerLimitActive','rpmLimitActive'};
-
-stateLog = struct();
-for i = 1:numel(zeroFields)
-    stateLog.(zeroFields{i}) = zeros(n, 1);
-end
-for i = 1:numel(nanFields)
-    stateLog.(nanFields{i}) = NaN(n, 1);
-end
-for i = 1:numel(logicalFields)
-    stateLog.(logicalFields{i}) = false(n, 1);
-end
-
-if lean
-    return;
-end
-corners = {'FL','FR','RL','RR'};
-cornerFields = { ...
-    'Fz','suspensionForce','antiRollBarForce','suspensionDemand','tireDeflection', ...
-    'damperPos','damperVel','sprungPosition','unsprungPosition','sprungVelocity', ...
-    'unsprungVelocity','wheelTravel','camber','toe','wheelSteer','slipAngle', ...
-    'slipRatio','peakMu','tireUtilization','omega','tireFx','tireFy'};
-for i = 1:numel(cornerFields)
-    for j = 1:numel(corners)
-        stateLog.([cornerFields{i} '_' corners{j}]) = zeros(n, 1);
-    end
-end
-end
-
-function stateLog = localLogCornerTelemetry(stateLog, step, vm, lean)
-corners = {'FL','FR','RL','RR'};
-suspensionCorners = {'frontLeft','frontRight','rearLeft','rearRight'};
-suspensionFields = { ...
-    'Fz','tireNormalForce'; 'suspensionForce','suspensionForce'; ...
-    'antiRollBarForce','antiRollBarForce'; 'suspensionDemand','demandedLoad'; ...
-    'tireDeflection','tireDeflection'; 'damperPos','damperPosition'; ...
-    'damperVel','damperVelocity'; 'sprungPosition','sprungPosition'; ...
-    'unsprungPosition','unsprungPosition'; 'sprungVelocity','sprungVelocity'; ...
-    'unsprungVelocity','unsprungVelocity'; 'wheelTravel','wheelTravel'; ...
-    'camber','camberAngle'; 'toe','toeAngle'; 'wheelSteer','steerAngle'};
-tireFields = { ...
-    'slipAngle','slipAngle'; 'slipRatio','slipRatio'; 'peakMu','peakMu'; ...
-    'omega','angularVelocity'; 'tireFx','Fx'; 'tireFy','Fy'; ...
-    'relaxedFz','relaxedNormalLoad'};
-
-for j = 1:numel(corners)
-    corner = corners{j};
-    tire = vm.tire.(corner);
-    stateLog.(['tireSpeed_' corner])(step) = ...
-        abs(tire.angularVelocity * tire.wheelRadius);
-    if lean
-        continue;
-    end
-
-    suspension = vm.suspension.(suspensionCorners{j}).state;
-    for i = 1:size(suspensionFields, 1)
-        stateLog.([suspensionFields{i, 1} '_' corner])(step) = ...
-            suspension.(suspensionFields{i, 2});
-    end
-    for i = 1:size(tireFields, 1)
-        stateLog.([tireFields{i, 1} '_' corner])(step) = ...
-            tire.(tireFields{i, 2});
-    end
-    capacity = max(tire.peakMu, 0) * max(tire.normalForce, 0);
-    utilization = 0;
-    if capacity > eps
-        utilization = hypot(tire.Fx, tire.Fy) / capacity;
-        if ~isfinite(utilization)
-            utilization = 0;
-        end
-    end
-    stateLog.(['tireUtilization_' corner])(step) = utilization;
-end
-end
-
 function value = localGetField(s, fieldName, defaultValue)
+% Shared struct-field-with-default helper (empty values fall back too).
+% Used by step() force assembly, replay progress text, and planar
+% dynamics. Telemetry-side uses live in lts.telemetry.StateLogBuilder.
 if isstruct(s) && isfield(s, fieldName)
     value = s.(fieldName);
     if isempty(value)
@@ -1724,26 +1429,5 @@ if isstruct(s) && isfield(s, fieldName)
     end
 else
     value = defaultValue;
-end
-end
-
-function values = localInterpProfileChannel(axis, channel, query)
-axis = double(axis(:));
-channel = double(channel(:));
-query = double(query(:));
-
-keep = isfinite(axis) & isfinite(channel);
-axis = axis(keep);
-channel = channel(keep);
-
-if isempty(axis)
-    values = NaN(size(query));
-elseif isscalar(axis)
-    values = repmat(channel(1), size(query));
-else
-    [axis, uniqueIdx] = unique(axis, 'stable');
-    channel = channel(uniqueIdx);
-    query = max(axis(1), min(axis(end), query));
-    values = interp1(axis, channel, query, 'linear');
 end
 end
