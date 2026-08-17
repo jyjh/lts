@@ -482,87 +482,6 @@ verifyEqual(testCase, rearRollDisplacement, state.rearRollAngle * trackWidth, 'A
 verifyNotEqual(testCase, frontRollDisplacement, rearRollDisplacement);
 end
 
-function testAlgebraicSuspensionFallbackStillComputesLoads(testCase)
-config = lts.vehicles.baseline();
-[vehicle, suspension] = createAlgebraicVehicle(config);
-state = lts.simulation.VehicleState('speed', 20);
-state.vehicleManager = vehicle;
-state.ax = 3;
-state.ay = 6;
-
-loads = suspension.computeCornerLoads(state, 120, 80, vehicle.totalMass, 0.001);
-loadValues = [loads.FL; loads.FR; loads.RL; loads.RR];
-
-verifyTrue(testCase, all(isfinite(loadValues)));
-verifyTrue(testCase, all(loadValues >= 0));
-end
-
-function testAlgebraicFallbackZeroRollCenterPreservesLateralMoment(testCase)
-config = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
-[vehicle, suspension] = createAlgebraicVehicle(config);
-state = lts.simulation.VehicleState('speed', 20);
-state.vehicleManager = vehicle;
-state.ax = 0;
-state.ay = 6;
-
-loads = suspension.estimateCornerLoads(state, 0, 0, vehicle.totalMass);
-
-expectedRightMinusLeft = 2 * vehicle.totalMass * state.ay * ...
-    vehicle.cgHeight / vehicle.trackWidth;
-verifyEqual(testCase, rightMinusLeft(loads), expectedRightMinusLeft, ...
-    'AbsTol', 1e-9);
-verifyEqual(testCase, totalNormalLoad(loads), ...
-    vehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 1e-9);
-end
-
-function testAlgebraicFallbackRollCenterHeightChangesAxleSplit(testCase)
-ay = 6;
-flatConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
-raisedConfig = setRollCenters(lts.vehicles.baseline(), 0.12, 0.03, 0, 0);
-[flatVehicle, flatSuspension] = createAlgebraicVehicle(flatConfig);
-[raisedVehicle, raisedSuspension] = createAlgebraicVehicle(raisedConfig);
-flatState = lts.simulation.VehicleState('speed', 20);
-flatState.vehicleManager = flatVehicle;
-flatState.ax = 0;
-flatState.ay = ay;
-raisedState = lts.simulation.VehicleState('speed', 20);
-raisedState.vehicleManager = raisedVehicle;
-raisedState.ax = 0;
-raisedState.ay = ay;
-
-flatLoads = flatSuspension.estimateCornerLoads( ...
-    flatState, 0, 0, flatVehicle.totalMass);
-raisedLoads = raisedSuspension.estimateCornerLoads( ...
-    raisedState, 0, 0, raisedVehicle.totalMass);
-
-expectedRightMinusLeft = 2 * raisedVehicle.totalMass * ay * ...
-    raisedVehicle.cgHeight / raisedVehicle.trackWidth;
-flatFrontDiff = flatLoads.FR - flatLoads.FL;
-raisedFrontDiff = raisedLoads.FR - raisedLoads.FL;
-
-verifyEqual(testCase, rightMinusLeft(raisedLoads), expectedRightMinusLeft, ...
-    'AbsTol', 1e-9);
-verifyGreaterThan(testCase, abs(raisedFrontDiff - flatFrontDiff), 1e-6);
-verifyEqual(testCase, totalNormalLoad(raisedLoads), ...
-    raisedVehicle.totalMass * lts.vehicle.VehicleManager.g, 'AbsTol', 1e-9);
-end
-
-function testAlgebraicFallbackUsesAxleSpecificLateralAcceleration(testCase)
-config = setRollCenters(lts.vehicles.baseline(), 0.10, 0.10, 0, 0);
-[vehicle, suspension] = createAlgebraicVehicle(config);
-state = lts.simulation.VehicleState('speed', 20);
-state.vehicleManager = vehicle;
-state.ax = 0;
-state.ay = 0;
-state.frontAxleAy = 5;
-state.rearAxleAy = -5;
-
-loads = suspension.estimateCornerLoads(state, 0, 0, vehicle.totalMass);
-
-verifyGreaterThan(testCase, loads.FR, loads.FL);
-verifyGreaterThan(testCase, loads.RL, loads.RR);
-end
-
 function testRollCenterHeightReducesChassisRollResponse(testCase)
 lowConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
 highConfig = setRollCenters(lts.vehicles.baseline(), 0.15, 0.15, 0, 0);
@@ -776,7 +695,6 @@ end
 function suspension = createSuspension(vehicle, suspCfg, unsprungMass, geometry)
 suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
-    suspCfg.rollStiffnessOverride, ...
     suspCfg.front.springRate, suspCfg.front.dampingCoeff, suspCfg.front.reboundCoeff, ...
     suspCfg.rear.springRate,  suspCfg.rear.dampingCoeff,  suspCfg.rear.reboundCoeff, ...
     suspCfg.motionRatio, ...
@@ -785,6 +703,7 @@ suspension = lts.components.Suspension.SuspensionManager( ...
     suspCfg.tireSpringRate, ...
     unsprungMass, ...
     geometry);
+suspension.rollStiffnessOverride = suspCfg.rollStiffnessOverride;
 end
 
 function chassis = applyChassisTuning(chassis, chassisCfg)

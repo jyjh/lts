@@ -3,30 +3,27 @@ tests = functiontests(localfunctions);
 end
 
 function testStaticEquilibrium(testCase)
-[vehicle, suspension] = createSuspension(1);
-state = createState(0, 0, 0);
+[~, suspension, chassis] = createChassisCoupledSuspension(1);
+dt = 0.001;
 
-loads = suspension.computeCornerLoads(state, 0, 0, vehicle.totalMass, 0.001);
+loads = runCoupledSteps(suspension, chassis, 0, 0, 0, 50, dt);
 loadValues = loadVector(loads);
 
-verifyEqual(testCase, sum(loadValues), vehicle.totalMass * vehicle.g, 'AbsTol', 1e-9);
+verifyEqual(testCase, sum(loadValues), ...
+    chassis.sprungMass * 9.80665 + 4 * suspension.frontLeft.unsprungMass * 9.80665, ...
+    'AbsTol', 1e-6);
 verifyLessThan(testCase, abs(suspension.computePitchAngle()), 1e-12);
 verifyEqual(testCase, suspension.frontLeft.state.damperPosition, 0, 'AbsTol', 1e-12);
 verifyEqual(testCase, suspension.rearLeft.state.damperPosition, 0, 'AbsTol', 1e-12);
 end
 
 function testSpringDamperRatesAffectTransientNormalLoad(testCase)
-[vehicleBase, baseSuspension] = createSuspension(1);
-[vehicleStiff, stiffSuspension] = createSuspension(2);
-stateBase = createState(4, 8, 0.2);
-stateStiff = createState(4, 8, 0.2);
+[~, baseSuspension, baseChassis] = createChassisCoupledSuspension(1);
+[~, stiffSuspension, stiffChassis] = createChassisCoupledSuspension(2);
+dt = 0.001;
 
-for idx = 1:40
-    loadsBase = baseSuspension.computeCornerLoads( ...
-        stateBase, 100, 150, vehicleBase.totalMass, 0.001);
-    loadsStiff = stiffSuspension.computeCornerLoads( ...
-        stateStiff, 100, 150, vehicleStiff.totalMass, 0.001);
-end
+loadsBase = runCoupledSteps(baseSuspension, baseChassis, 4, 8, 0, 40, dt);
+loadsStiff = runCoupledSteps(stiffSuspension, stiffChassis, 4, 8, 0, 40, dt);
 
 loadDelta = norm(loadVector(loadsBase) - loadVector(loadsStiff));
 verifyGreaterThan(testCase, loadDelta, 1e-3);
@@ -81,7 +78,7 @@ end
 
 function corner = buildDamperCorner(vm, cfg, sprungCornerMass, knee, ratio)
 corner = lts.components.Suspension.SimpleSuspension( ...
-    vm, 0.5, ...
+    vm, ...
     cfg.suspension.front.springRate, ...
     cfg.suspension.front.dampingCoeff, cfg.suspension.front.reboundCoeff, ...
     cfg.suspension.motionRatio, ...
@@ -91,12 +88,9 @@ corner = lts.components.Suspension.SimpleSuspension( ...
 end
 
 function testAntiRollBarCouplesLeftRightWheelTravel(testCase)
-[vehicle, suspension] = createSuspension(1, 100000, 60000);
-state = createState(0, 8, 0.1);
+[~, suspension, chassis] = createChassisCoupledSuspension(1, 100000, 60000);
 
-for idx = 1:80
-    suspension.computeCornerLoads(state, 0, 0, vehicle.totalMass, 0.001);
-end
+runCoupledSteps(suspension, chassis, 0, 8, 0, 80, 0.001);
 
 frontForces = [
     suspension.frontLeft.state.antiRollBarForce
@@ -134,28 +128,13 @@ expectedPitch = atan2(0.010, vehicle.wheelbase);
 verifyEqual(testCase, suspension.computePitchAngle(), expectedPitch, 'AbsTol', 1e-12);
 end
 
-function testConstantDemandSettlesToLoadTransferTarget(testCase)
-[vehicle, suspension] = createSuspension(1);
-state = createState(3, 6, 0.15);
-targetLoads = suspension.estimateCornerLoads(state, 120, 80, vehicle.totalMass);
-
-for idx = 1:6000
-    loads = suspension.computeCornerLoads(state, 120, 80, vehicle.totalMass, 0.001);
-end
-
-verifyEqual(testCase, loadVector(loads), loadVector(targetLoads), 'AbsTol', 5);
-end
-
 function testExtremeUnloadIsFiniteAndNonnegative(testCase)
-[vehicle, suspension] = createSuspension(1);
-state = createState(-25, 35, 0.3);
+[~, suspension, chassis] = createChassisCoupledSuspension(1);
 
-for idx = 1:300
-    loads = suspension.computeCornerLoads(state, 0, 0, vehicle.totalMass, 0.001);
-    values = loadVector(loads);
-    verifyTrue(testCase, all(isfinite(values)));
-    verifyTrue(testCase, all(values >= 0));
-end
+loads = runCoupledSteps(suspension, chassis, -25, 35, 0, 300, 0.001);
+values = loadVector(loads);
+verifyTrue(testCase, all(isfinite(values)));
+verifyTrue(testCase, all(values >= 0));
 
 stateValues = [
     suspension.frontLeft.state.sprungPosition
@@ -179,12 +158,9 @@ verifyTrue(testCase, all(isfinite(stateValues)));
 end
 
 function testGeometryTelemetryStillUpdates(testCase)
-[vehicle, suspension] = createSuspension(1);
-state = createState(2, 4, 0.25);
+[~, suspension, chassis] = createChassisCoupledSuspension(1);
 
-for idx = 1:20
-    suspension.computeCornerLoads(state, 80, 100, vehicle.totalMass, 0.001);
-end
+runCoupledSteps(suspension, chassis, 2, 4, 0.25, 20, 0.001);
 
 kin = suspension.getCornerKinematics();
 values = [
@@ -288,7 +264,6 @@ geometry.rearAntiRollBar = lts.components.Suspension.AntiRollBar( ...
 
 suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
-    config.suspension.rollStiffnessOverride, ...
     config.suspension.front.springRate, config.suspension.front.dampingCoeff, config.suspension.front.reboundCoeff, ...
     config.suspension.rear.springRate,  config.suspension.rear.dampingCoeff,  config.suspension.rear.reboundCoeff, ...
     config.suspension.motionRatio, ...
@@ -385,7 +360,6 @@ geometry = lts.components.Suspension.SuspensionGeometry.fromConfig( ...
     config.suspension.geometry, vehicle);
 suspension = lts.components.Suspension.SuspensionManager( ...
     vehicle, ...
-    config.suspension.rollStiffnessOverride, ...
     config.suspension.front.springRate * rateScale, config.suspension.front.dampingCoeff * rateScale, config.suspension.front.reboundCoeff * rateScale, ...
     config.suspension.rear.springRate * rateScale,  config.suspension.rear.dampingCoeff * rateScale,  config.suspension.rear.reboundCoeff * rateScale, ...
     config.suspension.motionRatio, ...
@@ -400,11 +374,58 @@ vehicle.suspension = suspension;
 suspension.warmup(vehicle.totalMass, 0.001);
 end
 
-function state = createState(ax, ay, steer)
-state = lts.simulation.VehicleState('speed', 20);
-state.ax = ax;
-state.ay = ay;
-state.steer = steer;
+function [vehicle, suspension, chassis] = createChassisCoupledSuspension( ...
+        rateScale, frontAntiRollBarRate, rearAntiRollBarRate, config)
+% Chassis-coupled fixture mirroring the Simulator's load loop: the chassis
+% resolves sprung attitude, the suspension reacts through the corner
+% spring/damper/ARB forces.
+if nargin < 2
+    frontAntiRollBarRate = 0;
+end
+if nargin < 3
+    rearAntiRollBarRate = 0;
+end
+if nargin < 4 || isempty(config)
+    config = lts.vehicles.baseline();
+end
+
+[vehicle, suspension] = createSuspension(rateScale, ...
+    frontAntiRollBarRate, rearAntiRollBarRate, config);
+sprungMass = vehicle.totalMass - 4 * config.unsprungMass;
+chassis = lts.components.Chassis.SimpleChassis(vehicle, sprungMass);
+chassis.heaveStiffness = config.chassis.heaveStiffness;
+chassis.heaveDamping = config.chassis.heaveDamping;
+chassis.pitchStiffness = config.chassis.pitchStiffness;
+chassis.pitchDamping = config.chassis.pitchDamping;
+chassis.rollStiffness = config.chassis.rollStiffness;
+chassis.rollDamping = config.chassis.rollDamping;
+chassis.torsionalRigidity = config.chassis.torsionalRigidity;
+chassis.torsionalDamping = config.chassis.torsionalDamping;
+chassis = chassis.setSuspension(suspension);
+suspension.chassis = chassis;
+vehicle.chassis = chassis;
+end
+
+function loads = runCoupledSteps(suspension, chassis, ax, ay, steer, nSteps, dt)
+% Advance the coupled chassis+suspension loop (order matches
+% ChassisLoadTransferTest: chassis attitude first, corner loads from it).
+aeroForces = zeroAeroForces();
+loads = [];
+for idx = 1:nSteps
+    chassis.updateFromAccelerations(ax, ay, aeroForces, dt, 0);
+    loads = suspension.computeCornerLoadsFromChassis(chassis, steer, dt);
+end
+end
+
+function aeroForces = zeroAeroForces()
+aeroForces = struct( ...
+    'Fz_front', 0, ...
+    'Fz_rear', 0, ...
+    'F_drag', 0, ...
+    'F_drag_longitudinal', 0, ...
+    'F_drag_lateral', 0, ...
+    'dragHeight', 0, ...
+    'dragXPosition', 0);
 end
 
 function values = loadVector(loads)

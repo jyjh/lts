@@ -24,7 +24,6 @@ tire.wheelInertia = cfg.tire.wheelInertia;
 if isfield(cfg.tire, 'relaxationLength')
     tire.relaxationLength = cfg.tire.relaxationLength;
 end
-tire.surfaceMuReference = 1.0;  % Legacy compatibility field; never a scale
 
 powertrain = lts.components.Powertrain.EMRAX228Powertrain( ...
     cfg.powertrain.matFile, ...

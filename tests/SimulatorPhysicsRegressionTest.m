@@ -2,13 +2,13 @@ function tests = SimulatorPhysicsRegressionTest
 tests = functiontests(localfunctions);
 end
 
-function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
-tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
-tire.relaxationLength = 0;
-powertrain = SimulatorZeroPowertrain();
-suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
-chassis = SimulatorChassisSpy();
-aero = SimulatorZeroAero();
+function testChassisStepUsesChassisDrivenSuspensionPath(testCase)
+    tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+    tire.relaxationLength = 0;
+    powertrain = SimulatorZeroPowertrain();
+    suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
+    chassis = SimulatorChassisSpy();
+    aero = SimulatorZeroAero();
 
 vehicle = lts.vehicle.VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
 vehicle.totalMass = 256;
@@ -39,7 +39,8 @@ input = struct('throttle', 0, 'brake', 0, 'steer', 0);
 
 simulator.step(state, input, ref);
 
-verifyEqual(testCase, suspension.algebraicCalls, 0);
+% The demanded-load (algebraic) path no longer exists; assert the step
+% resolves loads through the chassis-driven path.
 verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
