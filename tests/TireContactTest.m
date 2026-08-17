@@ -438,7 +438,10 @@ expectedInertia = 0.5 * p.MASS1 * ...
 verifyEqual(testCase, cfg.tire.wheelInertia, expectedInertia, 'AbsTol', 1e-12);
 verifyEqual(testCase, cfg.tire.relaxationLength, 0.255, 'AbsTol', 1e-12);
 % NaN shares the lateral length: the former 0.05 m stability de-tune is
-% replaced by the contact-patch load response below.
+% gone. The load-response lag stays at 0.255: sweep shows launch traction
+% needs sigma >= ~0.10 (scripts/dbg_laptime.m) and 0.255 sits on the
+% converged plateau; the Simulator attitude predictor covers the
+% at-speed stagger on top of it.
 verifyTrue(testCase, isscalar(cfg.tire.longitudinalRelaxationLength) && ...
     isnan(cfg.tire.longitudinalRelaxationLength));
 verifyEqual(testCase, cfg.tire.normalLoadRelaxationLength, ...

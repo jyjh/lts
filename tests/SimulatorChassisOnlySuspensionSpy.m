@@ -11,7 +11,7 @@ classdef SimulatorChassisOnlySuspensionSpy < handle
             obj.loadPerCorner = loadPerCorner;
         end
 
-        function loads = computeCornerLoadsFromChassis(obj, ~, ~, ~)
+        function loads = computeCornerLoadsFromChassis(obj, ~, ~, ~, ~) %#ok<INUSD>
             obj.chassisCalls = obj.chassisCalls + 1;
             loads = obj.staticLoads();
         end

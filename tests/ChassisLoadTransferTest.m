@@ -482,6 +482,32 @@ verifyEqual(testCase, rearRollDisplacement, state.rearRollAngle * trackWidth, 'A
 verifyNotEqual(testCase, frontRollDisplacement, rearRollDisplacement);
 end
 
+function testAttitudePredictorDrivesLoadsFromExtrapolatedRoll(testCase)
+% The predictor (Simulator.useAttitudePredictor) extrapolates the chassis
+% attitude by one timestep before imposing it on the suspension. With a
+% positive front roll rate (rolling right-side-down) and zero roll angle,
+% predicted loads must transfer to the right side within the same step —
+% the no-predictor path cannot see the roll until the chassis integrates.
+[~, suspension, chassis] = createVehicleWithChassis();
+dt = 0.001;
+
+chassis.state.frontRollRate = 0.2;
+chassis.state.rearRollRate = 0.2;
+chassis.state.updateCornerKinematics( ...
+    chassis.wheelbase, chassis.trackWidth, chassis.staticFrontWeight);
+
+legacyLoads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt, 0);
+predictedLoads = suspension.computeCornerLoadsFromChassis(chassis, 0, dt, dt);
+
+verifyGreaterThan(testCase, predictedLoads.FR, legacyLoads.FR, ...
+    'predicted right-side-down roll must compress the right side earlier');
+verifyLessThan(testCase, predictedLoads.FL, legacyLoads.FL, ...
+    'predicted right-side-down roll must unload the left side earlier');
+verifyGreaterThan(testCase, abs(predictedLoads.FR - predictedLoads.FL), ...
+    abs(legacyLoads.FR - legacyLoads.FL), ...
+    'prediction must increase the within-step lateral transfer');
+end
+
 function testRollCenterHeightReducesChassisRollResponse(testCase)
 lowConfig = setRollCenters(lts.vehicles.baseline(), 0, 0, 0, 0);
 highConfig = setRollCenters(lts.vehicles.baseline(), 0.15, 0.15, 0, 0);

@@ -48,20 +48,27 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % carcass/contact-patch response on the driven-wheel torque loop.
         longitudinalRelaxationLength = NaN
 
-        % Contact-patch load-response length [m]. Tire forces do not follow
-        % a normal-load step instantaneously: the patch pressure profile
-        % rebuilds as the contact geometry rolls onto the new load, so the
-        % force response to Fz changes lags on a contact-patch transit time
-        % scale (sigma_Fz / V). Filtering the load the Magic Formula sees
-        % with the same exact exponential lag used for slip gives:
-        %   - identical steady-state forces (no static distortion), and
-        %   - a finite high-frequency Fz->Fx/Fy gain, which breaks the
-        %     algebraic positive-feedback loop
-        %     Fx -> ax -> chassis attitude -> Fz -> Cx/mu*Fz -> Fx
-        %     that otherwise sustains a nonphysical ~10-15 Hz pitch/load
-        %     oscillation under heavy longitudinal loading.
-        % 0 (the default) disables the filter and evaluates at the
-        % instantaneous load (legacy behavior).
+        % Contact-patch load-response length [m]. First-order lag on the
+        % normal load the Magic Formula sees (sigma_Fz/V_eff time
+        % constant), with identical steady-state forces (no static
+        % distortion). Default 0 = off (instantaneous Fz).
+        % R25 uses 0.255 m, which serves two regimes:
+        %   1. At speed: patch-transport-scale load response; it also broke
+        %      the algebraic Fx -> ax -> attitude -> Fz -> Cx/mu*Fz -> Fx
+        %      loop that sustained a nonphysical ~10-15 Hz pitch/load
+        %      oscillation under heavy longitudinal loading. The one-step
+        %      attitude/load stagger that drove that loop is now removed by
+        %      the Simulator attitude predictor
+        %      (Simulator.useAttitudePredictor; see
+        %      SuspensionManager.computeCornerLoadsFromChassis), which
+        %      measurably reduces entry transients on top of this filter.
+        %   2. Near standstill: the V_eff floor (1 m/s) makes the lag a
+        %      ~sigma_Fz-second time constant that damps the launch
+        %      wheel-slip/load loop; the predictor cannot cover this
+        %      regime, and launch sensitivity shows traction degrades
+        %      below ~0.10 m (scripts/dbg_laptime.m).
+        % See scripts/audit_stagger_validation.m for the at-speed A/B/C
+        % comparison (predictor on/off x this filter on/off).
         normalLoadRelaxationLength = 0
 
         % Multiplier on force-evaluation slip angle. This is a correlation

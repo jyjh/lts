@@ -256,8 +256,8 @@ classdef VehicleConfig
             %     longitudinalRelaxationLength [m] longitudinal slip-ratio
             %       lag; NaN uses relaxationLength for backward compatibility
             %     normalLoadRelaxationLength [m] contact-patch load-response
-            %       lag on the Fz the Magic Formula sees (0 = instantaneous,
-            %       the legacy default); steadies the Fx-ax-attitude-Fz loop
+            %       lag on the Fz the Magic Formula sees (0 = off); dual
+            %       role: at-speed loop damping + low-speed launch smoothing
             %     lateralStiffnessScale [-] multiplier on tire slip angle for
             %       correlation sensitivity (1 preserves raw tire file)
             %     lateralStiffnessScaleByCorner [-] optional [FL FR RL RR]

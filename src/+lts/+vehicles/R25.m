@@ -199,7 +199,7 @@ function cfg = R25()
         'wheelInertia', wheelAssemblyInertia, ... % 0.13575 kg*m^2 from 13 lb assembly
         'relaxationLength', 0.255, ...   % lateral: 0.30 m * (6.2/7.3) [m]
         'longitudinalRelaxationLength', NaN, ... % shared with lateral (see note above)
-        'normalLoadRelaxationLength', 0.255, ... % load-response lag: patch transport scale [m]
+        'normalLoadRelaxationLength', 0.255, ... % dual role: patch-transport lag at speed; low-speed launch smoothing (sigma/V_eff floor ~ 0.26 s time constant at launch protects traction — predictor cannot cover this regime, see scripts/audit_stagger_validation.m + scripts/dbg_laptime.m)
         'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
         'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]
         'bearingDragCoeff', 0);          % [not in spec sheet]
