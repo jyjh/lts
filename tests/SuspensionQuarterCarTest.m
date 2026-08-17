@@ -375,6 +375,49 @@ verifyEqual(testCase, highReboundKnee.state.suspensionForce, ...
     'compression side must ignore the rebound knee override');
 end
 
+function testForceElementAddsItsCurveToSuspensionForce(testCase)
+% A pluggable TravelCurveElement must add exactly its lookup value to the
+% corner's suspension force, and an empty element list must leave the
+% built-in force law untouched.
+cfg = lts.vehicles.baseline();
+vm = lts.vehicle.VehicleManager([], [], [], [], []);
+vm.totalMass = cfg.totalMass;
+vm.wheelbase = cfg.wheelbase;
+vm.trackWidth = cfg.trackWidth;
+vm.cgHeight = cfg.cgHeight;
+vm.staticFrontWeight = cfg.staticFrontWeight;
+sprungCornerMass = (cfg.totalMass - 4 * cfg.unsprungMass) ...
+    * cfg.staticFrontWeight / 2;
+staticLoad = sprungCornerMass * 9.80665;
+
+plain = buildDamperCorner(vm, cfg, sprungCornerMass, Inf, 1.0);
+withElement = buildDamperCorner(vm, cfg, sprungCornerMass, Inf, 1.0);
+element = lts.components.Suspension.TravelCurveElement( ...
+    'travelGrid', [-0.05 0 0.020 0.030 0.05], ...
+    'forceGrid', [0 0 0 600 1800]);
+withElement.forceElements = {element};
+
+plain.initializeStaticLoad(plain.state, staticLoad);
+withElement.initializeStaticLoad(withElement.state, staticLoad);
+
+% Impose 25 mm compression with a very small step: after one semi-implicit
+% update the unsprung velocity (and therefore the damper force) scales
+% with dt, so the force difference isolates the element's curve value.
+% At 25 mm the element is halfway up its 20-30 mm ramp: 300 N.
+plain.updateCornerFromChassis(plain.state, 0.025, 0, 1e-5, 0);
+withElement.updateCornerFromChassis(withElement.state, 0.025, 0, 1e-5, 0);
+verifyEqual(testCase, withElement.state.suspensionForce - ...
+    plain.state.suspensionForce, 300, 'AbsTol', 2);
+
+% At 10 mm compression (before engagement) the element adds nothing.
+plain.initializeStaticLoad(plain.state, staticLoad);
+withElement.initializeStaticLoad(withElement.state, staticLoad);
+plain.updateCornerFromChassis(plain.state, 0.010, 0, 1e-5, 0);
+withElement.updateCornerFromChassis(withElement.state, 0.010, 0, 1e-5, 0);
+verifyEqual(testCase, withElement.state.suspensionForce, ...
+    plain.state.suspensionForce, 'AbsTol', 1e-6);
+end
+
 function [vehicle, suspension] = createSuspension(rateScale, ...
         frontAntiRollBarRate, rearAntiRollBarRate, config)
 if nargin < 2

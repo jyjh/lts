@@ -50,6 +50,13 @@ classdef SimpleSuspension
         % --- Transient state ---
         state                        % SuspensionState handle object
 
+        % Optional pluggable force elements (lts.components.Suspension.
+        % ForceElement instances), summed into the suspension force after
+        % the built-in spring/damper/bump-stop. Empty (default) keeps the
+        % corner exactly at the built-in force law. See ForceElement for
+        % the contract and the roll-stiffness limitation.
+        forceElements = {}
+
         % Internal integration cap for stiff tire/suspension vertical modes.
         % Derived at construction from the wheel-hop natural frequency so
         % omega*dt <= 0.3 (well inside the semi-implicit Euler stability
@@ -358,6 +365,8 @@ classdef SimpleSuspension
             % Suspension force is measured relative to static equilibrium:
             % staticLoad carries the steady car weight, while spring/damper
             % and bump-stop deltas add transient load from chassis motion.
+            % Pluggable force elements (obj.forceElements) add their
+            % wheel-domain force on top.
             F_spring = K_eff * suspensionDeflection;
             F_damper = obj.computeDamperForce(suspensionVelocity, MR_eff);
 
@@ -369,6 +378,10 @@ classdef SimpleSuspension
 
             F_suspension = cornerState.staticLoad + F_spring + ...
                 F_damper + F_bumpstop;
+            for i = 1:numel(obj.forceElements)
+                F_suspension = F_suspension + obj.forceElements{i}.force( ...
+                    cornerState, suspensionDeflection, suspensionVelocity);
+            end
         end
 
         function F = computeDamperForce(obj, velocity, MR_eff)
