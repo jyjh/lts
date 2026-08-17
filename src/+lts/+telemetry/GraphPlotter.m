@@ -1,54 +1,10 @@
 classdef GraphPlotter
-    % GRAPHPLOTTER Centralized simulation result visualization
-    % Static utility class that creates component-based dashboard figures.
-    % Each dashboard focuses on one vehicle subsystem, plus a general overview.
-    %
-    % Dashboards:
-    %   1. General Overview   - Speed, track map, accelerations, g-g diagram
-    %   2. Driver Dashboard   - Throttle, brake, steering, and input traces
-    %   3. Aero Dashboard     - Aero forces, balance, pitch, axle loads
-    %   4. Suspension Dashboard - Travel, damper velocity, tire loads, load transfer
-    %   5. Tire Dashboard     - Slip ratios, wheel speeds, tire forces, utilization
-    %   6. Wheel Speed Dashboard - Four-corner wheel speeds and free-rolling error
-    %   7. Powertrain Dashboard - Torque, drive force, speed overlay, force balance
-    %
-    % Usage:
-    %   lts.telemetry.GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero)
-    %     Creates all 6 dashboard figures (separate windows).
-    %
-    %   lts.telemetry.GraphPlotter.plotAll(stateLog, lapTime, track, vehicle, aero, true)
-    %     Creates all dashboards in a single window (6x4 subplot grid).
-    %
-    %   lts.telemetry.GraphPlotter.plotGeneralOverview(stateLog, lapTime, track)
-    %     Creates the general overview dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotDriver(stateLog)
-    %     Creates the driver input dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotAero(stateLog, vehicle, aero)
-    %     Creates the aerodynamics dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotSuspension(stateLog, vehicle)
-    %     Creates the suspension telemetry dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotTire(stateLog, vehicle)
-    %     Creates the tire performance dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotWheelSpeeds(stateLog, vehicle)
-    %     Creates the four-corner wheel speed dashboard.
-    %
-    %   lts.telemetry.GraphPlotter.plotPowertrain(stateLog, vehicle)
-    %     Creates the powertrain dashboard.
+    % Simulation telemetry dashboards.
     
     methods(Static)
         
         function plotAll(stateLog, lapTime, track, vehicle, aero, singleWindow)
-            % PLOTALL Create all post-simulation dashboard figures
-            %   lts.telemetry.GraphPlotter.plotAll(..., singleWindow)
-            %
-            %   singleWindow = false (default) -> 6 separate figures
-            %   singleWindow = true            -> one figure with 6x4 subplot grid
-            
+            % Plot every dashboard, optionally in one window.
             if nargin < 6
                 singleWindow = false;
             end
@@ -72,17 +28,7 @@ classdef GraphPlotter
         end
         
         function plotGeneralOverview(stateLog, lapTime, track, startIdx)
-            % PLOTGENERALOVERVIEW Create the general overview dashboard
-            %   lts.telemetry.GraphPlotter.plotGeneralOverview(stateLog, lapTime, track, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Speed vs Distance
-            %     2. Track Map colored by combined G-load (with lap time)
-            %     3. Longitudinal & Lateral Acceleration vs Time
-            %     4. g-g Diagram (ax vs ay)
-            %
-            %   startIdx (optional): when provided, plots into subplot(6,4,startIdx+N)
-            %     instead of creating a new figure.
+            % Plot speed, track position, acceleration, and g-g traces.
             
             if nargin < 4
                 startIdx = [];
@@ -99,7 +45,6 @@ classdef GraphPlotter
                 figure('Name', 'LTS - General Overview', 'Position', [50 50 1400 900]);
             end
             
-            % --- Speed vs Distance ---
             if isempty(startIdx), subplot(2,2,1); else, subplot(6,4,startIdx); end
             plot(s, speedKmh, 'b-', 'LineWidth', 1.5);
             xlabel('Distance [m]');
@@ -108,7 +53,6 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(s)]);
             
-            % --- Track Map colored by G-load ---
             if isempty(startIdx), subplot(2,2,2); else, subplot(6,4,startIdx+1); end
             trackPts = track.getTrackPoints();
             arcLen = [0; cumsum(sqrt(diff(trackPts(:,1)).^2 + diff(trackPts(:,2)).^2))];
@@ -136,7 +80,6 @@ classdef GraphPlotter
             axis equal;
             grid on;
             
-            % --- Longitudinal and Lateral Acceleration ---
             if isempty(startIdx), subplot(2,2,3); else, subplot(6,4,startIdx+2); end
             plot(time, axG, 'b-', 'LineWidth', 1); hold on;
             plot(time, ayG, 'r-', 'LineWidth', 1);
@@ -146,7 +89,6 @@ classdef GraphPlotter
             legend('a_x', 'a_y', 'Location', 'best');
             grid on;
             
-            % --- g-g Diagram ---
             if isempty(startIdx), subplot(2,2,4); else, subplot(6,4,startIdx+3); end
             scatter(ayG, axG, 5, speedKmh, 'filled');
             colorbar;
@@ -165,17 +107,7 @@ classdef GraphPlotter
         end
 
         function plotDriver(stateLog, useSingleFigure, startIdx)
-            % PLOTDRIVER Create the driver input dashboard
-            %   lts.telemetry.GraphPlotter.plotDriver(stateLog, useSingleFigure, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Throttle, brake, and steering vs time
-            %     2. Throttle, brake, and steering vs distance
-            %     3. Steering and curvature vs distance
-            %     4. Speed vs distance colored by longitudinal input
-            %
-            %   useSingleFigure, startIdx (optional): when provided, plots into
-            %     subplot(6,4,startIdx+N) instead of creating a new figure.
+            % Plot driver inputs and their relation to speed and curvature.
 
             if nargin < 2, useSingleFigure = false; end
             if nargin < 3, startIdx = 1; end
@@ -207,7 +139,6 @@ classdef GraphPlotter
                 figure('Name', 'LTS - Driver', 'Position', [60 60 1400 900]);
             end
 
-            % --- Driver inputs vs time ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             yyaxis left;
             hThrottle = plot(controlTime, throttlePct, 'g-', 'LineWidth', 1); hold on;
@@ -232,7 +163,6 @@ classdef GraphPlotter
             end
             grid on;
 
-            % --- Driver inputs vs distance ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             yyaxis left;
             hThrottle = plot(controlS, throttlePct, 'g-', 'LineWidth', 1); hold on;
@@ -258,7 +188,6 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(controlS)]);
 
-            % --- Steering and curvature ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             yyaxis left;
             plot(controlS, steerDeg, 'b-', 'LineWidth', 1); hold on;
@@ -277,14 +206,13 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(controlS)]);
 
-            % --- Speed vs distance with driver input color ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             inputColor = stateLog.throttle - stateLog.brake;
             scatter(controlS, speedKmh, 5, inputColor, 'filled');
             colormap(parula);
             cb = colorbar;
             cb.Label.String = 'Throttle - Brake';
-            caxis([-1 1]);
+            clim([-1 1]);
             xlabel('Distance [m]');
             ylabel('Speed [km/h]');
             title('Speed Colored by Driver Input');
@@ -293,29 +221,17 @@ classdef GraphPlotter
         end
         
         function plotAero(stateLog, vehicle, aero, useSingleFigure, startIdx)
-            % PLOTAERO Create the aerodynamics dashboard
-            %   lts.telemetry.GraphPlotter.plotAero(stateLog, vehicle, aero, useSingleFigure, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Aero Forces vs Time (Downforce, Drag, Drive)
-            %     2. Aero Axle Loads by Speed (bar chart)
-            %     3. Front/Rear Aero Balance vs Time
-            %     4. Pitch Angle vs Time
-            %
-            %   useSingleFigure, startIdx (optional): when provided, plots into
-            %     subplot(6,4,startIdx+N) instead of creating a new figure.
+            % Plot aerodynamic forces, loads, balance, and pitch.
             
             if nargin < 4, useSingleFigure = false; end
             if nargin < 5, startIdx = 1; end
-            
+
             time = stateLog.time;
-            speedKmh = stateLog.speedKmh;
             
             if ~useSingleFigure
                 figure('Name', 'LTS - Aero', 'Position', [75 75 1400 900]);
             end
             
-            % --- Aero Forces vs Time ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             plot(time, stateLog.F_downforce, 'b-', 'LineWidth', 1); hold on;
             plot(time, stateLog.F_drag, 'r-', 'LineWidth', 1);
@@ -326,7 +242,6 @@ classdef GraphPlotter
             legend('Downforce', 'Drag', 'Drive', 'Location', 'best');
             grid on;
             
-            % --- Aero Axle Loads by Speed (bar chart) ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             sampleSpeeds = [10, 15, 20, 25, 30, 35];
             sampleFf = zeros(1, numel(sampleSpeeds));
@@ -347,7 +262,6 @@ classdef GraphPlotter
             legend('Front axle', 'Rear axle', 'Drag', 'Location', 'northwest');
             grid on;
             
-            % --- Front/Rear Aero Balance vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             % Use logged aero axle forces (computed during simulation)
             totalAeroFz = stateLog.aeroFz_front + stateLog.aeroFz_rear;
@@ -365,7 +279,6 @@ classdef GraphPlotter
             grid on;
             ylim([0 100]);
             
-            % --- Pitch Angle vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             pitchDeg = stateLog.pitchAngle * (180/pi);
             plot(time, pitchDeg, 'm-', 'LineWidth', 1);
@@ -376,22 +289,7 @@ classdef GraphPlotter
         end
         
         function plotSuspension(stateLog, vehicle, useSingleFigure, startIdx)
-            % PLOTSUSPENSION Create the suspension telemetry dashboard
-            %   lts.telemetry.GraphPlotter.plotSuspension(stateLog, vehicle, useSingleFigure, startIdx)
-            %
-            %   Creates a 6-subplot figure when opened standalone:
-            %     1. Damper Travel vs Distance (all 4 corners, mm)
-            %     2. Damper Speed vs Distance (all 4 corners, mm/s)
-            %     3. Camber vs Distance (all 4 corners, deg)
-            %     4. Wheel Steer vs Distance (all 4 corners, deg)
-            %     5. Damper Speed vs Travel phase plot
-            %     6. Per-Corner Tire Loads and axle load transfer
-            %
-            %   In single-window mode, uses the existing 4 allocated tiles:
-            %     travel vs distance, speed vs distance, tire loads, load transfer.
-            %
-            %   useSingleFigure, startIdx (optional): when provided, plots into
-            %     subplot(6,4,startIdx+N) instead of creating a new figure.
+            % Plot travel, damping, geometry, tire loads, and load transfer.
             
             if nargin < 3, useSingleFigure = false; end
             if nargin < 4, startIdx = 1; end
@@ -399,14 +297,12 @@ classdef GraphPlotter
             s = stateLog.s;
             time = stateLog.time;
             
-            % Convert damper position from m to mm
             damperFL_mm = stateLog.damperPos_FL * 1000;
             damperFR_mm = stateLog.damperPos_FR * 1000;
             damperRL_mm = stateLog.damperPos_RL * 1000;
             damperRR_mm = stateLog.damperPos_RR * 1000;
             travelMatrix = [damperFL_mm, damperFR_mm, damperRL_mm, damperRR_mm];
             
-            % Convert damper velocity from m/s to mm/s
             velFL_mm = stateLog.damperVel_FL * 1000;
             velFR_mm = stateLog.damperVel_FR * 1000;
             velRL_mm = stateLog.damperVel_RL * 1000;
@@ -606,23 +502,12 @@ classdef GraphPlotter
         end
         
         function plotTire(stateLog, vehicle, useSingleFigure, startIdx)
-            % PLOTTIRE Create the tire performance dashboard
-            %   lts.telemetry.GraphPlotter.plotTire(stateLog, vehicle, useSingleFigure, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Per-Corner Slip Ratio vs Time
-            %     2. Wheel Speed vs Vehicle Speed (4 corners)
-            %     3. Per-Corner Tire Longitudinal Force Fx vs Time
-            %     4. Per-Corner Tire Lateral Force Fy vs Time
-            %
-            %   useSingleFigure, startIdx (optional): when provided, plots into
-            %     subplot(6,4,startIdx+N) instead of creating a new figure.
+            % Plot per-corner slip, speed, and force traces.
             
             if nargin < 3, useSingleFigure = false; end
             if nargin < 4, startIdx = 1; end
-            
+
             time = stateLog.time;
-            speed = stateLog.speed;
             speedKmh = stateLog.speedKmh;
             
             % Corner colors
@@ -635,7 +520,6 @@ classdef GraphPlotter
                 figure('Name', 'LTS - Tire', 'Position', [125 125 1400 900]);
             end
             
-            % --- Per-Corner Slip Ratio vs Time ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             plot(time, stateLog.slipRatio_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
             plot(time, stateLog.slipRatio_FR, '-', 'Color', colFR, 'LineWidth', 1);
@@ -648,7 +532,6 @@ classdef GraphPlotter
             legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
             
-            % --- Wheel Speed vs Vehicle Speed ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             % Get wheel radius for converting omega to linear speed
             if isfield(stateLog, 'omega_FL') && any(stateLog.omega_FL ~= 0)
@@ -678,7 +561,6 @@ classdef GraphPlotter
                     'HorizontalAlignment', 'center', 'Units', 'normalized');
             end
             
-            % --- Per-Corner Tire Longitudinal Force Fx ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             if isfield(stateLog, 'tireFx_FL')
                 plot(time, stateLog.tireFx_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
@@ -696,7 +578,6 @@ classdef GraphPlotter
                     'HorizontalAlignment', 'center', 'Units', 'normalized');
             end
             
-            % --- Per-Corner Tire Lateral Force Fy ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             if isfield(stateLog, 'tireFy_FL')
                 plot(time, stateLog.tireFy_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
@@ -716,14 +597,7 @@ classdef GraphPlotter
         end
 
         function plotWheelSpeeds(stateLog, vehicle, useSingleFigure, startIdx)
-            % PLOTWHEELSPEEDS Create the four-corner wheel-speed dashboard
-            %   lts.telemetry.GraphPlotter.plotWheelSpeeds(stateLog, vehicle, useSingleFigure, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Four-corner linear wheel speed vs time with vehicle speed
-            %     2. Four-corner wheel-speed error vs time
-            %     3. Four-corner angular wheel speed vs time
-            %     4. Four-corner slip ratio vs time
+            % Plot linear/angular wheel speeds, errors, and slip ratios.
 
             if nargin < 3, useSingleFigure = false; end
             if nargin < 4, startIdx = 1; end
@@ -763,7 +637,6 @@ classdef GraphPlotter
             wheelRpmRL = stateLog.omega_RL * 60 / (2 * pi);
             wheelRpmRR = stateLog.omega_RR * 60 / (2 * pi);
 
-            % --- Linear wheel speed vs time ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             plot(time, speedKmh, 'k--', 'LineWidth', 1); hold on;
             plot(time, wheelSpeedFL, '-', 'Color', colFL, 'LineWidth', 1);
@@ -776,7 +649,6 @@ classdef GraphPlotter
             legend('Vehicle', 'FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
 
-            % --- Wheel speed error vs time ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             plot(time, wheelSpeedFL - speedKmh, '-', 'Color', colFL, 'LineWidth', 1); hold on;
             plot(time, wheelSpeedFR - speedKmh, '-', 'Color', colFR, 'LineWidth', 1);
@@ -789,7 +661,6 @@ classdef GraphPlotter
             legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
 
-            % --- Angular wheel speed vs time ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             plot(time, wheelRpmFL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
             plot(time, wheelRpmFR, '-', 'Color', colFR, 'LineWidth', 1);
@@ -801,7 +672,6 @@ classdef GraphPlotter
             legend('FL', 'FR', 'RL', 'RR', 'Location', 'best');
             grid on;
 
-            % --- Slip ratio vs time ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             if isfield(stateLog, 'slipRatio_FL')
                 plot(time, stateLog.slipRatio_FL, '-', 'Color', colFL, 'LineWidth', 1); hold on;
@@ -821,17 +691,7 @@ classdef GraphPlotter
         end
         
         function plotPowertrain(stateLog, vehicle, useSingleFigure, startIdx)
-            % PLOTPOWERTRAIN Create the powertrain dashboard
-            %   lts.telemetry.GraphPlotter.plotPowertrain(stateLog, vehicle, useSingleFigure, startIdx)
-            %
-            %   Creates a 4-subplot figure with:
-            %     1. Motor and wheel torque vs time
-            %     2. Drive Force vs Time
-            %     3. Speed vs Distance with powertrain color overlay
-            %     4. Force Balance (Drive, Drag, Brake) vs Time
-            %
-            %   useSingleFigure, startIdx (optional): when provided, plots into
-            %     subplot(6,4,startIdx+N) instead of creating a new figure.
+            % Plot torque, drive force, speed, and force balance.
             
             if nargin < 3, useSingleFigure = false; end
             if nargin < 4, startIdx = 1; end
@@ -844,7 +704,6 @@ classdef GraphPlotter
                 figure('Name', 'LTS - Powertrain', 'Position', [150 150 1400 900]);
             end
             
-            % --- Motor and wheel torque ---
             if useSingleFigure, subplot(6,4,startIdx); else, subplot(2,2,1); end
             hasMotorTorque = isfield(stateLog, 'motorTorque');
             hasWheelTorque = isfield(stateLog, 'wheelTorque');
@@ -867,7 +726,6 @@ classdef GraphPlotter
                     'HorizontalAlignment', 'center', 'Units', 'normalized');
             end
             
-            % --- Drive Force vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+1); else, subplot(2,2,2); end
             yyaxis left;
             plot(time, stateLog.F_drive, 'g-', 'LineWidth', 1.5);
@@ -888,7 +746,6 @@ classdef GraphPlotter
                 end
             end
             
-            % --- Speed vs Distance with powertrain color overlay ---
             if useSingleFigure, subplot(6,4,startIdx+2); else, subplot(2,2,3); end
             if isfield(stateLog, 'motorRPM')
                 powertrainColor = stateLog.motorRPM;
@@ -907,7 +764,6 @@ classdef GraphPlotter
             grid on;
             xlim([0 max(s)]);
             
-            % --- Force Balance vs Time ---
             if useSingleFigure, subplot(6,4,startIdx+3); else, subplot(2,2,4); end
             if isfield(stateLog, 'F_brake')
                 F_brake_plot = stateLog.F_brake;

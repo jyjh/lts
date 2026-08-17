@@ -71,9 +71,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         geometry
     end
 
-    properties (Transient = true) %#ok<MCNPC>
-        % Lazily-cached run invariant: whether the linked chassis exposes
-        % computeCornerKinematics. Empty = uncached.
+    properties (Transient = true)
+        % Empty until the chassis API is first queried.
         cachedChassisHasCornerKinematics
     end
     
@@ -218,22 +217,8 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         
         %% ---- Warmup: settle suspension to static equilibrium ----
         
-        function warmup(obj, totalMass, dt)
-            % WARMUP Settle suspension state to static equilibrium
-            %   warmup(totalMass, dt)
-            %
-            %   Initializes deterministic per-corner static load and
-            %   deflection state. Dynamic displacement states are measured
-            %   from this equilibrium.
-            %
-            %   totalMass - Total vehicle mass [kg]
-            %   dt        - Unused, kept for interface compatibility
-            
-            if nargin < 3
-                dt = 0.001;
-            end
-            %#ok<NASGU>
-
+        function warmup(obj, totalMass, ~)
+            % Initialize per-corner static equilibrium.
             W = totalMass * obj.g;
             
             % Static weight per corner (no aero, no load transfer)

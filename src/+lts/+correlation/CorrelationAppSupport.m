@@ -42,13 +42,13 @@ classdef CorrelationAppSupport
 
             if ~isempty(opts.Lap)
                 args(end+1:end+2) = { ...
-                    '--laps', lts.correlation.CorrelationAppSupport.lapValue(opts.Lap)}; %#ok<AGROW>
+                    '--laps', lts.correlation.CorrelationAppSupport.lapValue(opts.Lap)};
             end
             if ~isempty(opts.LdxFile)
-                args(end+1:end+2) = {'--ldx', char(opts.LdxFile)}; %#ok<AGROW>
+                args(end+1:end+2) = {'--ldx', char(opts.LdxFile)};
             end
             if ~isempty(opts.ImportFrequency)
-                args(end+1:end+2) = {'--frequency', sprintf('%.9g', opts.ImportFrequency)}; %#ok<AGROW>
+                args(end+1:end+2) = {'--frequency', sprintf('%.9g', opts.ImportFrequency)};
             end
 
             command = lts.util.shellJoin(args);
@@ -99,7 +99,8 @@ classdef CorrelationAppSupport
 
             exportDir = fullfile(repoRoot, 'exports');
             base = fullfile(exportDir, sprintf('correlation_%s%s_%s_%s', ...
-                name, lapSuffix, char(config.name), datestr(now, 'yyyymmdd_HHMMSS')));
+                name, lapSuffix, char(config.name), ...
+                char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'))));
         end
 
         function track = loadTrack(trackSpec, repoRoot)
@@ -174,10 +175,7 @@ classdef CorrelationAppSupport
             end
         end
 
-        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
-            % surfaceMu is a deprecated compatibility input. Correlation
-            % reporting follows the simulator's fixed unity-surface contract.
-            surfaceMu = 1.0;
+        function preflight(profile, track, vehicle, ~, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
@@ -198,7 +196,7 @@ classdef CorrelationAppSupport
             fprintf('\n=== Correlation Preflight ===\n');
             lts.correlation.CorrelationAppSupport.printExtractionSummary(manifestFile);
             fprintf('Reference mode: free-space replay\n');
-            fprintf('Surface mu: %.3f\n', surfaceMu);
+            fprintf('Surface mu: %.3f\n', 1.0);
             fprintf('Brake mode: %s\n', char(brakeMode));
             fprintf('Powertrain mode: %s\n', char(powertrainMode));
             fprintf('Pack power torque cap: %s\n', packCapText);
@@ -317,7 +315,6 @@ classdef CorrelationAppSupport
                 return;
             end
 
-            correlation = [];
             if isobject(config) && isprop(config, 'correlation')
                 correlation = config.correlation;
             elseif isstruct(config) && isfield(config, 'correlation')
@@ -674,11 +671,7 @@ classdef CorrelationAppSupport
         end
 
         function assertTrustedFunctionName(name)
-            % ASSERTTRUSTEDFUNCTIONNAME Reject caller-supplied function names
-            %   that do not resolve into one of the trusted lts.* packages.
-            %   str2func itself does not execute, but the subsequent fn()
-            %   call does, so confine resolution to the project's own
-            %   package tree instead of allowing arbitrary path/name input.
+            % Restrict executable function names to project packages.
             trustedPrefixes = {'lts.vehicles.', 'lts.components.', ...
                 'lts.vehicle.', 'lts.correlation.', 'lts.prediction.', ...
                 'lts.calibration.', 'lts.governance.'};
@@ -698,9 +691,7 @@ classdef CorrelationAppSupport
         end
 
         function assertTrustedFolder(folder)
-            % ASSERTTRUSTEDFOLDER Allow addpath only for folders inside the
-            %   repository src tree. A caller-supplied .m on disk outside src
-            %   would otherwise execute via str2func(baseName).
+            % Restrict addpath to the repository source tree.
             folder = char(folder);
             if ~isempty(folder) && ~exist(folder, 'dir')
                 error('run_correlation:UntrustedFolder', ...

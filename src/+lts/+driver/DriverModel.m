@@ -1,16 +1,5 @@
 classdef DriverModel < handle
-    % DRIVERMODEL Centerline GGV sweep + Stanley driver model.
-    %
-    % The primary path consumes a feedforward lap plan built by
-    % lts.driver.DriverInputPlanner (target speed, axRef, throttle/brake/steer refs) and
-    % adds closed-loop path-following corrections. The fallback path
-    % (computeInputs) builds a local backward speed envelope from upcoming
-    % curvature and maps the required longitudinal accel onto pedals via the
-    % same physics-based pedal map (lts.driver.DriverInputPlanner.computePedals), so both
-    % paths produce partial throttle, true coasting, and gradual braking
-    % rather than a bang-bang WOT/hard-brake policy. Steering is shaped by the
-    % active corner segment, peaking at a configurable apex phase that
-    % defaults to the corner midpoint.
+    % Feedforward GGV planning with Stanley path correction.
 
     properties
         % Reference to lts.vehicle.VehicleManager for component access
@@ -20,24 +9,16 @@ classdef DriverModel < handle
         brakingLookahead = 1.0    % Multiplier on calculated braking distance
         lookaheadTime    = 2.0    % Minimum seconds ahead to inspect
         minLookaheadDist = 15     % Minimum lookahead distance [m]
-        hysteresis       = 0.005  % Speed tolerance as a fraction of target speed
         corneringUsage   = 0.8   % Fraction of lateral grip used for speed targets
         brakingUsage     = 0.75   % Fraction of braking capability used in planning
         driveUsage       = 0.85   % Fraction of tractive/drive grip used in planning
-        minBrakeCommand  = 0.85   % Minimum brake command once braking is required
-        brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps brake to 100%
+        brakeBlendSpeed  = 1.0    % Speed error [m/s] that ramps braking
         throttleBand     = 0.15   % Speed band [m/s] around target before switching
-        apexDistanceTol  = 0.75   % Distance around an apex allowed to coast [m]
         curvatureTol     = 1e-6   % Curvature below this is treated as straight
         steeringUsage    = 1.0    % Fraction of path curvature converted to steer
         maxSteeringAngle = 0.6    % Steering angle limit [rad]
         minLongitudinalCommandScale = 0.15 % Longitudinal command left at peak steer
-        % Traction-circle coupling for the active (planned) path: the throttle
-        % is scaled down as lateral grip demand grows, so the car lifts into a
-        % coast at the apex (max lateral grip) rather than holding cruise
-        % throttle that would eat the rear axle's cornering capacity. The
-        % reserve is the minimum throttle fraction kept even at peak lateral
-        % demand; 0 gives a pure lift-off coast through the apex.
+        % Planned-path combined-grip limits.
         tractionCircleReserve = 0      % Min throttle fraction at peak lateral grip [0-1]
         trailBrakeReserve = 0.30       % Min brake fraction kept at peak lateral grip (trail-braking) [0-1]
         corneringGripMargin = 0.95     % Lateral-grip fraction at which throttle is fully reserved
@@ -160,17 +141,7 @@ classdef DriverModel < handle
         end
 
         function [throttle, brake, steer] = computeInputs(obj, state)
-            % COMPUTEINPUTS Decide throttle and brake for the current state
-            %
-            % Fallback controller (used only when no feedforward lap plan is
-            % available). Builds a local backward speed envelope from upcoming
-            % curvature, derives the required longitudinal accel to follow it,
-            % then maps that accel onto pedals via the same physics-based pedal
-            % map as the planner (lts.driver.DriverInputPlanner.computePedals). This yields
-            % partial throttle, true coasting, and gradual braking instead of the
-            % previous bang-bang (WOT / hard-brake / apex-only-coast) policy.
-            % Steering is a sine-shaped command through each corner segment,
-            % with peak steering at the segment midpoint/apex.
+            % Fallback controller used without a feedforward lap plan.
 
             speed = max(state.speed, 0);
             s = state.s;
@@ -208,18 +179,12 @@ classdef DriverModel < handle
             [steer, steeringUsageFrac] = obj.computeSteeringCommand(idx, s);
             longitudinalCommandScale = obj.computeLongitudinalCommandScale(steeringUsageFrac);
 
-            % Required longitudinal accel to track the local speed envelope,
-            % taken from the leading edge of the backward speed profile (finite
-            % difference over the first segment). Used as feedforward into the
-            % physics-based pedal map below.
             axRef = 0;
             if numel(profileSpeed) >= 2 && numel(profileS) >= 2
                 ds0 = max(profileS(2) - profileS(1), 0.001);
                 axRef = (profileSpeed(2)^2 - profileSpeed(1)^2) / (2 * ds0);
             end
 
-            % Blend the feedforward accel with a small proportional correction
-            % on speed error so the closed-loop driver converges to targetSpeed.
             speedError = speed - targetSpeed;
             axRef = axRef - 0.5 * speedError;
 
@@ -228,28 +193,15 @@ classdef DriverModel < handle
                 obj.vehicleManager.totalMass, caps.brakeForceAccel, ...
                 obj.vehicleManager.powertrain, longitudinalCommandScale);
 
-            % Reduce longitudinal command as steering usage grows (combined
-            % grip), preserving the existing traction-ellipse coupling.
             brake = brake * longitudinalCommandScale;
         end
 
         function input = correctPlannedInput(obj, plannedInput, state, ref)
-            % CORRECTPLANNEDINPUT Add path-following corrections to centerline feedforward input.
-            %
-            % The feedforward plan supplies pedals and curvature steer. This
-            % layer adds Stanley-style heading/cross-track feedback plus track
-            % edge protection. It is driver/controller behavior; tire forces
-            % still decide whether the requested path can actually be followed.
+            % Add path and track-edge corrections to feedforward input.
             input = plannedInput;
-            if ~isfield(input, 'throttle')
-                input.throttle = 0;
-            end
-            if ~isfield(input, 'brake')
-                input.brake = 0;
-            end
-            if ~isfield(input, 'steer')
-                input.steer = 0;
-            end
+            input.throttle = lts.util.fieldOrDefault(input, 'throttle', 0);
+            input.brake = lts.util.fieldOrDefault(input, 'brake', 0);
+            input.steer = lts.util.fieldOrDefault(input, 'steer', 0);
 
             lineHeading = ref.heading;
             if isfield(input, 'lineHeading') && isfinite(input.lineHeading)
@@ -302,7 +254,7 @@ classdef DriverModel < handle
             if state.speed < obj.launchSpeedThreshold && ...
                     obj.isAtOrBelowTargetSpeed(state.speed, input)
                 input.brake = 0;
-                input.throttle = max(input.throttle, 1);
+                input.throttle = 1;
             end
             input = obj.enforcePedalExclusivity(input);
         end
@@ -310,11 +262,7 @@ classdef DriverModel < handle
 
     methods (Access = private)
         function input = applyDriveSlipLimit(obj, input)
-            % APPLYDRIVESLIPLIMIT Simple traction-control-like driver behavior.
-            % When driven rear slip exceeds driveSlipTarget, throttle is
-            % reduced toward zero by driveSlipCutoff. This limits commanded
-            % torque before it reaches the powertrain; it is not a tire force
-            % clamp and does not change the physics after the pedal command.
+            % Reduce throttle between the target and cutoff rear slip.
             if ~obj.enableDriveSlipLimit || ~isfield(input, 'throttle') || ...
                     input.throttle <= 0
                 return;
@@ -572,8 +520,6 @@ classdef DriverModel < handle
 
             if brake > 0
                 throttle = 0;
-            elseif throttle > 0
-                brake = 0;
             end
         end
 
@@ -627,19 +573,13 @@ classdef DriverModel < handle
                 return;
             end
 
-            % Corner-outside bias pushes the target laterally toward the
-            % outside of the corner, which sits on one specific side: a
-            % positive-curvature (left) turn biases the car right (negative
-            % lateralError, bounded by the right half-width); a negative-
-            % curvature (right) turn biases it left (bounded by the left
-            % half-width). Use that side's per-waypoint half-width when the
-            % corridor is asymmetric.
             biasSideLateralError = -sign(ref.curvature);
             biasHalfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, biasSideLateralError);
             usableOffset = max(biasHalfWidth - ...
                 max(obj.edgeSlowdownMargin, obj.edgeSteeringMargin), 0);
             outsideBias = obj.cornerOutsideBiasFraction * biasHalfWidth;
             outsideBias = min([outsideBias, obj.cornerOutsideBiasMax, usableOffset]);
+            targetLateralError = -sign(ref.curvature) * outsideBias;
 
             [arcLen, ~] = obj.getTrackGeometry();
             if isfield(ref, 'idx') && isfinite(ref.idx)
@@ -650,13 +590,11 @@ classdef DriverModel < handle
                     idx = 1;
                 end
             else
-                targetLateralError = -sign(ref.curvature) * outsideBias;
                 return;
             end
 
             [segmentStart, segmentEnd, turnSign, found] = obj.findCornerSegment(idx);
             if ~found || turnSign == 0
-                targetLateralError = -sign(ref.curvature) * outsideBias;
                 return;
             end
 
@@ -703,9 +641,6 @@ classdef DriverModel < handle
                 max(obj.edgeSteeringMargin, eps);
             edgeUse = lts.util.saturate(edgeUse);
 
-            % Positive lateral error is left of the reference line, so a
-            % negative correction steers back right; negative error is the
-            % opposite.
             correction = -sign(ref.lateralError) * obj.edgeSteeringGain * edgeUse;
         end
 
@@ -760,14 +695,9 @@ classdef DriverModel < handle
             if isempty(source)
                 return;
             end
-            if isstruct(source)
-                if isfield(source, fieldName)
-                    value = source.(fieldName);
-                end
-            elseif isobject(source)
-                if isprop(source, fieldName)
-                    value = source.(fieldName);
-                end
+            if (isstruct(source) && isfield(source, fieldName)) || ...
+                    (isobject(source) && isprop(source, fieldName))
+                value = source.(fieldName);
             end
         end
 
@@ -892,20 +822,7 @@ classdef DriverModel < handle
         end
 
         function caps = estimateAvailableAcceleration(obj, state)
-            % ESTIMATEAVAILABLEACCELERATION Vehicle longitudinal/lateral capability.
-            %   Returns a struct of capability fields used by the closed-loop
-            %   driver and the physics-based pedal map (computePedals):
-            %     maxLatAccel     - lateral grip accel for corner-speed targets
-            %     maxBrakeAccel   - total decel capability (brake + drag + roll)
-            %     F_drive_full    - full-throttle wheel force, traction-capped [N]
-            %     F_resistance    - drag + rolling resistance at this speed [N]
-            %     maxDriveAccel   - net forward accel capability [m/s^2]
-            %     coastDecel      - free lift-off decel [m/s^2]
-            %     brakeForceAccel - hydraulic-brake-only decel per unit brake [m/s^2]
-            %
-            % This is a quasi-static capability estimate used only by the
-            % driver. The true dynamic acceleration comes later from summed
-            % tire forces, drag, and yaw moment in lts.simulation.Simulator.step().
+            % Quasi-static grip and powertrain capability for planning.
             vm = obj.vehicleManager;
             aeroForces = vm.aero.computeForces(state);
             F_drag = max(0, aeroForces.F_drag);
@@ -914,10 +831,6 @@ classdef DriverModel < handle
             totalNormalLoad = W + F_downforce;
 
             peakMu = vm.tire.getPeakFriction(totalNormalLoad / 4);
-            % Grip is set entirely by the tire model (its Pacejka peak mu with
-            % load sensitivity). The vehicles run on dry FSAE rubber with no
-            % surface-friction variability, so there is no separate surface
-            % mu cap — the driver and the tire model now agree on grip.
             maxTireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
             maxLateralAccel = max(0.1, maxTireAccel * obj.corneringUsage);
 
@@ -943,16 +856,13 @@ classdef DriverModel < handle
             maxBrakeAccel = min(maxTireAccel, brakeLimitedAccel) * obj.brakingUsage;
             maxBrakeAccel = max(maxBrakeAccel, 0.1);
 
-            % --- Forward drive capability (speed- and load-dependent) ---
-            % Full-throttle wheel force from the powertrain map (planner-safe,
-            % stateless probe), capped by the driven (rear) axle's traction.
             F_drive_full = 0;
             if ~isempty(vm.powertrain)
                 F_drive_full = max(0, vm.powertrain.computeMaxDriveForce( ...
                     max(state.speed, 0)));
             end
-            driveUsage = lts.util.saturate(obj.driveUsage);
-            F_traction_rear = driveUsage * rearMu * rearNormalLoad;
+            tractionUsage = lts.util.saturate(obj.driveUsage);
+            F_traction_rear = tractionUsage * rearMu * rearNormalLoad;
             F_drive_full = min(F_drive_full, F_traction_rear);
 
             F_resistance = F_drag + rollingResistance;
@@ -1006,9 +916,6 @@ classdef DriverModel < handle
 
             for i = numel(profileSpeed)-1:-1:1
                 ds = max(profileS(i+1) - profileS(i), 0.001);
-                % Guard the sqrt argument: a signed/over-large maxBrakeAccel
-                % over a short ds would otherwise yield NaN/complex and poison
-                % the whole backward profile. Mirrors DriverInputPlanner guards.
                 brakeTerm = profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds;
                 reachableSpeed = sqrt(max(brakeTerm, 0));
                 profileSpeed(i) = min(profileSpeed(i), reachableSpeed);
@@ -1021,53 +928,9 @@ classdef DriverModel < handle
             speedLimit = vm.maxSpeed * ones(size(absKappa));
 
             cornerIdx = absKappa > obj.curvatureTol;
-            % Floor maxLateralAccel at a small positive value: a misconfigured
-            % aero/mu (<=0) would make sqrt of a negative -> NaN, and
-            % min(NaN, maxSpeed) == NaN propagates instead of falling back.
             lateralAccel = max(maxLateralAccel, 0.1);
             speedLimit(cornerIdx) = sqrt(lateralAccel ./ absKappa(cornerIdx));
             speedLimit = min(speedLimit, vm.maxSpeed);
-        end
-
-        function brake = computeBrakeCommand(obj, speedError)
-            % COMPUTEBRAKECOMMAND Gradual proportional brake from speed error.
-            %   No longer floored at minBrakeCommand; the new pedal map
-            %   (computePedals) produces gradual [0,1] brake commands. Kept for
-            %   any callers that want a direct speed-error -> brake mapping.
-            brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = lts.util.saturate(brake);
-        end
-
-        function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            absKappa = abs(curvature);
-            nPts = numel(curvature);
-            apexDistance = inf;
-            atApex = false;
-            inActiveCorner = false;
-            afterApex = false;
-
-            if idx > nPts || all(absKappa <= obj.curvatureTol)
-                return;
-            end
-            if obj.isSteadyCircleControl()
-                idx = max(1, min(idx, nPts));
-                inActiveCorner = absKappa(idx) > obj.curvatureTol;
-                return;
-            end
-
-            [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
-            if ~found
-                return;
-            end
-
-            apexS = obj.computeApexS(arcLen, segmentStart, segmentEnd);
-            apexDistance = apexS - s;
-            inActiveCorner = idx >= segmentStart && idx <= segmentEnd && ...
-                absKappa(idx) > obj.curvatureTol;
-            afterApex = inActiveCorner && s >= apexS;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                inActiveCorner;
         end
 
         function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
@@ -1184,13 +1047,6 @@ classdef DriverModel < handle
             lapEndIdx = max(lapStartIdx, min(lapEndIdx, nPts));
         end
 
-        function apexS = computeApexS(obj, arcLen, segmentStart, segmentEnd)
-            apexPhaseClamped = obj.getClampedApexPhase();
-            segmentStartS = arcLen(segmentStart);
-            segmentEndS = arcLen(segmentEnd);
-            apexS = segmentStartS + apexPhaseClamped * (segmentEndS - segmentStartS);
-        end
-
         function apexPhaseClamped = getClampedApexPhase(obj)
             apexPhaseClamped = lts.util.clamp(obj.apexPhase, 0.05, 0.95);
         end
@@ -1198,12 +1054,7 @@ classdef DriverModel < handle
 
     methods (Static)
         function halfWidth = refHalfWidthForSide(ref, lateralValue)
-            % REFHALFWIDTHFORSIDE Per-side half-width bounding a given lateral
-            % position. Convention (matches TrackReference/edge logic):
-            % positive lateralError = left of the reference line, bounded by
-            % leftHalfWidth; negative = right, bounded by rightHalfWidth.
-            % Falls back to the symmetric trackHalfWidth scalar when a per-
-            % side value is absent or non-finite (synthetic/test refs).
+            % Per-side width, falling back to the symmetric width.
             fallback = [];
             if isfield(ref, 'trackHalfWidth')
                 fallback = ref.trackHalfWidth;

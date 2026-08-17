@@ -1,19 +1,17 @@
 classdef CorrelationStateInitializer
-    % CORRELATIONSTATEINITIALIZER Builds lts.simulation.VehicleState from imported telemetry.
-    %
-    % Replays should start from measured speed/yaw/position when available;
-    % otherwise they fall back to a neutral free-space state. This keeps
-    % correlation runs from inheriting synthetic track-start assumptions.
+    % Build simulation state from imported telemetry.
 
     methods (Static)
         function state = fromReplayProfile(profile, ~, vehicleManager, varargin)
             parser = inputParser;
-            parser.addParameter('UseLoggedPosition', true, @(x) islogical(x) || isnumeric(x));
-            parser.addParameter('UseLoggedYawRate', true, @(x) islogical(x) || isnumeric(x));
-            parser.addParameter('UseLoggedWheelSpeeds', true, @(x) islogical(x) || isnumeric(x));
-            parser.addParameter('UseLoggedDrivenWheelCarrierSpeed', false, ...
-                @(x) islogical(x) || isnumeric(x));
-            parser.addParameter('UseLoggedTransientState', true, @(x) islogical(x) || isnumeric(x));
+            flags = {'UseLoggedPosition', true; 'UseLoggedYawRate', true; ...
+                'UseLoggedWheelSpeeds', true; ...
+                'UseLoggedDrivenWheelCarrierSpeed', false; ...
+                'UseLoggedTransientState', true};
+            for i = 1:size(flags, 1)
+                parser.addParameter(flags{i, 1}, flags{i, 2}, ...
+                    @(x) islogical(x) || isnumeric(x));
+            end
             parser.addParameter('InitialTransientWindowS', 0, ...
                 @(x) isnumeric(x) && isscalar(x) && isfinite(x) && x >= 0);
             parser.parse(varargin{:});
@@ -238,12 +236,7 @@ classdef CorrelationStateInitializer
             if any(valid)
                 fallbackSpeed = median(values(valid));
             end
-
-            for i = 1:numel(values)
-                if ~isfinite(values(i)) || values(i) < 0
-                    values(i) = fallbackSpeed;
-                end
-            end
+            values(~valid) = fallbackSpeed;
         end
 
         function values = rejectMovingZeroWheelSpeeds(values, vehicleSpeed)
@@ -258,16 +251,8 @@ classdef CorrelationStateInitializer
                 return;
             end
 
-            for i = 1:numel(values)
-                if ~isfinite(values(i)) || abs(values(i)) > stuckThreshold
-                    continue;
-                end
-
-                others = values;
-                others(i) = NaN;
-                if any(isfinite(others) & others > movingThreshold)
-                    values(i) = NaN;
-                end
+            if any(values > movingThreshold)
+                values(isfinite(values) & abs(values) <= stuckThreshold) = NaN;
             end
         end
 
@@ -279,8 +264,6 @@ classdef CorrelationStateInitializer
             end
 
             trackWidth = vehicleManager.trackWidth;
-            % Wheel-speed sign convention: right side speed is left side
-            % speed plus yawRate * trackWidth for positive yaw.
             values = lts.correlation.CorrelationStateInitializer.estimateAxlePair( ...
                 values, 1, 2, yawRate, trackWidth);
             values = lts.correlation.CorrelationStateInitializer.estimateAxlePair( ...
@@ -299,9 +282,7 @@ classdef CorrelationStateInitializer
 
         function state = seedTransientCorneringState( ...
                 profile, vehicleManager, state, wheelSpeeds, initialTransientWindowS)
-            % Correlation replays can start mid-corner. Seed the internal
-            % tire/chassis transients from logged startup samples so the
-            % simulation does not build lateral force and roll from rest.
+            % Seed tire and chassis transients for mid-corner starts.
             if isempty(vehicleManager)
                 return;
             end
@@ -350,9 +331,6 @@ classdef CorrelationStateInitializer
             rearAy = lts.correlation.CorrelationStateInitializer.initialBoundaryValue( ...
                 profile, profile.rearLatAccelG, initialTransientWindowS) * g;
 
-            % Axle-mounted accelerometers measure different rigid-body
-            % points. Together they define CG lateral acceleration and yaw
-            % acceleration; lat_accel_g may simply alias the front sensor.
             if isfinite(frontAy) && isfinite(rearAy) && ...
                     ~isempty(vehicleManager) && isfinite(vehicleManager.wheelbase) && ...
                     vehicleManager.wheelbase > 0
@@ -384,12 +362,10 @@ classdef CorrelationStateInitializer
         end
 
         function value = firstFinite(values)
-            value = NaN;
-            if isempty(values)
-                return;
-            end
             idx = find(isfinite(values), 1, 'first');
-            if ~isempty(idx)
+            if isempty(idx)
+                value = NaN;
+            else
                 value = values(idx);
             end
         end
@@ -409,13 +385,10 @@ classdef CorrelationStateInitializer
             mask = false(size(values));
             if ~isempty(profile.time) && numel(profile.time) == numel(values)
                 time = profile.time(:);
-                % Keep the estimate local to the replay boundary. A long
-                % one-sided median can fold a later transient reversal into
-                % the initial state.
                 fitWindowS = min(windowS, 0.05);
                 mask = isfinite(time) & time >= time(1) & ...
                     time <= time(1) + fitWindowS + eps(max(fitWindowS, 1));
-            elseif ~isempty(values)
+            else
                 mask(1) = true;
             end
 
@@ -534,9 +507,6 @@ classdef CorrelationStateInitializer
             candidates = linspace( ...
                 max(-maxBeta, beta0 - span), ...
                 min(maxBeta, beta0 + span), 31);
-            if isempty(candidates)
-                return;
-            end
 
             bestScore = inf;
             bestBeta = beta0;
@@ -823,16 +793,12 @@ classdef CorrelationStateInitializer
                 return;
             end
 
+            names = {'FL', 'FR', 'RL', 'RR'};
+            fields = {'frontLeft', 'frontRight', 'rearLeft', 'rearRight'};
+            idx = find(strcmpi(corner, names), 1);
             suspensionField = '';
-            switch upper(corner)
-                case 'FL'
-                    suspensionField = 'frontLeft';
-                case 'FR'
-                    suspensionField = 'frontRight';
-                case 'RL'
-                    suspensionField = 'rearLeft';
-                case 'RR'
-                    suspensionField = 'rearRight';
+            if ~isempty(idx)
+                suspensionField = fields{idx};
             end
 
             if ~isempty(suspensionField) && ...
