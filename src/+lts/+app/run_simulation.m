@@ -11,7 +11,6 @@ function [stateLog, lapTime] = run_simulation()
 %   - lts.driver.DriverModel decides throttle/brake inputs based on track lookahead.
 %   - lts.simulation.Simulator runs the physics loop: state + inputs -> next state.
 
-clc; close all;
 stateLog = [];
 lapTime = NaN;
 
@@ -52,9 +51,10 @@ if lower(trackType) == "2026enduro"
     % bakes this into points_m ordering, but passing it here makes the
     % intent explicit and forces a flip + warning if the .mat on disk was
     % re-exported in the opposite direction (or is a stale copy).
+    % Track widths (left/right per waypoint) are loaded from the file as
+    % exported by the fsae track image tool; do not override them here.
     track = lts.components.WaypointTrack.loadMat( ...
         'tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
-    track.Width = 5.0;
     fprintf('Track: 2026 Endurance (''%s'', %.1f m, %d points, direction: %s)\n', ...
         trackType, track.getTotalLength(), size(track.getTrackPoints(), 1), ...
         track.getDirection());

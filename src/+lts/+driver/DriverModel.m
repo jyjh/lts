@@ -42,6 +42,9 @@ classdef DriverModel < handle
         trailBrakeReserve = 0.30       % Min brake fraction kept at peak lateral grip (trail-braking) [0-1]
         corneringGripMargin = 0.95     % Lateral-grip fraction at which throttle is fully reserved
         apexPhase        = 0.5    % Corner apex location as fraction from entry to exit
+        racingLineOffsetFraction = 0.65 % Track-half-width fraction used by reduced planner
+        racingLineCurvatureSmoothDistance = 6.0 % Racing-line curvature smoothing [m]
+        racingLineOffsetSmoothDistance = 8.0 % Racing-line offset smoothing [m]
         stanleyGain      = 1.5    % Cross-track correction gain
         stanleySoftening = 1.5    % Low-speed softening term [m/s]
         headingGain      = 1.0    % Heading-error steering correction gain
@@ -283,7 +286,8 @@ classdef DriverModel < handle
             end
 
             if isfield(ref, 'trackHalfWidth') && isfinite(ref.trackHalfWidth)
-                margin = ref.trackHalfWidth - abs(ref.lateralError);
+                halfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, ref.lateralError);
+                margin = halfWidth - abs(ref.lateralError);
                 if margin < obj.edgeSlowdownMargin
                     edgeUse = (obj.edgeSlowdownMargin - margin) / ...
                         max(obj.edgeSlowdownMargin, eps);
@@ -623,9 +627,18 @@ classdef DriverModel < handle
                 return;
             end
 
-            usableOffset = max(ref.trackHalfWidth - ...
+            % Corner-outside bias pushes the target laterally toward the
+            % outside of the corner, which sits on one specific side: a
+            % positive-curvature (left) turn biases the car right (negative
+            % lateralError, bounded by the right half-width); a negative-
+            % curvature (right) turn biases it left (bounded by the left
+            % half-width). Use that side's per-waypoint half-width when the
+            % corridor is asymmetric.
+            biasSideLateralError = -sign(ref.curvature);
+            biasHalfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, biasSideLateralError);
+            usableOffset = max(biasHalfWidth - ...
                 max(obj.edgeSlowdownMargin, obj.edgeSteeringMargin), 0);
-            outsideBias = obj.cornerOutsideBiasFraction * ref.trackHalfWidth;
+            outsideBias = obj.cornerOutsideBiasFraction * biasHalfWidth;
             outsideBias = min([outsideBias, obj.cornerOutsideBiasMax, usableOffset]);
 
             [arcLen, ~] = obj.getTrackGeometry();
@@ -680,7 +693,8 @@ classdef DriverModel < handle
                 return;
             end
 
-            margin = ref.trackHalfWidth - abs(ref.lateralError);
+            halfWidth = lts.driver.DriverModel.refHalfWidthForSide(ref, ref.lateralError);
+            margin = halfWidth - abs(ref.lateralError);
             if margin >= obj.edgeSteeringMargin
                 return;
             end
@@ -716,6 +730,8 @@ classdef DriverModel < handle
                 'lateralError', state.lateralError, ...
                 'trackWidth', NaN, ...
                 'trackHalfWidth', NaN, ...
+                'leftHalfWidth', NaN, ...
+                'rightHalfWidth', NaN, ...
                 'trackLimitMargin', NaN, ...
                 'onTrack', state.onTrack);
         end
@@ -990,7 +1006,11 @@ classdef DriverModel < handle
 
             for i = numel(profileSpeed)-1:-1:1
                 ds = max(profileS(i+1) - profileS(i), 0.001);
-                reachableSpeed = sqrt(profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds);
+                % Guard the sqrt argument: a signed/over-large maxBrakeAccel
+                % over a short ds would otherwise yield NaN/complex and poison
+                % the whole backward profile. Mirrors DriverInputPlanner guards.
+                brakeTerm = profileSpeed(i+1)^2 + 2 * maxBrakeAccel * ds;
+                reachableSpeed = sqrt(max(brakeTerm, 0));
                 profileSpeed(i) = min(profileSpeed(i), reachableSpeed);
             end
         end
@@ -1001,49 +1021,12 @@ classdef DriverModel < handle
             speedLimit = vm.maxSpeed * ones(size(absKappa));
 
             cornerIdx = absKappa > obj.curvatureTol;
-            speedLimit(cornerIdx) = sqrt(maxLateralAccel ./ absKappa(cornerIdx));
+            % Floor maxLateralAccel at a small positive value: a misconfigured
+            % aero/mu (<=0) would make sqrt of a negative -> NaN, and
+            % min(NaN, maxSpeed) == NaN propagates instead of falling back.
+            lateralAccel = max(maxLateralAccel, 0.1);
+            speedLimit(cornerIdx) = sqrt(lateralAccel ./ absKappa(cornerIdx));
             speedLimit = min(speedLimit, vm.maxSpeed);
-        end
-
-        function brake = computeBrakeCommand(obj, speedError)
-            % COMPUTEBRAKECOMMAND Gradual proportional brake from speed error.
-            %   No longer floored at minBrakeCommand; the new pedal map
-            %   (computePedals) produces gradual [0,1] brake commands. Kept for
-            %   any callers that want a direct speed-error -> brake mapping.
-            brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = lts.util.saturate(brake);
-        end
-
-        function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            absKappa = abs(curvature);
-            nPts = numel(curvature);
-            apexDistance = inf;
-            atApex = false;
-            inActiveCorner = false;
-            afterApex = false;
-
-            if idx > nPts || all(absKappa <= obj.curvatureTol)
-                return;
-            end
-            if obj.isSteadyCircleControl()
-                idx = max(1, min(idx, nPts));
-                inActiveCorner = absKappa(idx) > obj.curvatureTol;
-                return;
-            end
-
-            [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
-            if ~found
-                return;
-            end
-
-            apexS = obj.computeApexS(arcLen, segmentStart, segmentEnd);
-            apexDistance = apexS - s;
-            inActiveCorner = idx >= segmentStart && idx <= segmentEnd && ...
-                absKappa(idx) > obj.curvatureTol;
-            afterApex = inActiveCorner && s >= apexS;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                inActiveCorner;
         end
 
         function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
@@ -1169,6 +1152,38 @@ classdef DriverModel < handle
 
         function apexPhaseClamped = getClampedApexPhase(obj)
             apexPhaseClamped = lts.util.clamp(obj.apexPhase, 0.05, 0.95);
+        end
+    end
+
+    methods (Static)
+        function halfWidth = refHalfWidthForSide(ref, lateralValue)
+            % REFHALFWIDTHFORSIDE Per-side half-width bounding a given lateral
+            % position. Convention (matches TrackReference/edge logic):
+            % positive lateralError = left of the reference line, bounded by
+            % leftHalfWidth; negative = right, bounded by rightHalfWidth.
+            % Falls back to the symmetric trackHalfWidth scalar when a per-
+            % side value is absent or non-finite (synthetic/test refs).
+            fallback = [];
+            if isfield(ref, 'trackHalfWidth')
+                fallback = ref.trackHalfWidth;
+            end
+            if lateralValue >= 0
+                if isfield(ref, 'leftHalfWidth') && isfinite(ref.leftHalfWidth)
+                    halfWidth = ref.leftHalfWidth;
+                elseif ~isempty(fallback) && isfinite(fallback)
+                    halfWidth = fallback;
+                else
+                    halfWidth = Inf;
+                end
+            else
+                if isfield(ref, 'rightHalfWidth') && isfinite(ref.rightHalfWidth)
+                    halfWidth = ref.rightHalfWidth;
+                elseif ~isempty(fallback) && isfinite(fallback)
+                    halfWidth = fallback;
+                else
+                    halfWidth = Inf;
+                end
+            end
         end
     end
 end

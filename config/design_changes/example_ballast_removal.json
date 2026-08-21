@@ -1,0 +1,15 @@
+{
+  "schema": "lts.prediction.design-change.v1",
+  "id": "remove-5kg-near-cg",
+  "source": "Example only",
+  "provenance": "Replace with weighed component and measured installed location",
+  "operations": [
+    {
+      "type": "mass",
+      "deltaMassKg": -5.0,
+      "xFromCgM": 0.0,
+      "yFromCgM": 0.0,
+      "zFromGroundM": 0.30
+    }
+  ]
+}

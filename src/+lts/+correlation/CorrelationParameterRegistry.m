@@ -7,7 +7,13 @@ classdef CorrelationParameterRegistry
                 error('lts_correlation_CorrelationParameterRegistry:MissingFile', ...
                     'Parameter-space file does not exist: %s', filePath);
             end
-            registry = jsondecode(fileread(filePath));
+            try
+                registry = jsondecode(fileread(filePath));
+            catch err
+                error('lts_correlation_CorrelationParameterRegistry:InvalidJson', ...
+                    'Could not parse parameter-space file "%s": %s', ...
+                    filePath, err.message);
+            end
             if ~isfield(registry, 'schema') || ...
                     string(registry.schema) ~= "lts.correlation.parameter-space.v1"
                 error('lts_correlation_CorrelationParameterRegistry:InvalidSchema', ...
@@ -145,12 +151,6 @@ classdef CorrelationParameterRegistry
             end
         end
 
-        function T = candidateTable(registry, candidateIds, physical)
-            names = cellstr(lts.correlation.CorrelationParameterRegistry.names(registry));
-            T = array2table(physical, 'VariableNames', names);
-            T = addvars(T, candidateIds(:), 'Before', 1, ...
-                'NewVariableNames', 'candidate_id');
-        end
     end
 
     methods (Static, Access = private)

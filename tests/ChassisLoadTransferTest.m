@@ -302,6 +302,7 @@ verifyEqual(testCase, kin.RR.camberAngle, -0.02, 'AbsTol', 1e-12);
 end
 
 function testVehicleConfigBuildLinksChassisAndUsesSprungMass(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 config = lts.vehicles.baseline();
 vehicle = lts.vehicle.VehicleManager.fromConfig(config, lts.components.TestTrack('straight10'), 0.001);
 
@@ -309,6 +310,65 @@ expectedSprungMass = config.totalMass - 4 * config.unsprungMass;
 verifyEqual(testCase, vehicle.chassis.sprungMass, expectedSprungMass, 'AbsTol', 1e-12);
 verifyFalse(testCase, isempty(vehicle.chassis.suspension));
 verifyFalse(testCase, isempty(vehicle.suspension.chassis));
+end
+
+function testSimpleChassisRequiresExplicitSprungMass(testCase)
+config = lts.vehicles.baseline();
+vehicle = minimalVehicleManager(config);
+
+verifyError(testCase, ...
+    @() lts.components.Chassis.SimpleChassis(vehicle), ...
+    'lts_chassis_SimpleChassis:MissingSprungMass');
+verifyError(testCase, ...
+    @() lts.components.Chassis.SimpleChassis(vehicle, vehicle.totalMass + 1), ...
+    'lts_chassis_SimpleChassis:InvalidSprungMass');
+end
+
+function testTorsionalRigidityAcceptsRigidConstraintAndRejectsInvalidValues(testCase)
+config = lts.vehicles.baseline();
+vehicle = minimalVehicleManager(config);
+sprungMass = config.totalMass - 4 * config.unsprungMass;
+chassis = lts.components.Chassis.SimpleChassis(vehicle, sprungMass);
+
+chassis.torsionalRigidity = Inf;
+verifyEqual(testCase, chassis.torsionalRigidity, Inf);
+verifyError(testCase, @() setTorsionalRigidity(chassis, NaN), ...
+    'lts_chassis_SimpleChassis:InvalidTorsionalRigidity');
+verifyError(testCase, @() setTorsionalRigidity(chassis, -1), ...
+    'lts_chassis_SimpleChassis:InvalidTorsionalRigidity');
+verifyError(testCase, @() setTorsionalRigidity(chassis, -Inf), ...
+    'lts_chassis_SimpleChassis:InvalidTorsionalRigidity');
+end
+
+function testLinkedSuspensionBypassesLegacyPlatformCoefficients(testCase)
+configA = lts.vehicles.baseline();
+configB = configA;
+fallbackFields = {'heaveStiffness', 'heaveDamping', ...
+    'pitchStiffness', 'pitchDamping', 'rollStiffness', 'rollDamping'};
+for idx = 1:numel(fallbackFields)
+    configA.chassis.(fallbackFields{idx}) = 0;
+    configB.chassis.(fallbackFields{idx}) = 1e12;
+end
+[~, suspensionA, chassisA] = createVehicleWithChassis(configA);
+[~, suspensionB, chassisB] = createVehicleWithChassis(configB);
+aero = zeroAeroForces();
+aero.Fz_front = 300;
+aero.Fz_rear = 500;
+dt = 0.001;
+
+for idx = 1:50
+    suspensionA.computeCornerLoadsFromChassis(chassisA, 0, dt);
+    suspensionB.computeCornerLoadsFromChassis(chassisB, 0, dt);
+    chassisA.updateFromAccelerations(2, 4, aero, dt, 0.5);
+    chassisB.updateFromAccelerations(2, 4, aero, dt, 0.5);
+end
+
+verifyEqual(testCase, chassisA.state.heave, chassisB.state.heave, 'AbsTol', 0);
+verifyEqual(testCase, chassisA.state.pitchAngle, chassisB.state.pitchAngle, 'AbsTol', 0);
+verifyEqual(testCase, chassisA.state.frontRollAngle, ...
+    chassisB.state.frontRollAngle, 'AbsTol', 0);
+verifyEqual(testCase, chassisA.state.rearRollAngle, ...
+    chassisB.state.rearRollAngle, 'AbsTol', 0);
 end
 
 function testR25WheelRateMatchesSpecSheetRollRate(testCase)
@@ -652,12 +712,7 @@ function [vehicle, suspension, chassis] = createVehicleWithChassis(config)
 if nargin < 1 || isempty(config)
     config = lts.vehicles.baseline();
 end
-vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
-vehicle.totalMass = config.totalMass;
-vehicle.wheelbase = config.wheelbase;
-vehicle.trackWidth = config.trackWidth;
-vehicle.cgHeight = config.cgHeight;
-vehicle.staticFrontWeight = config.staticFrontWeight;
+vehicle = minimalVehicleManager(config);
 
 unsprungMass = config.unsprungMass;
 sprungMass = vehicle.totalMass - 4 * unsprungMass;
@@ -673,6 +728,19 @@ chassis = chassis.setSuspension(suspension);
 suspension.chassis = chassis;
 vehicle.chassis = chassis;
 vehicle.suspension = suspension;
+end
+
+function vehicle = minimalVehicleManager(config)
+vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
+vehicle.totalMass = config.totalMass;
+vehicle.wheelbase = config.wheelbase;
+vehicle.trackWidth = config.trackWidth;
+vehicle.cgHeight = config.cgHeight;
+vehicle.staticFrontWeight = config.staticFrontWeight;
+end
+
+function chassis = setTorsionalRigidity(chassis, value)
+chassis.torsionalRigidity = value;
 end
 
 function [vehicle, suspension] = createAlgebraicVehicle(config)

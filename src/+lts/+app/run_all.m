@@ -21,8 +21,6 @@ function results = run_all()
 % '..._VehicleConfig_...' (the lts.vehicle.VehicleConfig default). That is inherent to the
 % config, not this script.
 
-clc; close all;
-
 %% ====================================================================
 %  EDIT THESE LISTS TO NARROW THE RUN
 %  Cars   -> function names in src/+lts/+vehicles/<name>.m
@@ -144,10 +142,11 @@ function track = buildTrack(trackType, tracksDir)
     % Build a track by type, mirroring lts.app.run_simulation's two branches:
     %   '2026enduro' -> load the surveyed .mat via WaypointTrack.loadMat
     %   anything else -> procedural lts.components.TestTrack(trackType)
+    % The endurance .mat carries the per-waypoint left/right corridor
+    % exported by the fsae track image tool; load it as-is.
     if strcmpi(trackType, '2026enduro')
         track = lts.components.WaypointTrack.loadMat( ...
             fullfile(tracksDir, 'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
-        track.Width = 5.0;
     else
         track = lts.components.TestTrack(trackType);
     end

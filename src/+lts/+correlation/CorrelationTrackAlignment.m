@@ -2,78 +2,6 @@ classdef CorrelationTrackAlignment
     % CORRELATIONTRACKALIGNMENT Aligns imported MoTeC laps to model tracks.
 
     methods (Static)
-        function [trackOut, info] = align(track, profile, varargin)
-            parser = inputParser;
-            parser.addParameter('StartStation', 'auto', ...
-                @(x) (isnumeric(x) && isscalar(x)) || ischar(x) || isstring(x));
-            parser.addParameter('AlignmentDistanceM', 120, ...
-                @(x) isnumeric(x) && isscalar(x) && x > 0);
-            parser.addParameter('AlignmentStepM', 1, ...
-                @(x) isnumeric(x) && isscalar(x) && x > 0);
-            parser.parse(varargin{:});
-
-            if ~isa(profile, 'lts.correlation.CorrelationReplayProfile')
-                profile = lts.correlation.CorrelationReplayProfile.fromCsv(profile);
-            end
-
-            trackLength = track.getTotalLength();
-            info = struct( ...
-                'mode', 'none', ...
-                'startStationM', 0, ...
-                'headingErrorDeg', NaN, ...
-                'estimationErrorDeg', NaN, ...
-                'estimationSamples', 0, ...
-                'rebased', false);
-
-            startStation = parser.Results.StartStation;
-            if isnumeric(startStation)
-                station = double(startStation);
-                info.mode = 'manual';
-            else
-                mode = lower(strtrim(char(startStation)));
-                if strcmp(mode, 'auto')
-                    if profile.hasGpsCourse()
-                        [station, estimateErrorDeg, sampleCount] = ...
-                            lts.correlation.CorrelationTrackAlignment.estimateStartStationFromCourse( ...
-                                track, profile, ...
-                                parser.Results.AlignmentDistanceM, ...
-                                parser.Results.AlignmentStepM);
-                        info.mode = 'auto_course';
-                        info.estimationErrorDeg = estimateErrorDeg;
-                        info.estimationSamples = sampleCount;
-                    else
-                        station = 0;
-                        info.mode = 'auto_no_course';
-                        warning('lts_correlation_CorrelationTrackAlignment:MissingCourse', ...
-                            ['StartStation="auto" requested, but the replay ' ...
-                             'profile has no gps_course_rad data. Using station 0.']);
-                    end
-                else
-                    station = str2double(mode);
-                    if ~isfinite(station)
-                        error('lts_correlation_CorrelationTrackAlignment:InvalidStartStation', ...
-                            'StartStation must be numeric, "auto", or a numeric string.');
-                    end
-                    info.mode = 'manual';
-                end
-            end
-
-            station = lts.correlation.CorrelationTrackAlignment.wrapStation(station, trackLength);
-            info.startStationM = station;
-
-            trackOut = track;
-            if abs(station) > 1e-9
-                trackOut = lts.correlation.CorrelationTrackAlignment.rebaseTrack(track, station);
-                info.rebased = true;
-            end
-
-            info.headingErrorDeg = lts.correlation.CorrelationTrackAlignment.initialHeadingErrorDeg( ...
-                trackOut, profile);
-            if ~isfinite(info.headingErrorDeg)
-                info.headingErrorDeg = info.estimationErrorDeg;
-            end
-        end
-
         function [station, errorDeg, sampleCount] = estimateStartStationFromCourse( ...
                 track, profile, alignmentDistanceM, alignmentStepM)
             distance = profile.distance(:);
@@ -201,6 +129,35 @@ classdef CorrelationTrackAlignment
                 end
             end
 
+            % Forward the per-waypoint corridor through the rebase. Rebasing is
+            % a pure rotation of waypoint order (not a reversal), so the left
+            % and right sides keep their identity -- only the index order
+            % changes, with the same rotation applied to mu above. A scalar
+            % width track stays scalar.
+            widthArgs = {};
+            if ismethod(track, 'getTrackSideWidths')
+                [leftWidth, rightWidth] = track.getTrackSideWidths();
+                if numel(leftWidth) == size(points, 1) && numel(rightWidth) == size(points, 1)
+                    leftWidth = leftWidth(:);
+                    rightWidth = rightWidth(:);
+                    leftStart = (1 - t) * leftWidth(idx) + ...
+                        t * leftWidth(mod(idx, numel(leftWidth)) + 1);
+                    rightStart = (1 - t) * rightWidth(idx) + ...
+                        t * rightWidth(mod(idx, numel(rightWidth)) + 1);
+                    if t <= 1e-9
+                        rebasedLeft = [leftWidth(idx:end); leftWidth(1:idx-1)];
+                        rebasedRight = [rightWidth(idx:end); rightWidth(1:idx-1)];
+                    else
+                        rebasedLeft = [leftStart; leftWidth(idx+1:end); leftWidth(1:idx)];
+                        rebasedRight = [rightStart; rightWidth(idx+1:end); rightWidth(1:idx)];
+                    end
+                    widthArgs = {'LeftWidth', rebasedLeft, 'RightWidth', rebasedRight};
+                end
+            end
+            if isempty(widthArgs)
+                widthArgs = {'Width', track.getTrackWidth()};
+            end
+
             metadata = struct();
             if isprop(track, 'Metadata') && isstruct(track.Metadata)
                 metadata = track.Metadata;
@@ -214,7 +171,7 @@ classdef CorrelationTrackAlignment
             end
 
             trackOut = lts.components.WaypointTrack(rebasedPoints, ...
-                'Width', track.getTrackWidth(), ...
+                widthArgs{:}, ...
                 'Mu', rebasedMu, ...
                 'Closed', true, ...
                 'Name', sprintf('%s rebased %.1fm', name, startStationM), ...

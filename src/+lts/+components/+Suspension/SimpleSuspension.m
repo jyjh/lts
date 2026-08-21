@@ -31,8 +31,15 @@ classdef SimpleSuspension
 
         % --- Per-corner spring-damper ---
         springRate                   % Heave spring rate [N/m]
-        dampingCoeff                 % Compression damping coefficient [N*s/m]
-        reboundCoeff                 % Rebound damping coefficient [N*s/m]
+        dampingCoeff                 % Low-speed compression slope [N*s/m]
+        reboundCoeff                 % Low-speed rebound slope [N*s/m]
+        % Digressive-damper knee. Wheel-domain velocity [m/s] up to which the
+        % low-speed slope holds; above it the slope drops to
+        % dampingHighSpeedRatio x the low-speed slope. Inf => linear damper.
+        dampingKneeSpeed = Inf
+        % High-speed damper slope as a fraction of the low-speed slope [-].
+        % 1.0 => linear (no digression). Typical racing dampers ~0.2-0.3.
+        dampingHighSpeedRatio = 1.0
         motionRatio                  % Damper travel / wheel travel [-]
         bumpStopLength               % Bump stop engagement length [m]
         bumpStopRate                 % Bump stop stiffness [N/m]
@@ -55,24 +62,31 @@ classdef SimpleSuspension
         function obj = SimpleSuspension(vehicleManager, rollStiffDist, ...
                 springRate, dampingCoeff, reboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, sprungMass)
+                tireSpringRate, unsprungMass, sprungMass, ...
+                dampingKneeSpeed, dampingHighSpeedRatio)
             % SIMPLESUSPENSION Construct a per-corner suspension unit
             %   SimpleSuspension(vehicleManager, rollStiffDist, ...
             %       springRate, dampingCoeff, reboundCoeff, ...
             %       motionRatio, bumpStopLength, bumpStopRate, ...
             %       tireSpringRate, unsprungMass, sprungMass)
+            %   SimpleSuspension(..., dampingKneeSpeed, dampingHighSpeedRatio)
             %
             %   vehicleManager  - lts.vehicle.VehicleManager handle (geometry pulled at construction)
             %   rollStiffDist   - Roll stiffness distribution for this end [0-1]
             %   springRate      - Heave spring rate [N/m]
-            %   dampingCoeff    - Compression damping [N*s/m]
-            %   reboundCoeff    - Rebound damping [N*s/m]
+            %   dampingCoeff    - Low-speed compression slope [N*s/m]
+            %   reboundCoeff    - Low-speed rebound slope [N*s/m]
             %   motionRatio     - Damper travel / wheel travel
             %   bumpStopLength  - Bump stop travel before engagement [m]
             %   bumpStopRate    - Bump stop stiffness [N/m]
             %   tireSpringRate  - Vertical tire stiffness [N/m]
             %   unsprungMass    - Per-corner unsprung mass [kg]
             %   sprungMass      - Per-corner sprung mass [kg]
+            %   dampingKneeSpeed      - Optional wheel-domain velocity [m/s] at which
+            %                           the damper slope breaks to high-speed. Inf
+            %                           (default) keeps a linear damper.
+            %   dampingHighSpeedRatio - Optional high-speed slope / low-speed slope.
+            %                           1.0 (default) keeps a linear damper.
 
             % Pull vehicle-level geometry from lts.vehicle.VehicleManager
             obj.trackWidth   = vehicleManager.trackWidth;
@@ -89,6 +103,16 @@ classdef SimpleSuspension
             obj.bumpStopRate      = bumpStopRate;
             obj.tireSpringRate    = tireSpringRate;
             obj.unsprungMass      = unsprungMass;
+            if nargin >= 12 && ~isempty(dampingKneeSpeed) && isnumeric(dampingKneeSpeed) ...
+                    && (isinf(dampingKneeSpeed) || (isscalar(dampingKneeSpeed) && ...
+                        isfinite(dampingKneeSpeed) && dampingKneeSpeed > 0))
+                obj.dampingKneeSpeed = dampingKneeSpeed;
+            end
+            if nargin >= 13 && ~isempty(dampingHighSpeedRatio) && isnumeric(dampingHighSpeedRatio) ...
+                    && isscalar(dampingHighSpeedRatio) && isfinite(dampingHighSpeedRatio) ...
+                    && dampingHighSpeedRatio > 0
+                obj.dampingHighSpeedRatio = dampingHighSpeedRatio;
+            end
             if nargin >= 11 && ~isempty(sprungMass)
                 obj.sprungMass = sprungMass;
             else
@@ -358,24 +382,6 @@ classdef SimpleSuspension
             cornerState.demandedLoad = F_suspension;
         end
 
-        function wheelRate = getEffectiveWheelRate(obj, cornerState)
-            % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
-            % Includes bump-stop tangent stiffness when the current dynamic
-            % wheel-domain travel has reached the configured stop.
-            % damperPosition and bumpStopLength are both measured from
-            % static ride height in that same wheel domain.
-            if nargin < 2 || isempty(cornerState)
-                cornerState = obj.state;
-            end
-
-            MR_eff = obj.getEffectiveMotionRatio(cornerState);
-            wheelRate = obj.springRate * MR_eff^2;
-
-            if obj.bumpStopRate > 0 && ...
-                    cornerState.damperPosition >= max(obj.bumpStopLength, 0) - 1e-12
-                wheelRate = wheelRate + obj.bumpStopRate;
-            end
-        end
     end
 
     methods (Access = private)
@@ -405,12 +411,7 @@ classdef SimpleSuspension
             % staticLoad carries the steady car weight, while spring/damper
             % and bump-stop deltas add transient load from chassis motion.
             F_spring = K_eff * suspensionDeflection;
-            if suspensionVelocity >= 0
-                C_eff = obj.dampingCoeff * MR_eff^2;
-            else
-                C_eff = obj.reboundCoeff * MR_eff^2;
-            end
-            F_damper = C_eff * suspensionVelocity;
+            F_damper = obj.computeDamperForce(suspensionVelocity, MR_eff);
 
             % Dynamic states are zeroed at static ride height, and the
             % configured bump-stop length is free jounce travel from that
@@ -420,6 +421,28 @@ classdef SimpleSuspension
 
             F_suspension = cornerState.staticLoad + F_spring + ...
                 F_damper + F_bumpstop;
+        end
+
+        function F = computeDamperForce(obj, velocity, MR_eff)
+            % COMPUTEDAMPERFORCE Digressive damper force in the wheel domain.
+            %   The low-speed slope (compressionCoeff for v >= 0, reboundCoeff
+            %   for v < 0, each * MR_eff^2) holds up to dampingKneeSpeed; above
+            %   it the slope drops to lowSpeed * dampingHighSpeedRatio.
+            %   dampingHighSpeedRatio = 1 or dampingKneeSpeed = Inf reproduces
+            %   a linear damper exactly, so the default config is unchanged.
+            MR2 = MR_eff * MR_eff;
+            if velocity >= 0
+                cLow = obj.dampingCoeff * MR2;
+            else
+                cLow = obj.reboundCoeff * MR2;
+            end
+            % Unified piecewise magnitude: low-speed up to the knee, then the
+            % reduced high-speed slope. Equals |velocity| when ratio == 1 or
+            % knee == Inf, giving the legacy linear law with no branch.
+            av = abs(velocity);
+            beyond = max(av - obj.dampingKneeSpeed, 0);
+            mag = min(av, obj.dampingKneeSpeed) + obj.dampingHighSpeedRatio * beyond;
+            F = cLow * mag * sign(velocity);
         end
 
         function F_tire = computeTireNormalForce(obj, cornerState, unsprungPosition)

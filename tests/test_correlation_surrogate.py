@@ -1,15 +1,13 @@
 import csv
-import json
-import sys
 import uuid
 from pathlib import Path
 
 import numpy as np
 
-ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(ROOT / "scripts"))
-
 import correlation_surrogate as surrogate  # noqa: E402
+
+
+ROOT = Path(__file__).resolve().parents[1]
 
 
 SPACE = ROOT / "config" / "correlation" / "lap5_ml_parameter_space.json"

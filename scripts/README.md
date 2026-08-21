@@ -2,6 +2,12 @@
 
 Code-generation and analysis tooling for the FSAE lap-time simulator.
 
+Shared MATLAB helpers live in the `+wsc` package (Pacejka force grids and
+peak-force envelopes, the bicycle skidpad solver, mass sweeps, Kneedle
+elbows, coupled-CG reporting, option validation, figure styling and export);
+they are shared by the `weight_savings_*` and `tire_sensitivity` scripts and
+auto-addpath'd by them via `wsc.addScriptPaths()`.
+
 ## MATLAB utility scripts
 
 Standalone diagnostic scripts. Run them by name from MATLAB — each auto-addpaths
@@ -85,6 +91,28 @@ investigate_lateral_g( ...
     'ReplayCsv', 'exports/correlation_run_replay.csv', ...
     'ReportFile', 'exports/lateral_g_report.md')
 ```
+
+- **`validate_racing_line.m`** — geometry validator for waypoint racing
+  lines (curvature continuity, station spacing, width envelope).
+- **`visualize_correlation.m`** — wrapper that renders a correlation run in
+  the LTSTelemetryVisualizer submodule.
+
+## extract_motec_lap.py
+
+Extracts a lap from a MoTeC `.ld`/`.ldx` log into the normalized replay CSV
+consumed by `lts.app.run_correlation` (channel mapping comes from
+`config/motec/*.json`). Normally invoked automatically by
+`lts.correlation.CorrelationAppSupport.extractMoTeCLap`; the direct CLI is:
+
+```bash
+python scripts/extract_motec_lap.py <input.ld> --output exports/replay.csv \
+    --channel-map config/motec/r25_real_channel_map.json
+```
+
+GPS latitude/longitude are projected to a local east/north frame by the
+shared `geo_common` module (mean-Earth-radius spherical projection), which
+`extract_correlation_config.py` uses as well so both paths agree on the
+Earth model.
 
 ## generate_vehicle.py
 

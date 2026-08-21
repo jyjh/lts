@@ -76,12 +76,18 @@ classdef VehicleConfig
             % --- Suspension ---
             %   front/rear (shared within an axle):
             %     springRate   [N/m] heave spring (wheel rate = springRate*MR^2)
-            %     dampingCoeff [N*s/m] compression (bump) damping
-            %     reboundCoeff [N*s/m] rebound (droop) damping
+            %     dampingCoeff [N*s/m] low-speed compression (bump) slope
+            %     reboundCoeff [N*s/m] low-speed rebound (droop) slope
             %   motionRatio     [-] installation MR (wheel<->spring); wheel rate scales by MR^2
             %   bumpStopLength  [m] free travel before the bump stop engages
             %   bumpStopRate    [N/m] bump-stop stiffness
             %   tireSpringRate  [N/m] vertical tire stiffness (quarter-car)
+            %   dampingKneeSpeed      [m/s] wheel-domain shaft speed at which the
+            %     damper slope breaks from low-speed to high-speed. Inf => linear.
+            %   dampingHighSpeedRatio [-] high-speed damper slope / low-speed slope.
+            %     1.0 => linear damper. Typical racing dampers ~0.2-0.3; the
+            %     default 0.3 brings an over-damped low-speed setup (~300-400%
+            %     critical) close to critically damped at high shaft speed.
             %   geometry: suspension/steering kinematics (per-axle curves +
             %             steering model), see the geometry block below
             %   frontArb/rearArb: torsional stiffness [N*m/rad], motionRatio,
@@ -95,6 +101,8 @@ classdef VehicleConfig
                 'bumpStopLength', 0.025, ...
                 'bumpStopRate', 200000, ...
                 'tireSpringRate', 200000, ...
+                'dampingKneeSpeed', 0.05, ...
+                'dampingHighSpeedRatio', 0.3, ...
                 'frontArb', struct('stiffness', 1800, 'motionRatio', 0.95, 'leverArm', 0.26, 'enabled', true), ...
                 'rearArb',  struct('stiffness', 1100, 'motionRatio', 0.95, 'leverArm', 0.26, 'enabled', true), ...
                 'rollStiffnessOverride', NaN, ...
@@ -169,13 +177,9 @@ classdef VehicleConfig
             %   units. Pitch/roll inertia are derived from mass + geometry in
             %   SimpleChassis, so they are not configured here.
             %     heave/pitch/roll Stiffness [N/m] / [N*m/rad]
-            %       Fallback used when no suspension is linked.
             %     heave/pitch/roll Damping   [N*s/m] / [N*m*s/rad]
-            %       Fallback used when no suspension is linked.
             %     torsionalRigidity [N*m/rad] couples front vs rear roll DOFs
-            %       (twist angle); a large finite value makes the tub nearly
-            %       rigid torsionally. Inf is handled as a constrained
-            %       coordinate. ~4000 N*m/deg ~ 229000 N*m/rad.
+            %       (twist angle); Inf = perfectly rigid tub. ~4000 N*m/deg.
             %     torsionalDamping [N*m*s/rad] damps the twist rate.
             obj.chassis = struct( ...
                 'heaveStiffness', 160000, ...
@@ -253,6 +257,9 @@ classdef VehicleConfig
             %       (0 = steady-state)
             %     longitudinalRelaxationLength [m] longitudinal slip-ratio
             %       lag; NaN uses relaxationLength for backward compatibility
+            %     normalLoadRelaxationLength [m] contact-patch load-response
+            %       lag on the Fz the Magic Formula sees (0 = instantaneous,
+            %       the legacy default); steadies the Fx-ax-attitude-Fz loop
             %     lateralStiffnessScale [-] multiplier on tire slip angle for
             %       correlation sensitivity (1 preserves raw tire file)
             %     lateralStiffnessScaleByCorner [-] optional [FL FR RL RR]
@@ -293,4 +300,84 @@ classdef VehicleConfig
                 'steeringDelayS', 0);
         end
     end
+
+    methods (Static)
+        function config = validate(config)
+            % VALIDATE Sanity-check the vehicle-level scalars of a config.
+            %   config = lts.vehicle.VehicleConfig.validate(config)
+            %   Catches obvious typos (totalMass=0, negative wheelbase, a
+            %   staticFrontWeight outside [0,1], ...) at the build boundary
+            %   instead of letting them surface deep in simulation as a
+            %   divide-by-zero or NaN. Sub-system structs (aero/suspension/
+            %   tire/...) are validated by their own builders. Returns the
+            %   config unchanged on success; errors with typed identifiers.
+            checks = struct( ...
+                'totalMass',     struct('min', eps,     'max', Inf), ...
+                'wheelbase',     struct('min', eps,     'max', Inf), ...
+                'trackWidth',    struct('min', eps,     'max', Inf), ...
+                'cgHeight',      struct('min', 0,       'max', Inf), ...
+                'yawInertia',    struct('min', eps,     'max', Inf), ...
+                'airDensity',    struct('min', 0,       'max', Inf), ...
+                'unsprungMass',  struct('min', 0,       'max', Inf), ...
+                'maxSpeed',      struct('min', 0,       'max', Inf));
+            fields = fieldnames(checks);
+            for i = 1:numel(fields)
+                f = fields{i};
+                value = config.(f);
+                if ~isscalar(value) || ~isnumeric(value) || ~isfinite(value)
+                    error('lts_vehicle_VehicleConfig:InvalidScalar', ...
+                        'VehicleConfig.%s must be a finite scalar (got %s).', ...
+                        f, dispValue(value));
+                end
+                if value < checks.(f).min || value > checks.(f).max
+                    error('lts_vehicle_VehicleConfig:OutOfRange', ...
+                        'VehicleConfig.%s=%g is outside [%g, %g].', ...
+                        f, value, checks.(f).min, checks.(f).max);
+                end
+            end
+            % Distribution/bias fractions must be physical probabilities.
+            fractions = struct('staticFrontWeight', 'front weight distribution', ...
+                'brakeBiasFront', 'brake bias', ...
+                'brakeForceCoefficient', 'brake force coefficient');
+            fNames = fieldnames(fractions);
+            for i = 1:numel(fNames)
+                f = fNames{i};
+                value = config.(f);
+                if ~isscalar(value) || ~isnumeric(value) || ~isfinite(value) || ...
+                        value < 0 || value > 1
+                    error('lts_vehicle_VehicleConfig:InvalidFraction', ...
+                        'VehicleConfig.%s (%s) must be a finite scalar in [0, 1] (got %s).', ...
+                        f, fractions.(f), dispValue(value));
+                end
+            end
+
+            % The chassis attitude model is a sprung-mass model. Do not let
+            % the builder silently clamp an impossible mass breakdown to eps.
+            sprungMass = config.totalMass - 4 * config.unsprungMass;
+            if sprungMass <= 0
+                error('lts_vehicle_VehicleConfig:InvalidMassBreakdown', ...
+                    ['totalMass (%g kg) must exceed four times unsprungMass ' ...
+                    '(%g kg/corner).'], config.totalMass, config.unsprungMass);
+            end
+
+            % +Inf is a supported exact rigid-torsion constraint. Other
+            % non-finite and all negative values are invalid.
+            torsion = config.chassis.torsionalRigidity;
+            if ~isnumeric(torsion) || ~isreal(torsion) || ~isscalar(torsion) || ...
+                    isnan(torsion) || torsion < 0 || torsion == -Inf
+                error('lts_vehicle_VehicleConfig:InvalidTorsionalRigidity', ...
+                    ['VehicleConfig.chassis.torsionalRigidity must be a ' ...
+                    'nonnegative real scalar or +Inf (got %s).'], ...
+                    dispValue(torsion));
+            end
+        end
+    end
+end
+
+function s = dispValue(v)
+if isnumeric(v)
+    s = mat2str(v);
+else
+    s = char(string(v));
+end
 end

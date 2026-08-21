@@ -1,5 +1,5 @@
 classdef DrivelineSupport
-    % DRIVELINESUPPORT Wheel inertia and driven-axle differential helpers.
+    % Wheel inertia and driven-axle helpers.
 
     methods (Static)
         function inertia = wheelInertia(vehicleManager)
@@ -16,9 +16,7 @@ classdef DrivelineSupport
                     vehicleManager.powertrain.getReflectedRotorInertia();
             end
 
-            % Rotor inertia is coupled through differential-carrier speed;
-            % it cannot be split into two independent wheel inertias without
-            % incorrectly resisting differential wheel-speed motion.
+            % Rotor inertia belongs at the differential carrier.
             inertia = struct('FL', baseI, 'FR', baseI, ...
                 'RL', baseI, 'RR', baseI, ...
                 'reflectedRotorInertia', reflectedRotorInertia);

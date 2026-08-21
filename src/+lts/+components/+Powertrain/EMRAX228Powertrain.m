@@ -75,8 +75,12 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 obj.motorRotorInertia = max(0, motorRotorInertia);
             end
             obj.state = lts.components.Powertrain.PowertrainState();
-            
-            data = load(matFilePath);
+
+            % Validate the .mat before loading: load() reconstructs saved
+            % objects by running their class constructor / loadobj, which can
+            % execute arbitrary code. matFilePath is caller-supplied, so screen
+            % it for non-data variables first (defense-in-depth).
+            data = lts.util.loadMatSafe(matFilePath, 'EMRAX228Powertrain');
             obj.matFilePath = string(matFilePath);
             
             requiredFields = {'FDR', 'Speed', 'Tractive_force', 'Gearing_Map'};
@@ -243,12 +247,6 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             obj.state.updateOutputs( ...
                 throttle, motorTorque, wheelTorque, equivalentDriveForce, ...
                 efficiency, false);
-        end
-
-        function F_drive = computeDriveForce(obj, speed, throttle)
-            % Compatibility helper: requested wheel torque as equivalent force.
-            wheelTorque = obj.computeDriveTorque(speed, throttle);
-            F_drive = wheelTorque / max(obj.wheelRadius, eps);
         end
 
         function F_drive = computeMaxDriveForce(obj, speed)

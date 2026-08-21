@@ -3,6 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testFreeRollingWheelConvergesToRoadSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 Fz = 1000;
@@ -11,60 +12,53 @@ dt = 0.001;
 
 corner.angularVelocity = 0;
 for idx = 1:1000
-    wheelSpeed = corner.angularVelocity * corner.wheelRadius;
-    denom = max(abs(wheelSpeed), abs(longSpeed));
-    kappa = (wheelSpeed - longSpeed) / max(denom, 1.0);
-    kappa = max(-1, min(1, kappa));
-    tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
-    tire.updateWheelDynamics(corner, 0, 0, dt, 0.5, longSpeed);
+    tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 0, 0, dt);
 end
 
-finalWheelSpeed = corner.angularVelocity * corner.wheelRadius;
-finalKappa = (finalWheelSpeed - longSpeed) / max(abs(finalWheelSpeed), abs(longSpeed), 1.0);
-verifyLessThan(testCase, abs(finalKappa), 0.05);
-verifyLessThan(testCase, abs(finalWheelSpeed - longSpeed), 1.0);
+verifyLessThan(testCase, abs(corner.slipRatio), 0.05);
+verifyLessThan(testCase, abs(corner.angularVelocity * corner.wheelRadius - longSpeed), 1.0);
 end
 
 function testLargeBrakeTorqueCanIntegrateWheelSpeedThroughZero(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
-Fz = 1000;
 longSpeed = 20;
-largeBrakeTorque = 2000;
+dt = 0.001;
+inertia = 0.5;
+tire.rollingResistanceCoeff = 0;
+tire.bearingDragCoeff = 0;
+corner.normalForce = 0;
+corner.Fx = 0;
+corner.angularVelocity = longSpeed / corner.wheelRadius;
+omegaBefore = corner.angularVelocity;
+largeBrakeTorque = 2 * inertia * omegaBefore / dt;
+expectedOmega = omegaBefore - largeBrakeTorque / inertia * dt;
 
-corner.angularVelocity = 0;
-% Prime tire force at full brake slip (wheel at standstill, road moving).
-kappa = -1;
-tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
-% One brake step from standstill — the combined brake + slip force
-% drives omega negative.
-tire.updateWheelDynamics(corner, 0, largeBrakeTorque, 0.001, 0.5, longSpeed);
+tire.updateWheelDynamics( ...
+    corner, 0, largeBrakeTorque, dt, inertia, longSpeed);
 
+verifyGreaterThan(testCase, omegaBefore, 0);
 verifyLessThan(testCase, corner.angularVelocity, 0);
+verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
 end
 
 function testDrivenWheelProducesPositiveSlipAndForce(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.RL;
 Fz = 1000;
 longSpeed = 12;
 
 corner.angularVelocity = longSpeed / corner.wheelRadius;
-% Prime tire force at zero slip (free-rolling).
-tire.updateCorner(corner, Fz, 0, 0, 0, 1.2, 0, longSpeed, true, 'steady');
-% Apply drive torque — wheel speeds up, producing positive slip.
-tire.updateWheelDynamics(corner, 250, 0, 0.001, 0.5, longSpeed);
+tire.solveWheelContact(corner, Fz, 0, 0, 1.2, longSpeed, 250, 0, 0.001);
 
-wheelSpeed = corner.angularVelocity * corner.wheelRadius;
-kappa = (wheelSpeed - longSpeed) / max(abs(wheelSpeed), abs(longSpeed), 1.0);
-verifyGreaterThan(testCase, kappa, 0);
-
-% Re-evaluate force at the new slip.
-tire.updateCorner(corner, Fz, 0, kappa, 0, 1.2, 0, longSpeed, true, 'steady');
+verifyGreaterThan(testCase, corner.slipRatio, 0);
 verifyGreaterThan(testCase, corner.Fx, 0);
 end
 
 function testPacejkaPeakMuCacheIncludesEvaluationSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 warningState = warning('query', 'Solver:Limits:Exceeded');
@@ -84,6 +78,7 @@ verifyGreaterThan(testCase, numel(keysAfterHighSpeed), numel(keysAfterLowSpeed))
 end
 
 function testPacejkaIgnoresLegacySurfaceMuArguments(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 corner = tire.FL;
@@ -117,6 +112,7 @@ verifyEqual(testCase, tire.computeLateralForce(1000, 0.04, 0.2), ...
 end
 
 function testSlipRatioMatchesMFevalDriveConvention(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.RL;
 corner.wheelRadius = 0.2;
@@ -137,6 +133,7 @@ verifyEqual(testCase, ...
 end
 
 function testTrueRestClearsStaleLongitudinalSlip(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 corner = tire.FL;
@@ -153,6 +150,7 @@ verifyEqual(testCase, corner.Fx, expectedFx, 'AbsTol', 1e-9);
 end
 
 function testHoldRelaxationUsesCommittedLaggedSlip(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 corner = tire.FL;
@@ -166,33 +164,8 @@ verifyEqual(testCase, corner.slipRatio, 0, 'AbsTol', 1e-12);
 verifyLessThan(testCase, abs(corner.Fx), 100);
 end
 
-function testRelaxationCommitNotScaledByLateralStiffnessScale(testCase)
-% The committed lagged slip state must stay in physical radians.
-% lateralStiffnessScale only affects the MFeval evaluation slip, not the
-% stored relaxation state. This guards the invariant documented in the
-% PacejkaTire property comments.
-tire = createPacejkaTire();
-tire.relaxationLength = 0.30;
-tire.lateralStiffnessScale = 1.5;
-corner = tire.FL;
-corner.slipAngle = 0;
-corner.slipRatio = 0;
-
-ssAlpha = 0.10;
-dt = 0.001;
-longSpeed = 20;
-decay = exp(-longSpeed * dt / tire.relaxationLength);
-expectedSlipAngle = ssAlpha * (1 - decay);
-
-tire.updateCorner(corner, 1000, ssAlpha, 0, 0, 1.2, dt, longSpeed, true, 'advance');
-
-% Committed state must be the unscaled relaxed value.
-verifyEqual(testCase, corner.slipAngle, expectedSlipAngle, 'AbsTol', 1e-12);
-verifyGreaterThan(testCase, expectedSlipAngle * tire.lateralStiffnessScale, ...
-    expectedSlipAngle);
-end
-
 function testZeroSpeedWheelBrakingFollowsTorqueBalance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -213,6 +186,7 @@ verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
 function testPositiveSlipProducesRestoringAligningMoment(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.updateCorner(tire.FL, 1000, 0.05, 0, 0, ...
@@ -223,6 +197,7 @@ verifyLessThan(testCase, tire.FL.Mz, 0);
 end
 
 function testMirroredRightTiresCancelSymmetricLateralForces(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 normalLoad = 1000;
@@ -245,6 +220,7 @@ verifyEqual(testCase, tire.FL.Fy + tire.FR.Fy + tire.RL.Fy + tire.RR.Fy, ...
 end
 
 function testRelaxedSlipStoresPhysicalAngleBeforeStiffnessScaling(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 tire.lateralStiffnessScale = 2;
@@ -269,6 +245,7 @@ verifyEqual(testCase, tire.FL.slipAngle, expectedAlpha, 'AbsTol', 1e-12);
 end
 
 function testLongitudinalRelaxationLengthIsIndependent(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 tire.longitudinalRelaxationLength = 0.05;
@@ -293,7 +270,100 @@ verifyGreaterThan(testCase, tire.FL.slipRatio / targetKappa, ...
     tire.FL.slipAngle / targetAlpha);
 end
 
+function testNormalLoadRelaxationLagsForceEvaluationLoad(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+tire.normalLoadRelaxationLength = 0.25;
+dt = 0.01;
+speed = 10;
+lowLoad = 800;
+highLoad = 1600;
+% First evaluation seeds the lagged load at the incoming load.
+tire.updateAllCorners(lowLoad, lowLoad, lowLoad, lowLoad, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, lowLoad, 'AbsTol', 1e-12);
+
+% A load step is tracked with the exact exponential patch lag.
+expectedLoad = highLoad - (highLoad - lowLoad) * ...
+    exp(-speed * dt / tire.normalLoadRelaxationLength);
+tire.updateAllCorners(highLoad, highLoad, highLoad, highLoad, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, expectedLoad, ...
+    'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.normalForce, highLoad, 'AbsTol', 1e-12);
+
+% The force matches a steady evaluation at the lagged load, not the
+% instantaneous one: a load change alone must not change force instantly.
+steadyAtExpected = lts.components.Tire.PacejkaTire( ...
+    tire.tireConstants.tirFilePath);
+steadyAtExpected.relaxationLength = 0;
+steadyAtExpected.normalLoadRelaxationLength = 0;
+steadyAtExpected.updateAllCorners(expectedLoad, expectedLoad, ...
+    expectedLoad, expectedLoad, 0, 0, 0, 0, ...
+    0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    0, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'steady');
+verifyEqual(testCase, tire.FL.Fx, steadyAtExpected.FL.Fx, 'RelTol', 1e-9);
+
+% Contact loss clears the lagged load without a decay tail.
+tire.updateAllCorners(0, 0, 0, 0, ...
+    0, 0, 0, 0, 0.05, 0.05, 0.05, 0.05, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, 0, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.Fx, 0, 'AbsTol', 1e-12);
+end
+
+function testNormalLoadRelaxationPreviewDoesNotCommitLaggedLoad(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+tire.normalLoadRelaxationLength = 0.25;
+dt = 0.01;
+speed = 10;
+tire.updateAllCorners(800, 800, 800, 800, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+
+% Preview evaluates at the advanced load but leaves the committed state
+% untouched so the next physics step advances the lag exactly once.
+tire.updateAllCorners(1600, 1600, 1600, 1600, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'preview');
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, 800, 'AbsTol', 1e-12);
+
+tire.updateAllCorners(1600, 1600, 1600, 1600, ...
+    0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0, ...
+    dt, repmat(speed, 4, 1), tire.surfaceMuReference, false, 'advance');
+expectedLoad = 1600 - (1600 - 800) * ...
+    exp(-speed * dt / tire.normalLoadRelaxationLength);
+verifyEqual(testCase, tire.FL.relaxedNormalLoad, expectedLoad, ...
+    'AbsTol', 1e-12);
+end
+
+function testNormalLoadRelaxationDisabledByDefaultKeepsLegacyForce(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+tire.relaxationLength = 0;
+verifyEqual(testCase, tire.normalLoadRelaxationLength, 0);
+
+steadyAtLoad = lts.components.Tire.PacejkaTire( ...
+    tire.tireConstants.tirFilePath);
+steadyAtLoad.relaxationLength = 0;
+steadyAtLoad.normalLoadRelaxationLength = 0;
+args = {1000, 1000, 1000, 1000, 0.03, 0.03, 0.03, 0.03, ...
+    0.04, 0.04, 0.04, 0.04, 0, 0, 0, 0};
+tire.updateAllCorners(args{:}, 0.001, repmat(15, 4, 1), ...
+    tire.surfaceMuReference, false, 'advance');
+steadyAtLoad.updateAllCorners(args{:}, 0.001, repmat(15, 4, 1), ...
+    tire.surfaceMuReference, false, 'steady');
+verifyEqual(testCase, tire.FL.Fx, steadyAtLoad.FL.Fx, 'AbsTol', 1e-12);
+verifyEqual(testCase, tire.FL.Fy, steadyAtLoad.FL.Fy, 'AbsTol', 1e-12);
+end
+
 function testPerCornerLateralStiffnessScaleChangesForceNotSlipState(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.lateralStiffnessScaleByCorner = [0.65 0.65 1 1];
@@ -315,6 +385,7 @@ verifyLessThan(testCase, abs(tire.FR.Fy), abs(tire.RR.Fy));
 end
 
 function testPassiveWheelCanRollNegativeWithReverseLocalRoadSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -328,6 +399,7 @@ verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
 function testReverseRoadSpeedBrakeTorqueFollowsTorqueBalance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -349,6 +421,7 @@ verifyGreaterThan(testCase, corner.angularVelocity, 0);
 end
 
 function testR25ScaledTireRepresents43075GeometryAndPhysicsScales(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 constants = lts.components.Tire.TireConstants( ...
     'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir');
 p = constants.params;
@@ -370,8 +443,12 @@ expectedInertia = 0.5 * p.MASS1 * ...
     (assemblyMass - p.MASS1) * rimRadius^2;
 verifyEqual(testCase, cfg.tire.wheelInertia, expectedInertia, 'AbsTol', 1e-12);
 verifyEqual(testCase, cfg.tire.relaxationLength, 0.255, 'AbsTol', 1e-12);
-verifyEqual(testCase, cfg.tire.longitudinalRelaxationLength, ...
-    0.05, 'AbsTol', 1e-12);
+% NaN shares the lateral length: the former 0.05 m stability de-tune is
+% replaced by the contact-patch load response below.
+verifyTrue(testCase, isscalar(cfg.tire.longitudinalRelaxationLength) && ...
+    isnan(cfg.tire.longitudinalRelaxationLength));
+verifyEqual(testCase, cfg.tire.normalLoadRelaxationLength, ...
+    cfg.tire.relaxationLength, 'AbsTol', 1e-12);
 end
 
 function tire = createPacejkaTire()

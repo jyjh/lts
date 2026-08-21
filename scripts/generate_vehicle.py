@@ -530,10 +530,10 @@ def extract(rows, driver_mass):
     if r:
         sr = parse_num(val_after(r, "steer ratio"))
         if sr is not None:
-            s.steeringRatio = sr
-            s.steeringRatio = 1 # Manual override, due to the way the simulator works currently. TODO
+            s.steeringRatio = 1  # Manual override: the simulator currently consumes steering input as wheel angle, not a steering-wheel ratio. TODO
             s.add_direct("suspension.geometry.steering.steeringRatio",
-                         sr, "CSV r39")
+                         s.steeringRatio,
+                         f"CSV r39: {sr:g} overridden to 1 (simulator expects direct wheel angle)")
 
     # --- Static Ackermann (r37) ---
     r = find_row(rows, "static ackermann", exact=False)

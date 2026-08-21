@@ -1,17 +1,26 @@
-import sys
 import tempfile
 import unittest
 from decimal import Decimal
 from pathlib import Path
 
 import numpy as np
+import pytest
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
-sys.path.insert(0, str(REPO_ROOT / "external" / "MotecLogGenerator" / "ldparser"))
+
+try:
+    from ldparser import decode_string, read_ldx_beacons, write_ldx_beacons  # noqa: E402
+    HAS_LDPARSER = True
+except ImportError:  # pragma: no cover - depends on local checkout state
+    HAS_LDPARSER = False
+
+pytestmark = pytest.mark.skipif(
+    not HAS_LDPARSER,
+    reason="external/MotecLogGenerator submodule not initialized",
+)
 
 import extract_motec_lap  # noqa: E402
-from ldparser import decode_string, read_ldx_beacons, write_ldx_beacons  # noqa: E402
+from geo_common import EARTH_RADIUS_M  # noqa: E402
 
 
 class FakeChannel:
@@ -451,7 +460,7 @@ class ExtractMotecLapTest(unittest.TestCase):
 
     def test_gps_kinematics_override_speed_trace_and_body_acceleration(self):
         time_s = np.arange(0.0, 10.0001, 0.05)
-        earth_radius_m = 6371008.8
+        earth_radius_m = EARTH_RADIUS_M
         east_m = 8.0 * time_s + 0.5 * 1.5 * time_s**2
         latitude = np.ones_like(time_s)
         longitude = 103.0 + np.rad2deg(

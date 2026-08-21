@@ -1,18 +1,20 @@
 classdef TelemetryWindow
-    % TELEMETRYWINDOW Trims simulated telemetry to the recorded lap window.
-
     methods (Static)
-        function [stateLog, lapTime, recordedSteps] = apply(stateLog, recordStartS, recordEndS)
+        function [stateLog, lapTime, recordedSteps] = apply( ...
+                stateLog, recordStartS, recordEndS)
+            lapTime = NaN;
+            recordedSteps = 0;
             if isempty(stateLog.time)
-                lapTime = NaN;
-                recordedSteps = 0;
                 return;
             end
 
-            trimDiagnostics = lts.simulation.TelemetryWindow.trimDiagnostics(stateLog);
-            completionTolerance = max(1e-6, 1e-9 * max(abs(recordEndS), 1));
-            completedWindow = isfinite(trimDiagnostics.maxS) && ...
-                trimDiagnostics.maxS >= recordEndS - completionTolerance;
+            tolerance = max(1e-6, 1e-9 * max(abs(recordEndS), 1));
+            maxS = max(stateLog.s);
+            completed = maxS >= recordEndS - tolerance;
+            minMargin = NaN;
+            if isfield(stateLog, 'trackLimitMargin') && ~isempty(stateLog.trackLimitMargin)
+                minMargin = min(stateLog.trackLimitMargin);
+            end
             keep = stateLog.s >= recordStartS - 1e-9 & ...
                 stateLog.s <= recordEndS + 1e-9;
             fields = fieldnames(stateLog);
@@ -23,17 +25,8 @@ classdef TelemetryWindow
             recordedSteps = nnz(keep);
             if recordedSteps == 0
                 warning('lts_simulation_Simulator:NoRecordedTelemetry', ...
-                    ['No telemetry samples fell inside the recorded lap window ' ...
-                    '(%.1f m to %.1f m). Simulation ended before the timed lap ' ...
-                    'started or completed. Max simulated s was %.1f m, final ' ...
-                    'speed was %.1f km/h, final lateral error was %.3f m, ' ...
-                    'and minimum track margin was %.3f m.'], ...
-                    recordStartS, recordEndS, ...
-                    trimDiagnostics.maxS, ...
-                    trimDiagnostics.finalSpeedKmh, ...
-                    trimDiagnostics.finalLateralError, ...
-                    trimDiagnostics.minTrackMargin);
-                lapTime = NaN;
+                    ['No samples in the recorded window. Max simulated s was %.1f m; ' ...
+                    'minimum track margin was %.3f m.'], maxS, minMargin);
                 return;
             end
 
@@ -42,48 +35,19 @@ classdef TelemetryWindow
                 if isfield(stateLog, 'controlTime')
                     stateLog.controlTime = stateLog.controlTime - stateLog.controlTime(1);
                 end
-
-                distanceFields = {'s', 'controlS', 'refS'};
-                for i = 1:numel(distanceFields)
-                    field = distanceFields{i};
-                    if isfield(stateLog, field)
-                        stateLog.(field) = max(0, stateLog.(field) - recordStartS);
+                for field = {'s', 'controlS', 'refS'}
+                    name = field{1};
+                    if isfield(stateLog, name)
+                        stateLog.(name) = max(0, stateLog.(name) - recordStartS);
                     end
                 end
             end
 
-            if completedWindow
+            if completed
                 lapTime = stateLog.time(end);
             else
-                lapTime = NaN;
                 warning('lts_simulation_Simulator:IncompleteRecordedTelemetry', ...
-                    ['Simulation entered the recorded lap window but stopped before ' ...
-                    'its end (target %.1f m, max simulated s %.1f m). The partial ' ...
-                    'telemetry is retained, but no lap time is reported.'], ...
-                    recordEndS, trimDiagnostics.maxS);
-            end
-        end
-
-        function diagnostics = trimDiagnostics(stateLog)
-            diagnostics.maxS = NaN;
-            diagnostics.finalSpeedKmh = NaN;
-            diagnostics.finalLateralError = NaN;
-            diagnostics.minTrackMargin = NaN;
-
-            if isfield(stateLog, 's') && ~isempty(stateLog.s)
-                diagnostics.maxS = max(stateLog.s);
-            end
-            if isfield(stateLog, 'speedKmh') && ~isempty(stateLog.speedKmh)
-                diagnostics.finalSpeedKmh = stateLog.speedKmh(end);
-            elseif isfield(stateLog, 'speed') && ~isempty(stateLog.speed)
-                diagnostics.finalSpeedKmh = stateLog.speed(end) * 3.6;
-            end
-            if isfield(stateLog, 'lateralError') && ~isempty(stateLog.lateralError)
-                diagnostics.finalLateralError = stateLog.lateralError(end);
-            end
-            if isfield(stateLog, 'trackLimitMargin') && ...
-                    ~isempty(stateLog.trackLimitMargin)
-                diagnostics.minTrackMargin = min(stateLog.trackLimitMargin);
+                    'The recorded window is incomplete, so no lap time is reported.');
             end
         end
     end

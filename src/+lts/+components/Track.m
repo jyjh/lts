@@ -22,7 +22,10 @@ classdef (Abstract) Track
         % Get heading angle at each waypoint [rad]
         heading = getHeading(obj)
 
-        % Get total fixed track width [m]
+        % Get representative total track width [m] (scalar; one value per
+        % waypoint for variable-width tracks is exposed via the optional
+        % getTrackSideWidths method, which is not part of the abstract
+        % contract but is implemented by WaypointTrack).
         width = getTrackWidth(obj)
     end
 
@@ -189,33 +192,6 @@ classdef (Abstract) Track
             end
             s = lts.components.Track.cumulativeArcLength(points, closed);
             len = s(end);
-        end
-
-        function points = smoothTrack(points, span, closed)
-            % SMOOTHTRACK Moving-average smoothing with closed-loop wrapping.
-            if nargin < 3
-                closed = false;
-            end
-            if nargin < 2 || isempty(span) || span <= 1
-                return;
-            end
-            validateattributes(points, {'numeric'}, {'2d', 'ncols', 2, 'finite', 'real'});
-            span = max(1, round(span));
-            points = lts.components.Track.cleanPoints(points, closed);
-            n = size(points, 1);
-            if n < 3
-                return;
-            end
-
-            if closed
-                pad = min(n - 1, ceil(span / 2));
-                pExt = [points(end-pad+1:end,:); points; points(1:pad,:)];
-                x = movmean(pExt(:,1), span);
-                y = movmean(pExt(:,2), span);
-                points = [x(pad+1:pad+n), y(pad+1:pad+n)];
-            else
-                points = [movmean(points(:,1), span), movmean(points(:,2), span)];
-            end
         end
 
         function points = cleanPoints(points, closed)

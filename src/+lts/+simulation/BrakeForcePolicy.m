@@ -1,5 +1,5 @@
 classdef BrakeForcePolicy
-    % BRAKEFORCEPOLICY Converts brake inputs into commanded axle forces.
+    % Converts brake inputs to axle forces.
 
     methods (Static)
         function brakeForces = compute(input, totalNormalLoad, vehicleManager, brakeMode)

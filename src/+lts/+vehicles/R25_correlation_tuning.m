@@ -10,6 +10,10 @@ function cfg = R25_correlation_tuning(cfg)
 
     cfg.name = string(cfg.name) + "_corrTune";
 
+    % Restore the historical lap-5 effective tire artifact for legacy replay
+    % diagnostics. Production design studies reject this overlay.
+    cfg.tire.tirFile = 'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir';
+
     % Effective correlation drag includes the measured whole-car aero plus
     % speed-dependent rotating/drivetrain losses not represented separately.
     % The physical R25 aero definition remains unchanged in lts.vehicles.R25.

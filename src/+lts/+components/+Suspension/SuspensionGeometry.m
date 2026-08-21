@@ -171,6 +171,13 @@ classdef SuspensionGeometry
             kin.rollCenterHeight = rollCenterHeight;
             kin.rollCenterLateral = rollCenterLateral;
         end
+
+        function steer = computeSteeringAngles(obj, steerInput)
+            steer.FL = obj.computeWheelSteer('FL', steerInput);
+            steer.FR = obj.computeWheelSteer('FR', steerInput);
+            steer.RL = obj.computeWheelSteer('RL', steerInput);
+            steer.RR = obj.computeWheelSteer('RR', steerInput);
+        end
     end
 
     methods (Access = private)
@@ -288,6 +295,21 @@ classdef SuspensionGeometry
             x = kingpinX + offset(1);
             y = kingpinY + offset(2);
         end
+
+        function value = getEffectiveScrubRadius(obj, axle)
+            scrub = obj.getAxleValue(axle, 'ScrubRadius');
+            offset = obj.getAxleValue(axle, 'KingpinOffset');
+            if abs(scrub) > eps || abs(offset) <= eps
+                value = scrub;
+            else
+                value = offset;
+            end
+        end
+
+        function value = getAxleValue(obj, axle, suffix)
+            fieldName = [axle suffix];
+            value = obj.(fieldName);
+        end
     end
 
     methods (Static)
@@ -346,6 +368,12 @@ classdef SuspensionGeometry
             obj.rearSteerRatio     = s.rearSteerRatio;
         end
 
+        function rotated = rotateVector(vector, axis, angle)
+            axis = axis ./ max(norm(axis), eps);
+            rotated = vector * cos(angle) + cross(axis, vector) * sin(angle) + ...
+                axis * dot(axis, vector) * (1 - cos(angle));
+        end
+
         function value = readConfigField(s, names, defaultValue)
             value = defaultValue;
             for i = 1:numel(names)
@@ -400,6 +428,14 @@ classdef SuspensionGeometry
                 axle = 'front';
             else
                 axle = 'rear';
+            end
+        end
+
+        function side = getSide(corner)
+            if endsWith(upper(corner), 'L')
+                side = 1;
+            else
+                side = -1;
             end
         end
 

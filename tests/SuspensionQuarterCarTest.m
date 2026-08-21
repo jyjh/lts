@@ -32,6 +32,64 @@ loadDelta = norm(loadVector(loadsBase) - loadVector(loadsStiff));
 verifyGreaterThan(testCase, loadDelta, 1e-3);
 end
 
+function testDigressiveDamperReducesHighSpeedForce(testCase)
+% Below the configured knee the digressive damper matches the linear slope
+% exactly; above it the force grows at the reduced high-speed ratio.
+% Validated through the public quarter-car update path (computeDamperForce
+% is private), comparing a linear corner (knee=Inf, ratio=1) against an
+% otherwise identical digressive corner (knee=0.05, ratio=0.25).
+cfg = lts.vehicles.baseline();
+vm = lts.vehicle.VehicleManager([], [], [], [], []);
+vm.totalMass = cfg.totalMass;
+vm.wheelbase = cfg.wheelbase;
+vm.trackWidth = cfg.trackWidth;
+vm.cgHeight = cfg.cgHeight;
+vm.staticFrontWeight = cfg.staticFrontWeight;
+sprungCornerMass = (cfg.totalMass - 4 * cfg.unsprungMass) ...
+    * cfg.staticFrontWeight / 2;
+staticLoad = sprungCornerMass * 9.80665;
+
+% --- Low shaft speed (below the knee): the two laws coincide. ---
+lowSpeed = 0.02;   % < knee
+linearLow = buildDamperCorner(vm, cfg, sprungCornerMass, Inf, 1.0);
+digressiveLow = buildDamperCorner(vm, cfg, sprungCornerMass, 0.05, 0.25);
+linearLow.initializeStaticLoad(linearLow.state, staticLoad);
+digressiveLow.initializeStaticLoad(digressiveLow.state, staticLoad);
+linearLow.updateCornerFromChassis(linearLow.state, 0, lowSpeed, 0.001, 0);
+digressiveLow.updateCornerFromChassis(digressiveLow.state, 0, lowSpeed, 0.001, 0);
+verifyEqual(testCase, digressiveLow.state.suspensionForce, ...
+    linearLow.state.suspensionForce, 'AbsTol', 1e-6);
+
+% --- High shaft speed (well beyond the knee): digressive force is bounded
+%     well below the linear extrapolation. ---
+highSpeed = 0.25;  % >> knee
+linearHigh = buildDamperCorner(vm, cfg, sprungCornerMass, Inf, 1.0);
+digressiveHigh = buildDamperCorner(vm, cfg, sprungCornerMass, 0.05, 0.25);
+linearHigh.initializeStaticLoad(linearHigh.state, staticLoad);
+digressiveHigh.initializeStaticLoad(digressiveHigh.state, staticLoad);
+linearHigh.updateCornerFromChassis(linearHigh.state, 0, highSpeed, 0.001, 0);
+digressiveHigh.updateCornerFromChassis(digressiveHigh.state, 0, highSpeed, 0.001, 0);
+
+linearDamper = linearHigh.state.suspensionForce - linearHigh.state.staticLoad;
+digressiveDamper = digressiveHigh.state.suspensionForce - digressiveHigh.state.staticLoad;
+verifyGreaterThan(testCase, linearDamper, 0);
+verifyLessThan(testCase, digressiveDamper, linearDamper);
+% At 0.25 m/s with knee=0.05, ratio=0.25 the ideal force ratio is ~0.44;
+% allow margin for the semi-implicit unsprung-mass integration.
+verifyLessThan(testCase, digressiveDamper, 0.6 * linearDamper);
+end
+
+function corner = buildDamperCorner(vm, cfg, sprungCornerMass, knee, ratio)
+corner = lts.components.Suspension.SimpleSuspension( ...
+    vm, 0.5, ...
+    cfg.suspension.front.springRate, ...
+    cfg.suspension.front.dampingCoeff, cfg.suspension.front.reboundCoeff, ...
+    cfg.suspension.motionRatio, ...
+    cfg.suspension.bumpStopLength, cfg.suspension.bumpStopRate, ...
+    cfg.suspension.tireSpringRate, cfg.unsprungMass, sprungCornerMass, ...
+    knee, ratio);
+end
+
 function testAntiRollBarCouplesLeftRightWheelTravel(testCase)
 [vehicle, suspension] = createSuspension(1, 100000, 60000);
 state = createState(0, 8, 0.1);

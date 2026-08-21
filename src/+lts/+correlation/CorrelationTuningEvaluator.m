@@ -95,6 +95,14 @@ classdef CorrelationTuningEvaluator
                 height(selected));
             config = lts.correlation.CorrelationParameterRegistry.apply( ...
                 registry, baseConfig, values);
+            % Build the vehicle ONCE per candidate, not per window. fromConfig
+            % parses the Pacejka .tir and loads the EMRAX .mat every call, and
+            % only scalar config fields change between candidates; rebuilding
+            % per window was the dominant cost of a sweep. simulateReplay
+            % calls resetForSimulation() at the start of every run, so reusing
+            % the vehicle across windows is safe (component state is reset).
+            [vehicle, buildStatus] = lts.correlation.CorrelationTuningEvaluator. ...
+                buildVehicle(config, track, opts);
             for i = 1:height(selected)
                 window = selected(i, :);
                 detail.candidate_id(i) = candidateId;
@@ -102,13 +110,20 @@ classdef CorrelationTuningEvaluator
                 detail.start_s(i) = window.start_s;
                 detail.horizon_s(i) = window.horizon_s;
                 detail.split(i) = string(opts.Split);
-                try
-                    segment = profile.window(window.start_s, window.horizon_s);
-                    result = lts.correlation.CorrelationTuningEvaluator.simulateAndScore( ...
-                        segment, config, track, opts);
-                catch err
+                if strlength(buildStatus) > 0
+                    % Vehicle construction failed: every window inherits the
+                    % failure rather than retrying the build per window.
                     result = lts.correlation.CorrelationScore.failedResult( ...
-                        string(err.identifier));
+                        buildStatus);
+                else
+                    try
+                        segment = profile.window(window.start_s, window.horizon_s);
+                        result = lts.correlation.CorrelationTuningEvaluator.simulateAndScore( ...
+                            segment, vehicle, config, track, opts);
+                    catch err
+                        result = lts.correlation.CorrelationScore.failedResult( ...
+                            string(err.identifier));
+                    end
                 end
                 detail.score(i) = result.score;
                 detail.status(i) = result.status;
@@ -132,11 +147,23 @@ classdef CorrelationTuningEvaluator
                 'completed_windows', 'total_windows'});
         end
 
-        function result = simulateAndScore(profile, config, track, opts)
+        function [vehicle, failureStatus] = buildVehicle(config, track, opts)
+            % BUILDVEHICLE Construct the candidate vehicle once, quietly.
+            %   Returns failureStatus = "" on success or an error-identifier
+            %   string on failure, so the caller can propagate the failure to
+            %   every window without re-attempting the build.
+            failureStatus = "";
+            vehicle = [];
+            try
+                vehicle = lts.vehicle.VehicleManager.fromConfig( ...
+                    config, track, double(opts.Dt), 'Verbose', false);
+            catch err
+                failureStatus = string(err.identifier);
+            end
+        end
+
+        function [result, stateLog] = simulateAndScore(profile, vehicle, config, track, opts)
             dt = double(opts.Dt);
-            % Vehicle assembly is intentionally verbose for interactive runs;
-            % suppress its repeated component inventory inside large searches.
-            evalc('vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt);');
             initialState = lts.correlation.CorrelationStateInitializer.fromReplayProfile( ...
                 profile, [], vehicle, ...
                 'UseLoggedPosition', false, ...

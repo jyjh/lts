@@ -1,0 +1,17 @@
+{
+  "schema": "lts.governance.calibration-artifact.v1",
+  "id": "r25-provisional-physical-priors-v1",
+  "manifestId": "r25-governed-v1",
+  "certification": "provisional",
+  "parameters": [
+    {"name":"yaw_inertia","value":130.0},
+    {"name":"drivetrain_efficiency","value":0.85},
+    {"name":"rolling_resistance","value":0.015},
+    {"name":"bearing_drag","value":0.0},
+    {"name":"lateral_relaxation","value":0.255},
+    {"name":"longitudinal_relaxation","value":0.05}
+  ],
+  "sourceDatasetIds": [],
+  "provenance": "Engineering and geometry priors only. No transport validation exists.",
+  "legacy": false
+}

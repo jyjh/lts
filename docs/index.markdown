@@ -5,6 +5,29 @@ title: Home
 
 An object-oriented MATLAB lap-time simulation framework for FSAE vehicles.
 
+## What this project is for
+
+The primary output is a **transportable prediction** of absolute lap time and
+the change in lap time caused by a physical vehicle modification. A close replay
+fit is not by itself evidence that a modified vehicle is predicted correctly, so
+correlation is split into stages, each with its own evidence:
+
+1. **Build the model** from measurements, CAD, and supplier data —
+   [`setup.md`](https://github.com/jyjh/lts/blob/main/setup.md) on the repo.
+2. **Replay real controls** through the same physics to find model errors —
+   [Correlation Replay](/lts/correlation/).
+3. **Calibrate** only manifest parameters marked `global_calibrated`, one stage
+   at a time — [Governed Prediction](/lts/governed-prediction/).
+4. **Validate** against a complete held-out run with a single initialization —
+   [`workflow.md`](https://github.com/jyjh/lts/blob/main/workflow.md).
+5. **Predict** a provenance-backed design change without refitting, then
+   **certify** it only after a known A/B intervention passes the real-car gate.
+
+Parameters classified as `design` or `fixed_measured` cannot be fitted. A
+changed vehicle reuses the same global calibration and remains `uncertified`
+until the transport-validation gate passes. The supplied R25 artifact is
+intentionally `provisional`.
+
 ## Architecture
 
 The project uses a composition-based vehicle model. `lts.vehicle.VehicleManager` stores the selected vehicle components and parameters, while `lts.simulation.Simulator` owns the timestep loop. Components remain swappable through abstract interfaces where practical.
@@ -39,7 +62,7 @@ See the [physics flow](physics-flow/) for the force equations and timestep data 
 - `SimpleChassis` tracks heave, pitch, and roll from accelerations plus aero pitch moments.
 - `SuspensionManager` uses chassis corner motion to update transient tire normal loads, with an algebraic load-transfer fallback when no chassis is configured.
 - `PowertrainState` tracks driven-wheel speed and motor RPM, so powertrain force is based on current motor speed rather than vehicle speed alone.
-- `EMRAX228Powertrain` uses the provided `EMRAX228CC Single_4.5.mat` tractive-force map, applies configurable torque falloff after the map endpoint, and cuts drive force at the hard RPM cap.
+- `EMRAX228Powertrain` uses the provided `EMRAX228LC Single_3.36.mat` tractive-force map, applies a constant-power torque rolloff after the map endpoint, and cuts drive force at the hard RPM cap.
 - `PacejkaTire` is the supported tire model and computes per-corner tire forces from slip ratio, slip angle, normal load, contact speed, and surface friction.
 - `lts.simulation.VehicleState` integrates speed, position, acceleration, heading, yaw rate, pitch, and elapsed time.
 
@@ -56,6 +79,7 @@ Change the track type by editing `trackType` in `src/+lts/+app/run_simulation.m`
 
 - `straight10` - 10 m straight for fast export/debug validation
 - `straight` - 200 m straight for acceleration and top-speed validation
+- `straight75` - 75 m straight for FSAE Acceleration event validation
 - `oval` - oval with straights and constant-radius turns
 - `skidpad` - FSAE skidpad circle; one warmup lap is simulated before the recorded lap
 - `autocross` - mixed low-speed course
@@ -67,7 +91,7 @@ Tune the EMRAX powertrain after construction if needed:
 
 ```matlab
 powertrain = lts.components.Powertrain.EMRAX228Powertrain();
-powertrain.rpmFalloffFactor = 2.0;  % steeper torque falloff above the map endpoint
+powertrain.rpmLimitRPM = 6500;  % hard motor RPM cap
 ```
 
 ## Key Files
@@ -85,6 +109,22 @@ src/+lts/+components/+Tire/                  Pacejka tire model
 src/+lts/+components/TestTrack.m             Built-in test tracks
 src/+lts/+telemetry/GraphPlotter.m           Simulation dashboards
 ```
+
+## Documentation
+
+| Page | Covers |
+|---|---|
+| [Class Diagram](class-diagram/) | UML, design patterns, composition |
+| [Simulation Loop](simulation-loop/) | Per-timestep sequence |
+| [Physics Flow](physics-flow/) | Force equations, sign conventions, source map |
+| [Data Ingestion](data-ingestion/) | EMRAX/tire data, MoTeC export, correlation data flow |
+| [Correlation Replay](correlation/) | Channel maps, brake/powertrain modes, tuning overlays |
+| [Governed Prediction](governed-prediction/) | Parameter roles, calibration, certification gate |
+| [Department Workflow](workflow/) | Subsystem-data assembly diagram |
+
+Guides on the repo: [`setup.md`](https://github.com/jyjh/lts/blob/main/setup.md)
+(initial car model) and [`workflow.md`](https://github.com/jyjh/lts/blob/main/workflow.md)
+(car data → design decision).
 
 ## Requirements
 

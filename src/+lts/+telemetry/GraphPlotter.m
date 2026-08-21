@@ -118,8 +118,13 @@ classdef GraphPlotter
                 plot(trackPts(:,1), trackPts(:,2), 'Color', [0.75 0.75 0.75], 'LineWidth', 1);
                 hold on;
             else
-                xFit = interp1(arcLen, trackPts(:,1), stateLog.s, 'linear', 'extrap');
-                yFit = interp1(arcLen, trackPts(:,2), stateLog.s, 'linear', 'extrap');
+                % Clamp the query arc length to the surveyed track span so an
+                % off-track/overshooting run does not silently extrapolate the
+                % centerline polyline. Matches the clamp used elsewhere in the
+                % simulator; points beyond the ends are pinned to the endpoints.
+                sQuery = min(max(stateLog.s, arcLen(1)), arcLen(end));
+                xFit = interp1(arcLen, trackPts(:,1), sQuery, 'linear');
+                yFit = interp1(arcLen, trackPts(:,2), sQuery, 'linear');
             end
             scatter(xFit, yFit, 10, combinedG, 'filled');
             cb = colorbar;

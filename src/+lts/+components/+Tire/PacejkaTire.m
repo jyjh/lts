@@ -48,6 +48,22 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         % carcass/contact-patch response on the driven-wheel torque loop.
         longitudinalRelaxationLength = NaN
 
+        % Contact-patch load-response length [m]. Tire forces do not follow
+        % a normal-load step instantaneously: the patch pressure profile
+        % rebuilds as the contact geometry rolls onto the new load, so the
+        % force response to Fz changes lags on a contact-patch transit time
+        % scale (sigma_Fz / V). Filtering the load the Magic Formula sees
+        % with the same exact exponential lag used for slip gives:
+        %   - identical steady-state forces (no static distortion), and
+        %   - a finite high-frequency Fz->Fx/Fy gain, which breaks the
+        %     algebraic positive-feedback loop
+        %     Fx -> ax -> chassis attitude -> Fz -> Cx/mu*Fz -> Fx
+        %     that otherwise sustains a nonphysical ~10-15 Hz pitch/load
+        %     oscillation under heavy longitudinal loading.
+        % 0 (the default) disables the filter and evaluates at the
+        % instantaneous load (legacy behavior).
+        normalLoadRelaxationLength = 0
+
         % Multiplier on force-evaluation slip angle. This is a correlation
         % knob for cornering-stiffness sensitivity; stored kinematic and
         % relaxed slip states remain in physical radians.
@@ -96,17 +112,21 @@ classdef PacejkaTire < lts.components.Tire.TireModel
     end
     
     methods
-        function obj = PacejkaTire(tirFilePath)
+        function obj = PacejkaTire(tirFilePath, varargin)
             % PACEJKATIRE Construct from a .tir file, creating 4 corner states
             %   PacejkaTire(tirFilePath)
+            %   PacejkaTire(tirFilePath, 'Verbose', true)
             %
             %   tirFilePath — path to the .tir file. If relative, resolved
             %                 relative to the +Tire/ folder.
-            
+            %   'Verbose'   — forwarded to TireConstants and gates the
+            %                 corner-state summary print (default false).
+
             % Load shared tire constants
-            obj.tireConstants = lts.components.Tire.TireConstants(tirFilePath);
+            obj.tireConstants = lts.components.Tire.TireConstants( ...
+                tirFilePath, varargin{:});
             obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
-            
+
             % Create per-corner state objects
             obj.FL = lts.components.Tire.TireState();
             obj.FR = lts.components.Tire.TireState();
@@ -114,8 +134,14 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             obj.RR = lts.components.Tire.TireState();
             obj.peakMuCache = containers.Map('KeyType', 'char', 'ValueType', 'double');
             obj.peakMuNumericCache = containers.Map('KeyType', 'double', 'ValueType', 'double');
-            
-            fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
+
+            verboseParser = inputParser;
+            verboseParser.addParameter('Verbose', false, ...
+                @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+            verboseParser.parse(varargin{:});
+            if logical(verboseParser.Results.Verbose)
+                fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
+            end
         end
         
         %% ---- Per-corner evaluation ----
@@ -151,6 +177,9 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % the transient slip equals the steady-state slip (baseline).
             [alpha, kappa] = obj.applyRelaxation( ...
                 cornerState, ssAlpha, ssKappa, longSpeed, dt, relaxationMode);
+            FzEval = obj.applyLoadRelaxation({cornerState}, normalLoad, ...
+                longSpeed, dt, relaxationMode, ...
+                strcmp(relaxationMode, 'hold'));
 
             cornerState.ssSlipAngle = ssAlpha;
             cornerState.ssSlipRatio = ssKappa;
@@ -163,7 +192,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             end
             cornerState.camberAngle = camberAngle;
 
-            if normalLoad <= 0
+            if FzEval <= 0
                 cornerState.Fy = 0;
                 cornerState.Fx = 0;
                 cornerState.Mx = 0;
@@ -176,7 +205,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             % Unpack for MFeval call. Evaluate at the contact-patch
             % longitudinal speed (speed-sensitive Pacejka) so load/speed
             % dependence is captured; this matches updateAllCorners.
-            Fz    = normalLoad;
+            Fz    = FzEval;
             gamma = camberAngle;
             V     = obj.computeMFevalSpeed(longSpeed);
             P     = obj.tireConstants.nomPressure;
@@ -272,15 +301,35 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 obj.tireConstants.nomPressure, obj.tireConstants.params);
         end
         
-        %% ---- Wheel dynamics ----
+        %% ---- Slip angle computation ----
+        
+        function slipAngles = computeSlipAngles(obj, vx, vy, yawRate, steerInput, vehicleManager)
+            % COMPUTESLIPANGLES Compute per-corner tire slip angles [rad]
+            %   slipAngles = computeSlipAngles(vx, vy, yawRate, steerInput, vehicleManager)
+            %
+            %   Uses per-corner wheel kinematics:
+            %     alpha_i = steer_i + toe_i - atan2(vy_i, vx_i)
+            %
+            %   steer_i and toe_i come from the suspension geometry model,
+            %   allowing Ackermann, bump steer, rear steer, and toe curves.
+            %
+            %   Inputs:
+            %     vx              - forward velocity [m/s]
+            %     vy              - lateral velocity at CG [m/s]
+            %     yawRate         - yaw rate [rad/s]
+            %     steerInput      - driver steering input [rad]
+            %     vehicleManager  - vehicle/component manager with geometry
+            %
+            %   Returns struct with:
+            %     slipAngles.FL, .FR, .RL, .RR  [rad]
 
             slipAngles = struct('FL', 0, 'FR', 0, 'RL', 0, 'RR', 0);
-
+            
             % At very low speed, slip angles are undefined → return zeros
             if vx < 0.5
                 return;
             end
-
+            
             suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, steerInput);
             [xFL, yFL] = obj.getKinematicPosition(vehicleManager, 'FL', suspensionKinematics.FL);
             [xFR, yFR] = obj.getKinematicPosition(vehicleManager, 'FR', suspensionKinematics.FR);
@@ -296,9 +345,9 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             slipAngles.RR = obj.computeCornerSlipAngle(vx, vy, yawRate, ...
                 xRR, yRR, suspensionKinematics.RR);
         end
-
+        
         %% ---- Slip ratio computation ----
-
+        
         function kappa = computeSlipRatio(obj, cornerState, vehicleSpeed)
             % COMPUTESLIPRATIO Compute longitudinal slip ratio for one corner
             %   kappa = computeSlipRatio(cornerState, vehicleSpeed)
@@ -315,11 +364,11 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             %
             %   Returns:
             %     kappa - Slip ratio [-1, KPUMAX]
-
+            
             omega = cornerState.angularVelocity;
             R     = cornerState.wheelRadius;
             V     = max(vehicleSpeed, 0);   % no reverse
-
+            
             kappa = obj.computeKinematicSlipRatio(omega * R, V);
         end
 
@@ -331,7 +380,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 cornerState.angularVelocity * cornerState.wheelRadius, ...
                 longitudinalSpeed);
         end
-
+        
         function updateWheelDynamics(obj, cornerState, driveTorque, brakeTorque, dt, inertia, longitudinalSpeed)
             % UPDATEWHEELDYNAMICS Integrate wheel angular velocity forward
             %   updateWheelDynamics(cornerState, driveTorque, brakeTorque, dt)
@@ -556,9 +605,18 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             states = {obj.FL, obj.FR, obj.RL, obj.RR};
             P = obj.tireConstants.nomPressure;
             params = obj.tireConstants.params;
+            advanceMode = strcmp(relaxationMode, 'advance');
+            holdMode = strcmp(relaxationMode, 'hold');
+            % Contact-patch load response: the Magic Formula evaluates at a
+            % load that tracks the suspension Fz through the same exact
+            % exponential lag used for slip. Committed with the same
+            % advance/preview/hold/steady semantics as the slip states.
+            FzEval = obj.applyLoadRelaxation(states, Fz, longSpeed, dt, ...
+                relaxationMode, holdMode);
+
             if computePeakMu
                 peakVx = obj.computeMFevalSpeed(longSpeed);
-                peakFzKey = round(Fz / 10) * 10;
+                peakFzKey = round(FzEval / 10) * 10;
                 peakGammaKey = round(gamma * 1000) / 1000;
                 peakVxKey = round(peakVx * 10) / 10;
                 peakNumericKey = obj.packPeakMuCacheKey( ...
@@ -577,8 +635,6 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                              obj.RL.slipRatio; obj.RR.slipRatio];
             sigmaAlpha = obj.relaxationLength;
             sigmaKappa = obj.resolvedLongitudinalRelaxationLength();
-            advanceMode = strcmp(relaxationMode, 'advance');
-            holdMode = strcmp(relaxationMode, 'hold');
             if holdMode
                 alpha = ssAlpha;
                 kappa = ssKappa;
@@ -626,13 +682,13 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 end
             end
 
-            active = Fz > 0;
+            active = FzEval > 0;
             if any(active)
                 nActive = nnz(active);
                 Vx = obj.computeMFevalSpeed(longSpeed(active));
                 alphaEval = obj.evaluationSlipAnglesByCorner(alpha);
                 alphaEval([2, 4]) = -alphaEval([2, 4]);
-                inputsMF = [Fz(active), kappa(active), alphaEval(active), ...
+                inputsMF = [FzEval(active), kappa(active), alphaEval(active), ...
                     gamma(active), zeros(nActive, 1), ...
                     Vx, repmat(P, nActive, 1)];
                 outputs = mfeval(params, inputsMF, 111);
@@ -650,7 +706,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                             states{i}.rawPeakMu = rawPeakMu;
                         else
                             rawPeakMu = obj.computePeakMuInternal( ...
-                                Fz(i), gamma(i), P, params, peakVx(i));
+                                FzEval(i), gamma(i), P, params, peakVx(i));
                             obj.peakMuNumericCache(numericKey) = rawPeakMu;
                             key = sprintf('%.0f_%.3f_%.0f_%.1f', ...
                                 peakFzKey(i), peakGammaKey(i), P, peakVxKey(i));
@@ -684,6 +740,44 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 states{i}.Mz = 0;
                 states{i}.peakMu = 0;
             end
+        end
+        
+        function updateAllFromState(obj, state, vehicleManager, cornerLoads, mu)
+            % UPDATEALLFROMSTATE Compute slip angles/ratios and update all corners
+            %   updateAllFromState(state, vehicleManager, cornerLoads)
+            %
+            %   Computes per-corner slip angles from vehicle kinematics and
+            %   per-corner slip ratios from wheel rotational state, then
+            %   delegates to updateAllCorners().
+            %
+            %   Inputs:
+            %     state          - lts.simulation.VehicleState with speed, vy, yawRate, steer
+            %     vehicleManager - lts.vehicle.VehicleManager for geometry (wheelbase, weight dist)
+            %     cornerLoads    - struct with .FL, .FR, .RL, .RR normal forces [N]
+            if nargin < 5 || isempty(mu)
+                mu = obj.surfaceMuReference;
+            end
+
+            % Compute per-corner slip angles and suspension geometry
+            slipAngles = obj.computeSlipAngles( ...
+                state.speed, state.vy, state.yawRate, state.steer, ...
+                vehicleManager);
+            suspensionKinematics = obj.getSuspensionKinematics(vehicleManager, state.steer);
+
+            % Compute per-corner slip ratios from wheel rotational state
+            kappa_FL = obj.computeSlipRatio(obj.FL, state.speed);
+            kappa_FR = obj.computeSlipRatio(obj.FR, state.speed);
+            kappa_RL = obj.computeSlipRatio(obj.RL, state.speed);
+            kappa_RR = obj.computeSlipRatio(obj.RR, state.speed);
+
+            obj.updateAllCorners( ...
+                cornerLoads.FL, cornerLoads.FR, cornerLoads.RL, cornerLoads.RR, ...
+                slipAngles.FL, slipAngles.FR, slipAngles.RL, slipAngles.RR, ...
+                kappa_FL, kappa_FR, kappa_RL, kappa_RR, ...
+                suspensionKinematics.FL.camberAngle, ...
+                suspensionKinematics.FR.camberAngle, ...
+                suspensionKinematics.RL.camberAngle, ...
+                suspensionKinematics.RR.camberAngle, 0, [], mu, true);
         end
     end
     
@@ -755,6 +849,79 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
                     ~isfinite(sigma) || sigma < 0
                 sigma = obj.relaxationLength;
+            end
+        end
+
+        function sigma = resolvedNormalLoadRelaxationLength(obj)
+            % NaN/negative/empty disables the load-response filter (legacy
+            % instantaneous-Fz behavior); a finite positive value is used
+            % directly. Unlike the longitudinal slip length there is no
+            % shared value to inherit: 0 is the explicit "off" default.
+            sigma = obj.normalLoadRelaxationLength;
+            if isempty(sigma) || ~isnumeric(sigma) || ~isscalar(sigma) || ...
+                    ~isfinite(sigma) || sigma < 0
+                sigma = 0;
+            end
+        end
+
+        function FzEval = applyLoadRelaxation(obj, states, Fz, longSpeed, ...
+                dt, relaxationMode, holdMode)
+            % APPLYLOADRELAXATION Contact-patch load-response lag.
+            %   FzEval = applyLoadRelaxation(states, Fz, longSpeed, dt, mode)
+            %
+            % Exact exponential first-order lag on the normal load the
+            % Magic Formula sees, sigma_Fz/V time constant, mirroring
+            % applyRelaxation's advance/preview/hold/steady semantics:
+            %   advance — lag advanced and committed to the corner state
+            %   preview — lag advanced for evaluation only (no commit)
+            %   hold    — evaluate at the previously committed lagged load
+            %   steady  — evaluate at the instantaneous load, no commit
+            % A corner whose true load has reached zero loses its lagged
+            % load immediately (contact loss is unambiguous), and the
+            % filter seeds from the incoming load on first evaluation so a
+            % run does not start with a synthetic load transient.
+            Fz = Fz(:);
+            n = numel(Fz);
+            FzEval = Fz;
+            sigmaFz = obj.resolvedNormalLoadRelaxationLength();
+            if sigmaFz <= 0
+                % Filter disabled: keep the mirrored state coherent, but
+                % avoid handle writes in the hot loop once seeded.
+                for i = 1:n
+                    if ~(states{i}.relaxedNormalLoad == Fz(i))
+                        states{i}.relaxedNormalLoad = Fz(i);
+                    end
+                end
+                return;
+            end
+
+            previousFz = nan(n, 1);
+            for i = 1:n
+                previousFz(i) = states{i}.relaxedNormalLoad;
+            end
+            needsSeed = isnan(previousFz);
+            previousFz(needsSeed) = Fz(needsSeed);
+
+            if holdMode
+                FzEval = previousFz;
+            elseif dt <= 0 || strcmp(relaxationMode, 'steady')
+                FzEval = Fz;
+            else
+                V_eff = max(abs(longSpeed(:)), 1.0);
+                decayFz = exp(-V_eff * dt / sigmaFz);
+                FzEval = Fz - (Fz - previousFz) .* decayFz;
+            end
+
+            % Contact loss clears the lagged load without a decay tail.
+            airborne = Fz <= 0;
+            FzEval(airborne) = 0;
+            FzEval = max(FzEval, 0);
+
+            advanceMode = strcmp(relaxationMode, 'advance');
+            for i = 1:n
+                if advanceMode && dt > 0
+                    states{i}.relaxedNormalLoad = FzEval(i);
+                end
             end
         end
 
