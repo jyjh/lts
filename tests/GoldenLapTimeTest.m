@@ -3,6 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testR25Straight10LapTimeMatchesGoldenBaseline(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % Locks the whole physics chain (tire, suspension, chassis, aero,
 % driveline, driver) to a committed lap-time baseline. If this fails with
 % a small delta, a physics change shifted behavior — regenerate the
