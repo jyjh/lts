@@ -60,6 +60,14 @@ classdef SuspensionGeometry
         frontRollCenterLateral = 0
         rearRollCenterLateral = 0
 
+        % Longitudinal anti-geometry [0-1]. Anti-dive: fraction of the
+        % sprung braking transfer carried by the front links instead of the
+        % springs (no nose-down pitch from that share). Anti-squat: the
+        % acceleration counterpart through the rear links. 0 = spring-only
+        % legacy path; typical FSAE values 0.1-0.4.
+        frontAntiDiveFraction = 0
+        rearAntiSquatFraction = 0
+
         % Anti-roll bars per axle. Empty/disabled => the axle's roll
         % stiffness is its wheel springs only.
         frontAntiRollBar = []
@@ -171,6 +179,13 @@ classdef SuspensionGeometry
             kin.rollCenterHeight = rollCenterHeight;
             kin.rollCenterLateral = rollCenterLateral;
         end
+
+        function steer = computeSteeringAngles(obj, steerInput)
+            steer.FL = obj.computeWheelSteer('FL', steerInput);
+            steer.FR = obj.computeWheelSteer('FR', steerInput);
+            steer.RL = obj.computeWheelSteer('RL', steerInput);
+            steer.RR = obj.computeWheelSteer('RR', steerInput);
+        end
     end
 
     methods (Access = private)
@@ -257,6 +272,55 @@ classdef SuspensionGeometry
                 -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
+        function [x, y] = computeWheelPosition(obj, corner)
+            frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
+            rearArm = obj.wheelbase * obj.staticFrontWeight;
+            halfTrack = obj.trackWidth / 2;
+
+            switch upper(corner)
+                case 'FL'
+                    x = frontArm;
+                    y = halfTrack;
+                case 'FR'
+                    x = frontArm;
+                    y = -halfTrack;
+                case 'RL'
+                    x = -rearArm;
+                    y = halfTrack;
+                otherwise
+                    x = -rearArm;
+                    y = -halfTrack;
+            end
+        end
+
+        function axis = computeSteeringAxis(obj, corner)
+            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
+            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
+            caster = obj.getAxleValue(axle, 'CasterAngle');
+            kpi = obj.getAxleValue(axle, 'KingpinInclination');
+
+            axis = [-sin(caster), -side * sin(kpi), ...
+                cos(caster) * cos(kpi)];
+            normAxis = norm(axis);
+            if normAxis <= eps
+                axis = [0, 0, 1];
+            else
+                axis = axis ./ normAxis;
+            end
+        end
+
+        function camber = applySteeringAxisCamber(~, baseCamber, wheelHeading, axis, side)
+            % Steering about a tilted axis changes camber even if the static
+            % camber curve is flat. Rotate the wheel-top vector about the
+            % caster/KPI axis, then measure its outward lean in the wheel frame.
+            topVector = [0, side * sin(baseCamber), cos(baseCamber)];
+            topVector = lts.components.Suspension.SuspensionGeometry.rotateVector( ...
+                topVector, axis, wheelHeading);
+
+            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
+            camber = atan2(dot(topVector, outward), dot(topVector, [0, 0, 1]));
+        end
+
         function camber = applySteeringAxisCamberFast(~, baseCamber, wheelHeading, axis, side)
             topVector = [0, side * sin(baseCamber), cos(baseCamber)];
             c = cos(wheelHeading);
@@ -276,6 +340,24 @@ classdef SuspensionGeometry
                 topVector(3));
         end
 
+        function [x, y, kingpinX, kingpinY] = computeContactPatchPosition( ...
+                obj, corner, wheelHeading, baseX, baseY)
+            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
+            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
+            trail = obj.getAxleValue(axle, 'MechanicalTrail');
+            scrub = obj.getEffectiveScrubRadius(axle);
+
+            offset0 = [-trail, side * scrub];
+            forward = [cos(wheelHeading), sin(wheelHeading)];
+            left = [-sin(wheelHeading), cos(wheelHeading)];
+            offset = -trail * forward + side * scrub * left;
+
+            kingpinX = baseX - offset0(1);
+            kingpinY = baseY - offset0(2);
+            x = kingpinX + offset(1);
+            y = kingpinY + offset(2);
+        end
+
         function [x, y, kingpinX, kingpinY] = computeContactPatchPositionFast( ...
                 ~, trail, scrub, side, wheelHeading, baseX, baseY)
             offset0 = [-trail, side * scrub];
@@ -287,6 +369,21 @@ classdef SuspensionGeometry
             kingpinY = baseY - offset0(2);
             x = kingpinX + offset(1);
             y = kingpinY + offset(2);
+        end
+
+        function value = getEffectiveScrubRadius(obj, axle)
+            scrub = obj.getAxleValue(axle, 'ScrubRadius');
+            offset = obj.getAxleValue(axle, 'KingpinOffset');
+            if abs(scrub) > eps || abs(offset) <= eps
+                value = scrub;
+            else
+                value = offset;
+            end
+        end
+
+        function value = getAxleValue(obj, axle, suffix)
+            fieldName = [axle suffix];
+            value = obj.(fieldName);
         end
     end
 
@@ -309,6 +406,9 @@ classdef SuspensionGeometry
             obj.frontRollCenterHeight = f.rollCenterHeight;
             obj.frontRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 f, {'rollCenterLateral', 'rollCenterY'}, 0);
+            obj.frontAntiDiveFraction = ...
+                lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'antiDiveFraction', 'antiDive'}, 0);
             obj.frontCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 f, {'casterAngle', 'caster'}, 0);
             obj.frontMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
@@ -328,6 +428,9 @@ classdef SuspensionGeometry
             obj.rearRollCenterHeight = r.rollCenterHeight;
             obj.rearRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 r, {'rollCenterLateral', 'rollCenterY'}, 0);
+            obj.rearAntiSquatFraction = ...
+                lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'antiSquatFraction', 'antiSquat'}, 0);
             obj.rearCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 r, {'casterAngle', 'caster'}, 0);
             obj.rearMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
@@ -344,6 +447,12 @@ classdef SuspensionGeometry
             obj.ackermann          = s.ackermann;
             obj.maxWheelSteerAngle = s.maxWheelSteerAngle;
             obj.rearSteerRatio     = s.rearSteerRatio;
+        end
+
+        function rotated = rotateVector(vector, axis, angle)
+            axis = axis ./ max(norm(axis), eps);
+            rotated = vector * cos(angle) + cross(axis, vector) * sin(angle) + ...
+                axis * dot(axis, vector) * (1 - cos(angle));
         end
 
         function value = readConfigField(s, names, defaultValue)
@@ -400,6 +509,14 @@ classdef SuspensionGeometry
                 axle = 'front';
             else
                 axle = 'rear';
+            end
+        end
+
+        function side = getSide(corner)
+            if endsWith(upper(corner), 'L')
+                side = 1;
+            else
+                side = -1;
             end
         end
 

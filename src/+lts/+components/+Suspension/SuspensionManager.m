@@ -9,7 +9,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
     %
     % Usage:
     %   mgr = SuspensionManager(vehicleManager, ...)
-    %   loads = mgr.computeCornerLoads(state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
+    %   loads = mgr.computeCornerLoadsFromChassis(chassis, steer, dt)
     %     loads.FL, loads.FR, loads.RL, loads.RR  - per-corner tire normal force [N]
     
     properties
@@ -36,6 +36,14 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         frontRollCenterLateral = 0
         rearRollCenterLateral = 0
 
+        % Longitudinal anti-geometry fractions [0-1], resolved from geometry
+        % at construction. Anti-dive: share of the sprung braking transfer
+        % reacted by the front links (no spring pitch). Anti-squat: share of
+        % the acceleration transfer reacted by the rear links. 0 = legacy
+        % spring-only pitch path. Read by SimpleChassis.updateFromAccelerations.
+        frontAntiDiveFraction = 0
+        rearAntiSquatFraction = 0
+
         % Anti-roll bars per axle, resolved from geometry at construction.
         % Their differential wheel-coupling rate is converted to an
         % equivalent independent-corner rate (2*B_bar) when deriving axle
@@ -44,6 +52,13 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         rearAntiRollBar  = []
         frontAntiRollBarWheelRate = 0
         rearAntiRollBarWheelRate = 0
+
+        % Shared digressive-damper parameters forwarded to every corner's
+        % SimpleSuspension. Defaults reproduce the legacy linear damper.
+        dampingKneeSpeed = Inf       % wheel-domain low->high speed knee [m/s]
+        dampingHighSpeedRatio = 1.0  % high-speed slope / low-speed slope [-]
+        % Rebound-side knee override [m/s]; NaN shares dampingKneeSpeed.
+        dampingReboundKneeSpeed = NaN
 
         % Optional override for the front elastic load-transfer fraction
         % [0-1]. When set (non-NaN), it is used directly and the spring+ARB
@@ -66,36 +81,33 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         geometry
     end
 
-    properties (Transient = true) %#ok<MCNPC>
-        % Lazily-cached run invariant: whether the linked chassis exposes
-        % computeCornerKinematics. Empty = uncached.
+    properties (Transient = true)
+        % Empty until the chassis API is first queried.
         cachedChassisHasCornerKinematics
     end
     
     methods
         function obj = SuspensionManager(vehicleManager, ...
-                frontRollStiffDist, ...
                 frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
                 rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
                 tireSpringRate, unsprungMass, geometry, ...
-                frontAntiRollBarRate, rearAntiRollBarRate)
+                frontAntiRollBarRate, rearAntiRollBarRate, ...
+                dampingKneeSpeed, dampingHighSpeedRatio, dampingReboundKneeSpeed)
             % SUSPENSIONMANAGER Construct with front/rear suspension parameters
             %   SuspensionManager(vehicleManager, ...
-            %       frontRollStiffDist, ...
             %       frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
             %       rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
             %       motionRatio, bumpStopLength, bumpStopRate, ...
-            %       tireSpringRate, unsprungMass)
+            %       tireSpringRate, unsprungMass, geometry)
             %
             %   vehicleManager      - lts.vehicle.VehicleManager handle (geometry pulled by SimpleSuspension)
-            %   frontRollStiffDist  - Front roll stiffness distribution [0-1]
             %   frontSpringRate     - Front heave spring rate [N/m]
-            %   frontDampingCoeff   - Front compression damping [N·s/m]
-            %   frontReboundCoeff   - Front rebound damping [N·s/m]
+            %   frontDampingCoeff   - Front low-speed compression slope [N·s/m]
+            %   frontReboundCoeff   - Front low-speed rebound slope [N·s/m]
             %   rearSpringRate      - Rear heave spring rate [N/m]
-            %   rearDampingCoeff    - Rear compression damping [N·s/m]
-            %   rearReboundCoeff    - Rear rebound damping [N·s/m]
+            %   rearDampingCoeff    - Rear low-speed compression slope [N·s/m]
+            %   rearReboundCoeff    - Rear low-speed rebound slope [N·s/m]
             %   motionRatio         - Installation motion ratio (shared)
             %   bumpStopLength      - Bump stop travel [m] (shared)
             %   bumpStopRate        - Bump stop stiffness [N/m] (shared)
@@ -104,8 +116,11 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             %   geometry            - SuspensionGeometry object (optional)
             %   frontAntiRollBarRate - Front ARB coupling rate B [N/m] (optional)
             %   rearAntiRollBarRate  - Rear ARB coupling rate B [N/m] (optional)
+            %   dampingKneeSpeed      - Shared digressive-damper knee [m/s] (optional, Inf=linear)
+            %   dampingHighSpeedRatio - Shared high-speed slope ratio [-] (optional, 1.0=linear)
+            %   dampingReboundKneeSpeed - Rebound knee override [m/s] (optional, NaN=shared)
             
-            if nargin < 14 || isempty(geometry)
+            if nargin < 13 || isempty(geometry)
                 % Fallback when no geometry is supplied: a neutral kinematic
                 % model (zero camber/toe gain) whose only non-trivial table is
                 % the motion-ratio curve set from the passed motionRatio.
@@ -134,6 +149,12 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             if isprop(geometry, 'rearRollCenterLateral')
                 obj.rearRollCenterLateral = geometry.rearRollCenterLateral;
             end
+            if isprop(geometry, 'frontAntiDiveFraction')
+                obj.frontAntiDiveFraction = geometry.frontAntiDiveFraction;
+            end
+            if isprop(geometry, 'rearAntiSquatFraction')
+                obj.rearAntiSquatFraction = geometry.rearAntiSquatFraction;
+            end
 
             % Resolve per-axle anti-roll bars from the geometry model.
             if isprop(geometry, 'frontAntiRollBar') && ~isempty(geometry.frontAntiRollBar)
@@ -147,68 +168,63 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             % when supplied AND the geometry did not already provide a bar,
             % install a unit-ratio AntiRollBar whose wheel-rate stiffness
             % equals the scalar. Geometry-object ARBs take precedence.
-            if nargin >= 15 && ~isempty(frontAntiRollBarRate) && ...
+            if nargin >= 14 && ~isempty(frontAntiRollBarRate) && ...
                     isempty(obj.frontAntiRollBar)
                 obj.frontAntiRollBar = obj.makeWheelRateBar(frontAntiRollBarRate);
             end
-            if nargin >= 16 && ~isempty(rearAntiRollBarRate) && ...
+            if nargin >= 15 && ~isempty(rearAntiRollBarRate) && ...
                     isempty(obj.rearAntiRollBar)
                 obj.rearAntiRollBar = obj.makeWheelRateBar(rearAntiRollBarRate);
             end
             obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
             obj.rearAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.rearAntiRollBar);
 
+            % Shared digressive-damper knee/ratio forwarded to every corner.
+            % Defaults (Inf, 1.0) reproduce the legacy linear damper.
+            if nargin >= 16 && ~isempty(dampingKneeSpeed) && isnumeric(dampingKneeSpeed) ...
+                    && (isinf(dampingKneeSpeed) || (isscalar(dampingKneeSpeed) && ...
+                        isfinite(dampingKneeSpeed) && dampingKneeSpeed > 0))
+                obj.dampingKneeSpeed = dampingKneeSpeed;
+            end
+            if nargin >= 17 && ~isempty(dampingHighSpeedRatio) && isnumeric(dampingHighSpeedRatio) ...
+                    && isscalar(dampingHighSpeedRatio) && isfinite(dampingHighSpeedRatio) ...
+                    && dampingHighSpeedRatio > 0
+                obj.dampingHighSpeedRatio = dampingHighSpeedRatio;
+            end
+            if nargin >= 18 && ~isempty(dampingReboundKneeSpeed) && ...
+                    isnumeric(dampingReboundKneeSpeed) && isscalar(dampingReboundKneeSpeed) && ...
+                    (isinf(dampingReboundKneeSpeed) || ...
+                    (isfinite(dampingReboundKneeSpeed) && dampingReboundKneeSpeed > 0))
+                obj.dampingReboundKneeSpeed = dampingReboundKneeSpeed;
+            end
+
             totalSprungMass = max(vehicleManager.totalMass - 4 * unsprungMass, eps);
             frontSprungMass = max(totalSprungMass * obj.staticFrontWeight / 2, eps);
             rearSprungMass = max(totalSprungMass * (1 - obj.staticFrontWeight) / 2, eps);
-            
-            % Create front corners (share front parameters, each has own state)
-            obj.frontLeft = lts.components.Suspension.SimpleSuspension( ...
-                vehicleManager, frontRollStiffDist, ...
-                frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
-                motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, frontSprungMass);
-            
-            obj.frontRight = lts.components.Suspension.SimpleSuspension( ...
-                vehicleManager, frontRollStiffDist, ...
-                frontSpringRate, frontDampingCoeff, frontReboundCoeff, ...
-                motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, frontSprungMass);
-            
-            % Create rear corners (share rear parameters, each has own state)
-            % Rear roll stiffness distribution = 1 - front
-            rearRollStiffDist = 1 - frontRollStiffDist;
-            obj.rearLeft = lts.components.Suspension.SimpleSuspension( ...
-                vehicleManager, rearRollStiffDist, ...
-                rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
-                motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, rearSprungMass);
-            
-            obj.rearRight = lts.components.Suspension.SimpleSuspension( ...
-                vehicleManager, rearRollStiffDist, ...
-                rearSpringRate, rearDampingCoeff, rearReboundCoeff, ...
-                motionRatio, bumpStopLength, bumpStopRate, ...
-                tireSpringRate, unsprungMass, rearSprungMass);
+
+            % Create the four corner units. Front corners share front
+            % parameters, rear corners share rear parameters; each corner
+            % owns an independent transient state.
+            axleParams = { ...
+                frontSpringRate, frontDampingCoeff, frontReboundCoeff, frontSprungMass; ...
+                rearSpringRate, rearDampingCoeff, rearReboundCoeff, rearSprungMass};
+            cornerNames = {'frontLeft', 'frontRight', 'rearLeft', 'rearRight'};
+            for idx = 1:numel(cornerNames)
+                axle = axleParams(1 + (idx > 2), :);
+                obj.(cornerNames{idx}) = lts.components.Suspension.SimpleSuspension( ...
+                    vehicleManager, ...
+                    axle{1}, axle{2}, axle{3}, ...
+                    motionRatio, bumpStopLength, bumpStopRate, ...
+                    tireSpringRate, unsprungMass, axle{4}, ...
+                    obj.dampingKneeSpeed, obj.dampingHighSpeedRatio, ...
+                    obj.dampingReboundKneeSpeed);
+            end
         end
         
         %% ---- Warmup: settle suspension to static equilibrium ----
         
-        function warmup(obj, totalMass, dt)
-            % WARMUP Settle suspension state to static equilibrium
-            %   warmup(totalMass, dt)
-            %
-            %   Initializes deterministic per-corner static load and
-            %   deflection state. Dynamic displacement states are measured
-            %   from this equilibrium.
-            %
-            %   totalMass - Total vehicle mass [kg]
-            %   dt        - Unused, kept for interface compatibility
-            
-            if nargin < 3
-                dt = 0.001;
-            end
-            %#ok<NASGU>
-
+        function warmup(obj, totalMass, ~)
+            % Initialize per-corner static equilibrium.
             W = totalMass * obj.g;
             
             % Static weight per corner (no aero, no load transfer)
@@ -227,110 +243,6 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         end
         
         %% ---- Per-corner transient computation ----
-        
-        function loads = computeCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
-            % COMPUTECORNERLOADS Compute demanded loads and update all four corners
-            %   loads = computeCornerLoads(state, Fz_aero_front, Fz_aero_rear, totalMass, dt)
-            %
-            %   state          - lts.simulation.VehicleState with ax, ay, speed, etc.
-            %   Fz_aero_front  - Aero downforce on front axle [N]
-            %   Fz_aero_rear   - Aero downforce on rear axle [N]
-            %   totalMass      - Total vehicle mass [kg]
-            %   dt             - Timestep [s]
-            %
-            %   Returns struct with per-corner tire normal forces:
-            %     loads.FL, loads.FR, loads.RL, loads.RR  [N]
-            
-            W = totalMass * obj.g;
-            ax = state.ax;
-            ay = state.ay;
-            frontAxleAy = ay;
-            rearAxleAy = ay;
-            if isa(state, 'lts.simulation.VehicleState') && ...
-                    isfinite(state.frontAxleAy)
-                frontAxleAy = state.frontAxleAy;
-            elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
-                    isfinite(state.frontAxleAy)
-                frontAxleAy = state.frontAxleAy;
-            end
-            if isa(state, 'lts.simulation.VehicleState') && ...
-                    isfinite(state.rearAxleAy)
-                rearAxleAy = state.rearAxleAy;
-            elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
-                    isfinite(state.rearAxleAy)
-                rearAxleAy = state.rearAxleAy;
-            end
-            
-            % Geometry (stored in corners from lts.vehicle.VehicleManager)
-            wb = obj.frontLeft.wheelbase;
-            cgH = obj.frontLeft.cgHeight;
-            frontWeightFrac = obj.staticFrontWeight;
-            
-            % --- Static weight per corner ---
-            Fz_static_front = W * frontWeightFrac;
-            Fz_static_rear  = W * (1 - frontWeightFrac);
-            Fz_static_FL = Fz_static_front / 2;
-            Fz_static_FR = Fz_static_front / 2;
-            Fz_static_RL = Fz_static_rear  / 2;
-            Fz_static_RR = Fz_static_rear  / 2;
-            
-            % --- Aero downforce per corner (split evenly per axle) ---
-            Fz_aero_FL = Fz_aero_front / 2;
-            Fz_aero_FR = Fz_aero_front / 2;
-            Fz_aero_RL = Fz_aero_rear  / 2;
-            Fz_aero_RR = Fz_aero_rear  / 2;
-            
-            % --- Lateral load transfer ---
-            % positive ay = left turn → load transfers to right side.
-            % The total transfer is split into a geometric (roll-center)
-            % component, which acts instantaneously through the linkage at
-            % each axle, and an elastic component, which is distributed by
-            % the roll-stiffness distribution. With hrcF = hrcR = 0 the
-            % geometric part vanishes and the split collapses to the legacy
-            % CG-height-only behavior.
-            lat = obj.computeSignedLateralTransfer( ...
-                totalMass, frontAxleAy, rearAxleAy);
-            Fz_lat_FL = -lat.front;
-            Fz_lat_FR =  lat.front;
-            Fz_lat_RL = -lat.rear;
-            Fz_lat_RR =  lat.rear;
-            
-            % --- Longitudinal load transfer ---
-            % positive ax (acceleration) → load transfers to rear
-            totalLongTransfer = totalMass * ax * cgH / wb;
-            Fz_long_FL = -totalLongTransfer / 2;
-            Fz_long_FR = -totalLongTransfer / 2;
-            Fz_long_RL =  totalLongTransfer / 2;
-            Fz_long_RR =  totalLongTransfer / 2;
-            
-            % --- Total demanded load per corner ---
-            demanded_FL = Fz_static_FL + Fz_aero_FL + Fz_lat_FL + Fz_long_FL;
-            demanded_FR = Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR;
-            demanded_RL = Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL;
-            demanded_RR = Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR;
-            
-            frontAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.frontLeft, obj.frontRight, obj.frontAntiRollBarWheelRate);
-            rearAntiRoll = obj.computeAntiRollBarForces( ...
-                obj.rearLeft, obj.rearRight, obj.rearAntiRollBarWheelRate);
-
-            % --- Update each corner's transient state ---
-            obj.frontLeft.updateCorner( ...
-                obj.frontLeft.state, demanded_FL, dt, frontAntiRoll.left);
-            obj.frontRight.updateCorner( ...
-                obj.frontRight.state, demanded_FR, dt, frontAntiRoll.right);
-            obj.rearLeft.updateCorner( ...
-                obj.rearLeft.state, demanded_RL, dt, rearAntiRoll.left);
-            obj.rearRight.updateCorner( ...
-                obj.rearRight.state, demanded_RR, dt, rearAntiRoll.right);
-            obj.updateGeometry(state.steer);
-
-            % --- Return per-corner tire normal forces ---
-            loads.FL = obj.frontLeft.state.tireNormalForce;
-            loads.FR = obj.frontRight.state.tireNormalForce;
-            loads.RL = obj.rearLeft.state.tireNormalForce;
-            loads.RR = obj.rearRight.state.tireNormalForce;
-        end
 
         function updateGeometry(obj, steerInput)
             % UPDATEGEOMETRY Refresh per-corner suspension kinematics.
@@ -343,9 +255,7 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
         function forces = getAntiRollBarForces(obj)
             % GETANTIROLLBARFORCES Per-corner ARB coupling forces [N].
             %   forces.FL, .FR, .RL, .RR
-            %   Uses each axle bar's wheel-rate stiffness. Shared by the
-            %   demanded-load and chassis-driven load paths so both apply the
-            %   same axle coupling.
+            %   Uses each axle bar's wheel-rate stiffness.
             front = obj.computeAntiRollBarForces( ...
                 obj.frontLeft, obj.frontRight, ...
                 obj.frontAntiRollBarWheelRate);
@@ -358,87 +268,41 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             forces.RR = rear.right;
         end
 
-        function loads = estimateCornerLoads(obj, state, Fz_aero_front, Fz_aero_rear, totalMass)
-            % ESTIMATECORNERLOADS Compute load-transfer demands without
-            % advancing suspension state.
-
-            W = totalMass * obj.g;
-            ax = state.ax;
-            ay = state.ay;
-            frontAxleAy = ay;
-            rearAxleAy = ay;
-            if isa(state, 'lts.simulation.VehicleState') && ...
-                    isfinite(state.frontAxleAy)
-                frontAxleAy = state.frontAxleAy;
-            elseif isstruct(state) && isfield(state, 'frontAxleAy') && ...
-                    isfinite(state.frontAxleAy)
-                frontAxleAy = state.frontAxleAy;
-            end
-            if isa(state, 'lts.simulation.VehicleState') && ...
-                    isfinite(state.rearAxleAy)
-                rearAxleAy = state.rearAxleAy;
-            elseif isstruct(state) && isfield(state, 'rearAxleAy') && ...
-                    isfinite(state.rearAxleAy)
-                rearAxleAy = state.rearAxleAy;
-            end
-
-            wb = obj.frontLeft.wheelbase;
-            cgH = obj.frontLeft.cgHeight;
-            frontWeightFrac = obj.staticFrontWeight;
-
-            Fz_static_front = W * frontWeightFrac;
-            Fz_static_rear  = W * (1 - frontWeightFrac);
-            Fz_static_FL = Fz_static_front / 2;
-            Fz_static_FR = Fz_static_front / 2;
-            Fz_static_RL = Fz_static_rear  / 2;
-            Fz_static_RR = Fz_static_rear  / 2;
-
-            Fz_aero_FL = Fz_aero_front / 2;
-            Fz_aero_FR = Fz_aero_front / 2;
-            Fz_aero_RL = Fz_aero_rear  / 2;
-            Fz_aero_RR = Fz_aero_rear  / 2;
-
-            lat = obj.computeSignedLateralTransfer( ...
-                totalMass, frontAxleAy, rearAxleAy);
-            Fz_lat_FL = -lat.front;
-            Fz_lat_FR =  lat.front;
-            Fz_lat_RL = -lat.rear;
-            Fz_lat_RR =  lat.rear;
-
-            totalLongTransfer = totalMass * ax * cgH / wb;
-            Fz_long_FL = -totalLongTransfer / 2;
-            Fz_long_FR = -totalLongTransfer / 2;
-            Fz_long_RL =  totalLongTransfer / 2;
-            Fz_long_RR =  totalLongTransfer / 2;
-
-            loads.FL = max(Fz_static_FL + Fz_aero_FL + Fz_lat_FL + Fz_long_FL, 0);
-            loads.FR = max(Fz_static_FR + Fz_aero_FR + Fz_lat_FR + Fz_long_FR, 0);
-            loads.RL = max(Fz_static_RL + Fz_aero_RL + Fz_lat_RL + Fz_long_RL, 0);
-            loads.RR = max(Fz_static_RR + Fz_aero_RR + Fz_lat_RR + Fz_long_RR, 0);
-        end
-
-        function loads = computeCornerLoadsFromChassis(obj, chassis, steer, dt)
+        function loads = computeCornerLoadsFromChassis(obj, chassis, steer, dt, predictDt)
             % COMPUTECORNERLOADSFROMCHASSIS Chassis-driven per-corner loads.
             %   loads = computeCornerLoadsFromChassis(chassis, steer, dt)
+            %   loads = computeCornerLoadsFromChassis(chassis, steer, dt, predictDt)
             %
             %   Reads the sprung-mass motion (heave/pitch/roll) the chassis
             %   has resolved at each suspension pickup and drives each
             %   corner's unsprung/tire state through it, returning the four
-            %   tire normal forces. This is the chassis-coupled counterpart
-            %   of computeCornerLoads: there the corners integrate a
-            %   *demanded* load, here the sprung motion is *imposed* by the
-            %   chassis so the attitude and load-transfer models share one
-            %   sprung-mass motion.
+            %   tire normal forces. The attitude and load-transfer models
+            %   share one sprung-mass motion: the chassis resolves it, the
+            %   suspension reacts to it, and elastic load transfer emerges
+            %   from the corner spring/ARB/damper forces.
+            %
+            %   predictDt > 0 extrapolates the chassis attitude forward by
+            %   that horizon (corner displacement + corner velocity *
+            %   predictDt, first order) before imposing it on the suspension.
+            %   This removes the one-step stagger in which the step's tire
+            %   loads were generated by the previous step's attitude — the
+            %   structural source of the nonphysical ~10-15 Hz Fz
+            %   oscillation under heavy longitudinal loading. predictDt = 0
+            %   (default) evaluates at the current attitude (legacy).
             %
             %   chassis - linked SimpleChassis (or compatible) whose state
             %             already reflects the current heave/pitch/roll
             %   steer   - steering input [-1,1] (for kinematic refresh only)
             %   dt      - timestep [s]
+            %   predictDt - attitude extrapolation horizon [s] (optional)
             if nargin < 3 || isempty(steer)
                 steer = 0;
             end
             if nargin < 4 || isempty(dt)
                 dt = 0.001;
+            end
+            if nargin < 5 || isempty(predictDt) || ~isfinite(predictDt) || predictDt <= 0
+                predictDt = 0;
             end
 
             % Refresh per-corner sprung displacement/velocity from the chassis
@@ -447,9 +311,16 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             chassis.computeCornerKinematics();
             disp = chassis.state.cornerDisplacement;
             vel  = chassis.state.cornerVelocity;
+            if predictDt > 0
+                disp = struct( ...
+                    'FL', disp.FL + vel.FL * predictDt, ...
+                    'FR', disp.FR + vel.FR * predictDt, ...
+                    'RL', disp.RL + vel.RL * predictDt, ...
+                    'RR', disp.RR + vel.RR * predictDt);
+            end
 
             % ARB coupling forces per axle (differential rate from the bar
-            % objects, mirroring computeCornerLoads).
+            % objects).
             arb = obj.getAntiRollBarForces();
 
             % Drive each corner from the chassis-imposed sprung motion. The
@@ -694,39 +565,6 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
     end
 
     methods (Access = private)
-        function lat = computeSignedLateralTransfer(obj, totalMass, frontAxleAy, rearAxleAy)
-            % COMPUTESIGNEDLATERALTRANSFER Per-side transfer amounts [N].
-            % Positive values transfer load from left to right on that axle.
-            tw = max(obj.frontLeft.trackWidth, eps);
-            cgH = obj.frontLeft.cgHeight;
-            frontWeightFrac = obj.staticFrontWeight;
-            rearWeightFrac = 1 - frontWeightFrac;
-            rollStiffDist = obj.deriveFrontRollStiffnessFraction();
-
-            mF = totalMass * frontWeightFrac;
-            mR = totalMass * rearWeightFrac;
-            hrcF = obj.frontRollCenterHeight;
-            hrcR = obj.rearRollCenterHeight;
-            rclF = obj.scaledRollCenterLateral(obj.frontRollCenterLateral, frontAxleAy);
-            rclR = obj.scaledRollCenterLateral(obj.rearRollCenterLateral, rearAxleAy);
-
-            geoFront = mF * frontAxleAy * hrcF / tw;
-            geoRear  = mR * rearAxleAy  * hrcR / tw;
-            elasticMoment = ...
-                mF * (frontAxleAy * (cgH - hrcF) + obj.g * rclF) + ...
-                mR * (rearAxleAy  * (cgH - hrcR) + obj.g * rclR);
-            elasticTotal = elasticMoment / tw;
-
-            lat.front = geoFront + elasticTotal * rollStiffDist;
-            lat.rear = geoRear + elasticTotal * (1 - rollStiffDist);
-            lat.geometricFront = geoFront;
-            lat.geometricRear = geoRear;
-            lat.elasticFront = elasticTotal * rollStiffDist;
-            lat.elasticRear = elasticTotal * (1 - rollStiffDist);
-            lat.frontRollCenterLateral = rclF;
-            lat.rearRollCenterLateral = rclR;
-        end
-
         function loads = applyChassisGeometricTransfer(obj, loads, chassis)
             geometricTransfer = obj.readChassisGeometricTransfer(chassis);
             additionalTransfer = obj.readChassisAdditionalTransfer(chassis);
@@ -818,13 +656,6 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 if ~isfinite(transfer.(names{idx}))
                     transfer.(names{idx}) = 0;
                 end
-            end
-        end
-
-        function value = scaledRollCenterLateral(obj, lateralAt1g, axleAy)
-            value = lateralAt1g * axleAy / max(abs(obj.g), eps);
-            if ~isfinite(value)
-                value = 0;
             end
         end
 

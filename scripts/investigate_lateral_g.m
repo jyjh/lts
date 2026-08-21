@@ -451,7 +451,6 @@ if strcmpi(trackText, '2026enduro')
     track = lts.components.WaypointTrack.loadMat( ...
         fullfile(repoRoot, 'tracks', ...
         'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
-    track.Width = 5.0;
 elseif endsWith(lower(trackText), '.mat')
     track = lts.components.WaypointTrack.loadMat(trackText);
 elseif endsWith(lower(trackText), '.csv')

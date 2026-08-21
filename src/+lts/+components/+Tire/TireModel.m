@@ -6,7 +6,8 @@ classdef (Abstract) TireModel
     % fast path, falling back to updateCorner (single) when a tire model
     % does not provide the batch method. Wheel angular velocity is advanced
     % by updateWheelDynamics, called from the Simulator's wheel-contact
-    % solve loop.
+    % solve loop, with slip ratios derived via
+    % computeSlipRatioFromKinematics.
     %
     % Standalone query methods (computeLateralForce, computeLongitudinalForce,
     % getPeakFriction) are used by scripts and diagnostics, not the main loop.
@@ -31,6 +32,9 @@ classdef (Abstract) TireModel
         peakMu = getPeakFriction(obj, normalLoad)
 
         % --- Simulator per-step contract ---
+        % MFeval-consistent local-wheel slip ratio (reverse-capable).
+        kappa = computeSlipRatioFromKinematics(obj, cornerState, longitudinalSpeed)
+
         % Integrate one wheel's angular velocity. inertia and
         % longitudinalSpeed are optional (default to obj.wheelInertia and
         % omega*R). The Simulator passes per-wheel reflected rotor inertia

@@ -23,3 +23,77 @@ function testSaturatePreservesLegacyNaNBehavior(testCase)
 % helper must keep that behavior so existing call sites are unchanged.
 verifyEqual(testCase, lts.util.saturate(NaN), max(0, min(1, NaN)));
 end
+
+function testLoadMatSafeRejectsObjectVariables(testCase)
+% C1 regression: a .mat containing a saved object must be rejected before
+% load(), because load() reconstructs objects by running their class
+% constructor / loadobj, which executes arbitrary code. Only plain data is
+% permitted. Build a file with a value object and confirm it is rejected.
+root = lts.util.repoRoot(mfilename('fullpath'));
+tmpDir = fullfile(root, 'exports', 'tmp_matsafe_test');
+mkdir(tmpDir);
+cleanup = onCleanup(@() localRmdirRecursive(tmpDir));
+
+objFile = fullfile(tmpDir, 'has_object.mat');
+% Save a string scalar (plain data) under a name alongside a simple value
+% object. containers.Map is a value class available in base MATLAB.
+m = containers.Map({'a'}, {1});
+plain = [1 2 3];
+save(objFile, 'm', 'plain');
+
+verifyError(testCase, @() lts.util.loadMatSafe(objFile, 'test'), ...
+    'lts_test_loadMatSafe:ObjectVariable');
+
+% A plain-data file must load successfully.
+plainFile = fullfile(tmpDir, 'plain.mat');
+save(plainFile, 'plain');
+data = lts.util.loadMatSafe(plainFile, 'test');
+verifyEqual(testCase, data.plain, [1 2 3]);
+end
+
+function testValidatePythonCommandRejectsMetacharacters(testCase)
+% C4 regression: a PythonCommand containing shell metacharacters must be
+% rejected, so placing it unquoted at the head of a system() string cannot
+% inject commands ('python & calc', 'python;rm -rf').
+verifyEqual(testCase, lts.util.validatePythonCommand('python'), 'python');
+verifyEqual(testCase, lts.util.validatePythonCommand('python3'), 'python3');
+verifyError(testCase, @() lts.util.validatePythonCommand('python & calc'), ...
+    'lts_util_validatePythonCommand:InvalidPythonCommand');
+verifyError(testCase, @() lts.util.validatePythonCommand('python;rm'), ...
+    'lts_util_validatePythonCommand:InvalidPythonCommand');
+verifyError(testCase, @() lts.util.validatePythonCommand('python`whoami`'), ...
+    'lts_util_validatePythonCommand:InvalidPythonCommand');
+verifyError(testCase, @() lts.util.validatePythonCommand(''), ...
+    'lts_util_validatePythonCommand:InvalidPythonCommand');
+end
+
+function testShellQuoteEscapesShellMetacharacters(testCase)
+% C4 regression: shellQuote must neutralize cmd.exe / POSIX metacharacters
+% so a free-text field cannot break out of its quoted argument. On Windows
+% (ispc) each metacharacter is prefixed with cmd's escape char '^'.
+plain = lts.util.shellQuote('hello');
+verifyEqual(testCase, plain(1), '"');
+verifyEqual(testCase, plain(end), '"');
+if ispc
+    % On Windows the raw metacharacter must be escaped (^$ / ^&), not bare.
+    dollar = lts.util.shellQuote('a$b');
+    verifyTrue(testCase, contains(dollar, '^$'));
+    verifyFalse(testCase, contains(dollar, 'a$b'));
+    amp = lts.util.shellQuote('a&b');
+    verifyTrue(testCase, contains(amp, '^&'));
+    verifyFalse(testCase, contains(amp, 'a&b'));
+    pipe = lts.util.shellQuote('a|b');
+    verifyTrue(testCase, contains(pipe, '^|'));
+else
+    % On POSIX, single-quoting neutralizes metacharacters.
+    amp = lts.util.shellQuote('a&b');
+    verifyEqual(testCase, amp(1), '''');
+    verifyEqual(testCase, amp(end), '''');
+end
+end
+
+function localRmdirRecursive(dir)
+if exist(dir, 'dir')
+    rmdir(dir, 's');
+end
+end

@@ -113,20 +113,23 @@ classdef TelemetryExporter
                 args(end + 1:end + 2) = {'--frequency', sprintf('%.9g', parser.Results.Frequency)};
             end
 
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--driver', parser.Results.Driver);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--vehicle_id', parser.Results.VehicleId);
+            textOptions = { ...
+                '--driver','Driver'; '--vehicle_id','VehicleId'; ...
+                '--vehicle_type','VehicleType'; '--vehicle_comment','VehicleComment'; ...
+                '--venue_name','VenueName'; '--event_name','EventName'; ...
+                '--event_session','EventSession'; '--long_comment','LongComment'; ...
+                '--short_comment','ShortComment'};
+            for i = 1:size(textOptions, 1)
+                args = lts.telemetry.TelemetryExporter.addOptionalCliArg( ...
+                    args, textOptions{i, 1}, parser.Results.(textOptions{i, 2}));
+            end
             if ~isempty(parser.Results.VehicleWeight)
                 args(end + 1:end + 2) = {'--vehicle_weight', sprintf('%.0f', parser.Results.VehicleWeight)};
             end
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--vehicle_type', parser.Results.VehicleType);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--vehicle_comment', parser.Results.VehicleComment);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--venue_name', parser.Results.VenueName);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--event_name', parser.Results.EventName);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--event_session', parser.Results.EventSession);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--long_comment', parser.Results.LongComment);
-            args = lts.telemetry.TelemetryExporter.addOptionalCliArg(args, '--short_comment', parser.Results.ShortComment);
 
-            command = strjoin([{char(parser.Results.PythonCommand)} args], ' ');
+            command = strjoin([{lts.util.validatePythonCommand( ...
+                parser.Results.PythonCommand, 'lts_telemetry_TelemetryExporter')} ...
+                args], ' ');
             [status, output] = system(command);
             if status ~= 0
                 error('lts_telemetry_TelemetryExporter:MoTeCConversionFailed', ...
@@ -141,14 +144,9 @@ classdef TelemetryExporter
 
     methods (Static, Access = private)
         function validateStateLog(stateLog)
-            if ~isstruct(stateLog)
+            if ~isstruct(stateLog) || ~isscalar(stateLog)
                 error('lts_telemetry_TelemetryExporter:InvalidStateLog', ...
                     'stateLog must be a scalar struct of telemetry channel arrays.');
-            end
-
-            if ~isscalar(stateLog)
-                error('lts_telemetry_TelemetryExporter:InvalidStateLog', ...
-                    'stateLog must be a scalar struct, not a struct array.');
             end
 
             if ~isfield(stateLog, 'time') || isempty(stateLog.time)
@@ -205,14 +203,12 @@ classdef TelemetryExporter
         end
 
         function tableData = finalizeTableData(tableData, nSamples)
-            if isfield(tableData, 'valueColumns') && ~isempty(tableData.valueColumns)
+            if ~isempty(tableData.valueColumns)
                 tableData.values = [tableData.valueColumns{:}];
             else
                 tableData.values = zeros(nSamples, 0);
             end
-            if isfield(tableData, 'valueColumns')
-                tableData = rmfield(tableData, 'valueColumns');
-            end
+            tableData = rmfield(tableData, 'valueColumns');
         end
 
         function tableData = addDerivedChannels(tableData, stateLog, nSamples)
@@ -605,32 +601,21 @@ classdef TelemetryExporter
                 'drivenWheelRPM', ...
                 'rpmLimitActive', 'pitchAngle', 'rollAngle', 'rideHeight', ...
                 'rollRate', 'frontRollAngle', 'rearRollAngle', 'twistAngle', ...
-                'frontRollRate', 'rearRollRate', 'twistRate', ...
-                'Fz_FL', 'Fz_FR', 'Fz_RL', 'Fz_RR', ...
-                'suspensionForce_FL', 'suspensionForce_FR', 'suspensionForce_RL', 'suspensionForce_RR', ...
-                'antiRollBarForce_FL', 'antiRollBarForce_FR', 'antiRollBarForce_RL', 'antiRollBarForce_RR', ...
-                'suspensionDemand_FL', 'suspensionDemand_FR', 'suspensionDemand_RL', 'suspensionDemand_RR', ...
-                'tireDeflection_FL', 'tireDeflection_FR', 'tireDeflection_RL', 'tireDeflection_RR', ...
-                'damperPos_FL', 'damperPos_FR', 'damperPos_RL', 'damperPos_RR', ...
-                'damperVel_FL', 'damperVel_FR', 'damperVel_RL', 'damperVel_RR', ...
-                'sprungPosition_FL', 'sprungPosition_FR', 'sprungPosition_RL', 'sprungPosition_RR', ...
-                'unsprungPosition_FL', 'unsprungPosition_FR', 'unsprungPosition_RL', 'unsprungPosition_RR', ...
-                'sprungVelocity_FL', 'sprungVelocity_FR', 'sprungVelocity_RL', 'sprungVelocity_RR', ...
-                'unsprungVelocity_FL', 'unsprungVelocity_FR', 'unsprungVelocity_RL', 'unsprungVelocity_RR', ...
-                'wheelTravel_FL', 'wheelTravel_FR', 'wheelTravel_RL', 'wheelTravel_RR', ...
-                'camber_FL', 'camber_FR', 'camber_RL', 'camber_RR', ...
-                'toe_FL', 'toe_FR', 'toe_RL', 'toe_RR', ...
-                'wheelSteer_FL', 'wheelSteer_FR', 'wheelSteer_RL', 'wheelSteer_RR', ...
-                'slipAngle_FL', 'slipAngle_FR', 'slipAngle_RL', 'slipAngle_RR', ...
-                'slipRatio_FL', 'slipRatio_FR', 'slipRatio_RL', 'slipRatio_RR', ...
-                'peakMu_FL', 'peakMu_FR', 'peakMu_RL', 'peakMu_RR', ...
-                'tireUtilization_FL', 'tireUtilization_FR', ...
-                'tireUtilization_RL', 'tireUtilization_RR', ...
-                'omega_FL', 'omega_FR', 'omega_RL', 'omega_RR', ...
-                'tireSpeed_FL', 'tireSpeed_FR', 'tireSpeed_RL', 'tireSpeed_RR', ...
-                'tireFx_FL', 'tireFx_FR', 'tireFx_RL', 'tireFx_RR', ...
-                'tireFy_FL', 'tireFy_FR', 'tireFy_RL', 'tireFy_RR', ...
-                'aeroFz_front', 'aeroFz_rear'};
+                'frontRollRate', 'rearRollRate', 'twistRate'};
+            corners = {'FL','FR','RL','RR'};
+            cornerFields = { ...
+                'Fz','suspensionForce','antiRollBarForce','suspensionDemand', ...
+                'tireDeflection','damperPos','damperVel','sprungPosition', ...
+                'unsprungPosition','sprungVelocity','unsprungVelocity', ...
+                'wheelTravel','camber','toe','wheelSteer','slipAngle','slipRatio', ...
+                'peakMu','tireUtilization','omega','tireSpeed','tireFx','tireFy', ...
+                'relaxedFz'};
+            for i = 1:numel(cornerFields)
+                for j = 1:numel(corners)
+                    preferred{end + 1} = [cornerFields{i} '_' corners{j}]; %#ok<AGROW>
+                end
+            end
+            preferred = [preferred {'aeroFz_front','aeroFz_rear'}];
 
             allFields = fieldnames(stateLog)';
             fields = preferred(ismember(preferred, allFields));
@@ -639,154 +624,72 @@ classdef TelemetryExporter
         end
 
         function [name, unit] = rawChannelMetadata(field)
-            switch field
-                case 'time'
-                    name = 'Time'; unit = 's';
-                case 's'
-                    name = 'Distance'; unit = 'm';
-                case 'controlS'
-                    name = 'Control Distance'; unit = 'm';
-                case 'controlTime'
-                    name = 'Control Time'; unit = 's';
-                case 'speed'
-                    name = 'Speed mps'; unit = 'm/s';
-                case 'speedKmh'
-                    name = 'Simulation Vehicle Speed Value'; unit = 'km/h';
-                case 'gpsLatitude'
-                    name = 'GPS Latitude'; unit = 'deg';
-                case 'gpsLongitude'
-                    name = 'GPS Longitude'; unit = 'deg';
-                case 'ax'
-                    name = 'Long Accel Raw'; unit = 'm/s/s';
-                case 'ay'
-                    name = 'Lat Accel Raw'; unit = 'm/s/s';
-                case 'frontAxleAy'
-                    name = 'Front Axle Lat Accel Raw'; unit = 'm/s/s';
-                case 'rearAxleAy'
-                    name = 'Rear Axle Lat Accel Raw'; unit = 'm/s/s';
-                case 'throttle'
-                    name = 'Throttle Raw'; unit = 'ratio';
-                case 'replayThrottle'
-                    name = 'Replay Throttle Input Raw'; unit = 'ratio';
-                case 'brake'
-                    name = 'Brake Raw'; unit = 'ratio';
-                case 'replayBrake'
-                    name = 'Replay Brake Input Raw'; unit = 'ratio';
-                case 'brakeRequested'
-                    name = 'Brake Requested Raw'; unit = 'ratio';
-                case 'brakePressureMode'
-                    name = 'Brake Pressure Mode'; unit = 'bool';
-                case 'brakePressureFrontBar'
-                    name = 'Brake Pressure Front'; unit = 'bar';
-                case 'brakePressureRearBar'
-                    name = 'Brake Pressure Rear'; unit = 'bar';
-                case 'replayBrakePressureFrontBar'
-                    name = 'Replay Brake Pressure Front'; unit = 'bar';
-                case 'replayBrakePressureRearBar'
-                    name = 'Replay Brake Pressure Rear'; unit = 'bar';
-                case 'replayRegenTorqueNm'
-                    name = 'Replay Regen Torque'; unit = 'Nm';
-                case 'replayMotorTorqueCommandNm'
-                    name = 'Replay Motor Torque Command'; unit = 'Nm';
-                case 'replayMotorTorqueDeliveredNm'
-                    name = 'Replay Motor Torque Delivered'; unit = 'Nm';
-                case 'replayMotorRpm'
-                    name = 'Replay Motor RPM'; unit = 'rpm';
-                case 'replayPackVoltageV'
-                    name = 'Replay Pack Voltage'; unit = 'V';
-                case 'replayPackCurrentA'
-                    name = 'Replay Pack Current'; unit = 'A';
-                case 'replayPackPowerW'
-                    name = 'Replay Pack Power'; unit = 'W';
-                case 'steer'
-                    name = 'Steer Raw'; unit = 'rad';
-                case 'replaySteer'
-                    name = 'Replay Steer Input Raw'; unit = 'rad';
-                case 'replaySpeed'
-                    name = 'Replay Speed Input'; unit = 'm/s';
-                case 'replayWheelSpeedFL'
-                    name = 'Replay Wheel Speed Front Left'; unit = 'm/s';
-                case 'replayWheelSpeedFR'
-                    name = 'Replay Wheel Speed Front Right'; unit = 'm/s';
-                case 'replayWheelSpeedRL'
-                    name = 'Replay Wheel Speed Rear Left'; unit = 'm/s';
-                case 'replayWheelSpeedRR'
-                    name = 'Replay Wheel Speed Rear Right'; unit = 'm/s';
-                case 'wheelSpeedErrorFL'
-                    name = 'Wheel Speed Error Front Left'; unit = 'm/s';
-                case 'wheelSpeedErrorFR'
-                    name = 'Wheel Speed Error Front Right'; unit = 'm/s';
-                case 'wheelSpeedErrorRL'
-                    name = 'Wheel Speed Error Rear Left'; unit = 'm/s';
-                case 'wheelSpeedErrorRR'
-                    name = 'Wheel Speed Error Rear Right'; unit = 'm/s';
-                case 'replayLatAccelG'
-                    name = 'Replay Lateral Acceleration'; unit = 'G';
-                case 'replayFrontLatAccelG'
-                    name = 'Replay Front Lateral Acceleration'; unit = 'G';
-                case 'replayRearLatAccelG'
-                    name = 'Replay Rear Lateral Acceleration'; unit = 'G';
-                case 'replayLongAccelG'
-                    name = 'Replay Longitudinal Acceleration'; unit = 'G';
-                case 'replayFrontLongAccelG'
-                    name = 'Replay Front Longitudinal Acceleration'; unit = 'G';
-                case 'replayRearLongAccelG'
-                    name = 'Replay Rear Longitudinal Acceleration'; unit = 'G';
-                case 'replayYawRate'
-                    name = 'Replay Yaw Rate'; unit = 'rad/s';
-                case 'targetSpeed'
-                    name = 'Target Speed'; unit = 'm/s';
-                case 'axRef'
-                    name = 'Target Long Accel'; unit = 'm/s/s';
-                case 'speedError'
-                    name = 'Speed Error'; unit = 'm/s';
-                case 'targetLateralError'
-                    name = 'Target Lateral Error'; unit = 'm';
-                case 'lineCurvature'
-                    name = 'Racing Line Curvature'; unit = '1/m';
-                case 'heading'
-                    name = 'Heading Raw'; unit = 'rad';
-                case 'curvature'
-                    name = 'Curvature'; unit = '1/m';
-                case 'motorRPM'
-                    name = 'Engine RPM'; unit = 'rpm';
-                case 'motorTorque'
-                    name = 'Cascadia Cascadia Calculated Torque'; unit = 'Nm';
-                case 'motorTorqueRequested'
-                    name = 'Requested Motor Torque Command'; unit = 'Nm';
-                case 'motorTorquePowerLimitNm'
-                    name = 'Pack Power Motor Torque Limit'; unit = 'Nm';
-                case 'motorTorquePowerLimitActive'
-                    name = 'Pack Power Torque Limit Active'; unit = 'bool';
-                case 'packVoltageV'
-                    name = 'Pack Voltage'; unit = 'V';
-                case 'packCurrentA'
-                    name = 'Pack Current'; unit = 'A';
-                case 'packPowerW'
-                    name = 'Pack Power'; unit = 'W';
-                case 'F_brake'
-                    name = 'Brake Total Force'; unit = 'N';
-                case 'drivenWheelRPM'
-                    name = 'Driven Wheel RPM'; unit = 'rpm';
-                case 'tireSpeed_FL'
-                    name = 'Wheel Speed Front Left Sensor Linear'; unit = 'm/s';
-                case 'tireSpeed_FR'
-                    name = 'Wheel Speed Front Right Sensor Linear'; unit = 'm/s';
-                case 'tireSpeed_RL'
-                    name = 'Wheel Speed Rear Left Sensor Linear'; unit = 'm/s';
-                case 'tireSpeed_RR'
-                    name = 'Wheel Speed Rear Right Sensor Linear'; unit = 'm/s';
-                case 'rpmLimitActive'
-                    name = 'RPM Limit Active'; unit = 'bool';
-                case 'onTrack'
-                    name = 'On Track'; unit = 'bool';
-                case 'trackWidth'
-                    name = 'Track Width'; unit = 'm';
-                case 'trackLimitMargin'
-                    name = 'Track Limit Margin'; unit = 'm';
-                otherwise
-                    name = lts.telemetry.TelemetryExporter.fieldToChannelName(field);
-                    unit = lts.telemetry.TelemetryExporter.inferUnit(field);
+            corners = {'FL','FR','RL','RR'};
+            cornerNames = {'Front Left','Front Right','Rear Left','Rear Right'};
+            for i = 1:numel(corners)
+                if strcmp(field, ['replayWheelSpeed' corners{i}])
+                    name = ['Replay Wheel Speed ' cornerNames{i}]; unit = 'm/s'; return;
+                elseif strcmp(field, ['wheelSpeedError' corners{i}])
+                    name = ['Wheel Speed Error ' cornerNames{i}]; unit = 'm/s'; return;
+                elseif strcmp(field, ['tireSpeed_' corners{i}])
+                    name = ['Wheel Speed ' cornerNames{i} ' Sensor Linear']; unit = 'm/s'; return;
+                end
+            end
+
+            metadata = { ...
+                'time','Time','s'; 's','Distance','m'; ...
+                'controlS','Control Distance','m'; 'controlTime','Control Time','s'; ...
+                'speed','Speed mps','m/s'; 'speedKmh','Simulation Vehicle Speed Value','km/h'; ...
+                'gpsLatitude','GPS Latitude','deg'; 'gpsLongitude','GPS Longitude','deg'; ...
+                'ax','Long Accel Raw','m/s/s'; 'ay','Lat Accel Raw','m/s/s'; ...
+                'frontAxleAy','Front Axle Lat Accel Raw','m/s/s'; ...
+                'rearAxleAy','Rear Axle Lat Accel Raw','m/s/s'; ...
+                'throttle','Throttle Raw','ratio'; 'replayThrottle','Replay Throttle Input Raw','ratio'; ...
+                'brake','Brake Raw','ratio'; 'replayBrake','Replay Brake Input Raw','ratio'; ...
+                'brakeRequested','Brake Requested Raw','ratio'; ...
+                'brakePressureMode','Brake Pressure Mode','bool'; ...
+                'brakePressureFrontBar','Brake Pressure Front','bar'; ...
+                'brakePressureRearBar','Brake Pressure Rear','bar'; ...
+                'replayBrakePressureFrontBar','Replay Brake Pressure Front','bar'; ...
+                'replayBrakePressureRearBar','Replay Brake Pressure Rear','bar'; ...
+                'replayRegenTorqueNm','Replay Regen Torque','Nm'; ...
+                'replayMotorTorqueCommandNm','Replay Motor Torque Command','Nm'; ...
+                'replayMotorTorqueDeliveredNm','Replay Motor Torque Delivered','Nm'; ...
+                'replayMotorRpm','Replay Motor RPM','rpm'; ...
+                'replayPackVoltageV','Replay Pack Voltage','V'; ...
+                'replayPackCurrentA','Replay Pack Current','A'; ...
+                'replayPackPowerW','Replay Pack Power','W'; ...
+                'steer','Steer Raw','rad'; 'replaySteer','Replay Steer Input Raw','rad'; ...
+                'replaySpeed','Replay Speed Input','m/s'; ...
+                'replayLatAccelG','Replay Lateral Acceleration','G'; ...
+                'replayFrontLatAccelG','Replay Front Lateral Acceleration','G'; ...
+                'replayRearLatAccelG','Replay Rear Lateral Acceleration','G'; ...
+                'replayLongAccelG','Replay Longitudinal Acceleration','G'; ...
+                'replayFrontLongAccelG','Replay Front Longitudinal Acceleration','G'; ...
+                'replayRearLongAccelG','Replay Rear Longitudinal Acceleration','G'; ...
+                'replayYawRate','Replay Yaw Rate','rad/s'; ...
+                'targetSpeed','Target Speed','m/s'; 'axRef','Target Long Accel','m/s/s'; ...
+                'speedError','Speed Error','m/s'; ...
+                'targetLateralError','Target Lateral Error','m'; ...
+                'lineCurvature','Racing Line Curvature','1/m'; ...
+                'heading','Heading Raw','rad'; 'curvature','Curvature','1/m'; ...
+                'motorRPM','Engine RPM','rpm'; ...
+                'motorTorque','Cascadia Cascadia Calculated Torque','Nm'; ...
+                'motorTorqueRequested','Requested Motor Torque Command','Nm'; ...
+                'motorTorquePowerLimitNm','Pack Power Motor Torque Limit','Nm'; ...
+                'motorTorquePowerLimitActive','Pack Power Torque Limit Active','bool'; ...
+                'packVoltageV','Pack Voltage','V'; 'packCurrentA','Pack Current','A'; ...
+                'packPowerW','Pack Power','W'; 'F_brake','Brake Total Force','N'; ...
+                'drivenWheelRPM','Driven Wheel RPM','rpm'; ...
+                'rpmLimitActive','RPM Limit Active','bool'; 'onTrack','On Track','bool'; ...
+                'trackWidth','Track Width','m'; 'trackLimitMargin','Track Limit Margin','m'};
+            idx = find(strcmp(field, metadata(:, 1)), 1);
+            if isempty(idx)
+                name = lts.telemetry.TelemetryExporter.fieldToChannelName(field);
+                unit = lts.telemetry.TelemetryExporter.inferUnit(field);
+            else
+                name = metadata{idx, 2};
+                unit = metadata{idx, 3};
             end
         end
 
@@ -798,7 +701,8 @@ classdef TelemetryExporter
                     startsWith(field, 'aeroFz_') || startsWith(field, 'brakeGrip_') || ...
                     startsWith(field, 'suspensionForce_') || ...
                     startsWith(field, 'antiRollBarForce_') || ...
-                    startsWith(field, 'suspensionDemand_')
+                    startsWith(field, 'suspensionDemand_') || ...
+                    startsWith(field, 'relaxedFz_')
                 unit = 'N';
             elseif contains(field, 'Torque') || contains(field, 'Moment')
                 unit = 'Nm';
@@ -877,18 +781,6 @@ classdef TelemetryExporter
                 rowFormat = [repmat('%.9g,', 1, nCols - 1) '%.9g\n'];
             end
             fprintf(fid, rowFormat, tableData.values.');
-        end
-
-        function row = numericCsvRow(values)
-            cells = cell(1, numel(values));
-            for i = 1:numel(values)
-                if isnan(values(i))
-                    cells{i} = '';
-                else
-                    cells{i} = sprintf('%.9g', values(i));
-                end
-            end
-            row = strjoin(cells, ',');
         end
 
         function row = csvRow(values)

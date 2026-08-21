@@ -1,13 +1,32 @@
-function [stateLog, lapTime] = run_simulation()
+function [stateLog, lapTime] = run_simulation(varargin)
 % RUN_SIMULATION FSAE Transient Lap Time Simulation
 % Entry point function that configures and runs the simulation
 %
+%   run_simulation()                                    % current defaults
+%   run_simulation('Car', 'R26_base', 'Track', 'skidpad', 'dt', 0.001, ...
+%       'ShowPlots', false, 'ExportMoTeC', false)
+%   [stateLog, lapTime] = run_simulation(...)
+%
+% Name/value parameters (all optional, defaults shown):
+%   'Track'       'skidpad'  TestTrack type ('straight10', 'straight',
+%                            'straight75', 'oval', 'skidpad', 'autocross',
+%                            'busstop', 'slalom', '90turn') or '2026enduro'
+%                            to load the surveyed endurance .mat.
+%   'Car'         'R25'      Vehicle config name: a function in
+%                            src/+lts/+vehicles/<name>.m ('R25',
+%                            'R25_correlation_tuning', 'R26_base',
+%                            'baseline').
+%   'TrackFile'   'tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat'
+%                            .mat loaded for Track='2026enduro'.
+%   'ShowPlots'   false      Plot all graphs after the simulation completes.
+%   'SingleWindow' false     With ShowPlots, draw all graphs in one window.
+%   'ExportMoTeC' true       Export MoTeC CSV and .ld files.
+%   'dt'          0.001      Simulation timestep [s].
+%
 % Architecture:
 %   - The CAR is defined by a lts.vehicle.VehicleConfig from lts.vehicles
-%     (e.g. lts.vehicles.baseline). Swap cars by changing that one line.
+%     (e.g. lts.vehicles.baseline). Swap cars via the 'Car' parameter.
 %   - lts.vehicle.VehicleManager.fromConfig turns a config into a wired vehicle.
-%   - The TRACK, driver tuning, and timestep are scenario settings and
-%     stay in this script.
 %   - lts.driver.DriverModel decides throttle/brake inputs based on track lookahead.
 %   - lts.simulation.Simulator runs the physics loop: state + inputs -> next state.
 
@@ -16,31 +35,41 @@ stateLog = [];
 lapTime = NaN;
 
 %% ====================================================================
-%  SELECT TRACK TYPE
-%  Options: 'straight10', 'straight', 'straight75', 'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn', '2026enduro'
+%  PARSE NAME/VALUE ARGUMENTS
 %  ====================================================================
-trackType = 'skidpad';
+carsFolder = fullfile(lts.util.repoRoot(mfilename('fullpath')), ...
+    'src', '+lts', '+vehicles');
+carFiles = dir(fullfile(carsFolder, '*.m'));
+carChoices = sort(erase({carFiles.name}, '.m'));   % every function in +vehicles/
 
-%% ====================================================================
-%  SELECT VEHICLE CONFIGURATION
-%  Add new cars in src/+lts/+vehicles/<name>.m, then reference them here.
-%  ====================================================================
-config = lts.vehicles.R25();
+trackChoices = {'2026enduro', 'straight10', 'straight', 'straight75', ...
+    'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn'};
 
-%% ====================================================================
-%  DISPLAY OPTIONS
-%  Set to true to show all graphs in a single window
-%  ====================================================================
-singleWindow = false;
+parser = inputParser;
+addParameter(parser, 'Track', 'skidpad', ...
+    @(x) validatestring(x, trackChoices));
+addParameter(parser, 'Car', 'R25', ...
+    @(x) validatestring(x, carChoices));
+addParameter(parser, 'TrackFile', ...
+    fullfile('tracks', 'endurance_track_grid_25ft_from_matlab_smoothed.mat'), ...
+    @(x) validateattributes(x, {'char', 'string'}, {'scalartext'}));
+addParameter(parser, 'ShowPlots', false, ...
+    @(x) validateattributes(x, {'logical'}, {'scalar'}));
+addParameter(parser, 'SingleWindow', false, ...
+    @(x) validateattributes(x, {'logical'}, {'scalar'}));
+addParameter(parser, 'ExportMoTeC', true, ...
+    @(x) validateattributes(x, {'logical'}, {'scalar'}));
+addParameter(parser, 'dt', 0.001, ...
+    @(x) validateattributes(x, {'numeric'}, {'scalar', 'positive'}));
+parse(parser, varargin{:});
+args = parser.Results;
 
-% Set to false to skip all graphs after the simulation completes.
-showPlots = false;
-
-% Export MoTeC CSV and .ld files after the simulation completes.
-exportMoTeC = true;
-
-% Simulation timestep [s]
-dt = 0.001;
+trackType = args.Track;
+carName = args.Car;
+showPlots = args.ShowPlots;
+singleWindow = args.SingleWindow;
+exportMoTeC = args.ExportMoTeC;
+dt = args.dt;
 
 fprintf('=== FSAE Transient Lap Time Simulation ===\n\n');
 
@@ -52,9 +81,13 @@ if lower(trackType) == "2026enduro"
     % bakes this into points_m ordering, but passing it here makes the
     % intent explicit and forces a flip + warning if the .mat on disk was
     % re-exported in the opposite direction (or is a stale copy).
-    track = lts.components.WaypointTrack.loadMat( ...
-        'tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
-    track.Width = 5.0;
+    % Track widths (left/right per waypoint) are loaded from the file as
+    % exported by the fsae track image tool; do not override them here.
+    trackFile = char(args.TrackFile);
+    if ~isabsolutepath(trackFile)
+        trackFile = fullfile(lts.util.repoRoot(mfilename('fullpath')), trackFile);
+    end
+    track = lts.components.WaypointTrack.loadMat(trackFile);
     fprintf('Track: 2026 Endurance (''%s'', %.1f m, %d points, direction: %s)\n', ...
         trackType, track.getTotalLength(), size(track.getTrackPoints(), 1), ...
         track.getDirection());
@@ -68,6 +101,7 @@ fprintf('\n');
 %% ====================================================================
 %  BUILD VEHICLE FROM CONFIG
 %  ====================================================================
+config = feval(['lts.vehicles.' carName]);
 vehicle = lts.vehicle.VehicleManager.fromConfig(config, track, dt);
 
 %% ====================================================================

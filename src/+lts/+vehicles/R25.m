@@ -82,6 +82,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                            %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.034977, ...                     %   [CSV r33: 34.977 mm]
         'rollCenterLateral', 0.013469, ...                    %   [CSV r34: 13.469 mm lateral at 1g]
+        'antiDiveFraction', 0, ...                            %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.3); 0 = spring-only pitch path
         'casterAngle',      4 * pi / 180, ...                 %   [CSV r35: 4 deg]
         'mechanicalTrail',  0.0143, ...                       %   [CSV r35: 14.3 mm] [m]
         'scrubRadius',      0.02093, ...                      %   [CSV r35: 20.93 mm] [m]
@@ -94,6 +95,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                             %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.050496, ...                     %   [CSV r33: 50.496 mm]
         'rollCenterLateral', 0.024413, ...                    %   [CSV r34: 24.413 mm lateral at 1g]
+        'antiSquatFraction', 0, ...                           %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.4); 0 = spring-only pitch path
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
         'scrubRadius',      0, ...
@@ -152,28 +154,29 @@ function cfg = R25()
     %  TIRE
     %  Pacejka Magic Formula (MF 6.1) via MFeval; tirFile lives in +Tire/.
     %  ====================================================================
-    % CSV r14 lists the Hoosier 43075 16.0x7.5-10 R20. The TIR below starts
-    % from the measured 43100 18.0x6.0-10 R20 coefficients and applies
-    % 43075 geometry plus physically constrained stiffness/trail scales.
-    % wheelRadius is the installed effective rolling radius; the TIR keeps
-    % Hoosier's larger unloaded radius separately.
-    % At equal load and pressure, the 17.7% wider target tread implies a
-    % contact patch about 15% shorter, while its roughly 23% shorter sidewall
-    % raises carcass stiffness. Geometry alone would therefore suggest a
-    % higher scale than the effective value used here. The lap5 driven-wheel
-    % carrier speed provides a direct in-car calibration: motor RPM divided
-    % by the specified 3.36 final drive and multiplied by the 0.2032 m rolling
-    % radius exposes the torque-dependent driven-wheel slip independently of
-    % the scale-inconsistent RR linear channel. LKX=0.67 matches that measured
-    % torque/slip slope and remains an effective correlation scale for the
-    % inherited 43100 coefficients, not a claimed standalone 43075 material
-    % property.
-    % Preserve the geometry-derived 0.255 m lateral relaxation length. The
-    % longitudinal contact-patch response is much shorter: using 0.255 m for
-    % slip ratio adds about 18 ms of force lag at 14 m/s and excites a
-    % nonphysical 14-15 Hz pitch/load oscillation at the corrected LKX.
-    % A separate 0.05 m longitudinal length removes that feedback without
-    % changing lateral response.
+    % CSV r14 lists the Hoosier 43075 16.0x7.5-10 R20, but no independently
+    % measured 43075 TIR is available. Use the measured 43100 source TIR as an
+    % explicit component prior and retain the installed 43075 rolling radius.
+    % The former "- Scaled" file contains a lap-5-derived effective LKX and is
+    % now applied only by R25_correlation_tuning as a legacy diagnostic.
+    % Relaxation: keep the geometry-derived 0.255 m length shared by lateral
+    % and longitudinal slip. The former separate 0.05 m longitudinal length
+    % was a numerical de-tune: it suppressed a 14-15 Hz pitch/load
+    % oscillation that is actually caused by the tire force responding
+    % instantaneously to normal-load changes (Fx -> ax -> attitude -> Fz ->
+    % Cx/mu*Fz -> Fx positive feedback through the sprung-mass dynamics).
+    % The contact-patch load-response filter below supplies the missing
+    % physics instead, so the longitudinal length no longer carries a
+    % stability burden. (Literature note: measured sigma_kappa is often
+    % 1.5-3x shorter than sigma_alpha because the fore-aft carcass is much
+    % stiffer than the sidewall; introduce a split only when FSAE tire
+    % transient data identifies one.)
+    % The load-response length uses the same contact-patch transport scale
+    % as the slip relaxation (0.255 m): the patch pressure profile rebuilds
+    % as the tire rolls roughly a relaxation length after a load change.
+    % A shorter value (one 6.2 in contact length, 0.157 m) also stabilizes
+    % the loop but leaves a small dt-sensitive 15 Hz launch ripple; 0.255 m
+    % leaves the smoothest, timestep-converged launch transient.
     % LKY=1.05 combines the shorter brush contact length with the dominant
     % increase in carcass stiffness from the wider tread and shorter sidewall.
     % Peak-friction scales remain unity because both source and target use
@@ -194,10 +197,11 @@ function cfg = R25()
         (wheelAssemblyMassKg - tireMassKg) * rimRadiusM^2;
     wheelAssemblyInertia = tirePolarInertia + remainingAssemblyInertia;
     cfg.tire = struct( ...
-        'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir', ... % [verify vs CSV r14 tire size]
+        'tirFile', 'Hoosier 43100 18.0x6.0-10 R20_7.tir', ... % measured source-tire prior; actual 43075 TIR unavailable
         'wheelInertia', wheelAssemblyInertia, ... % 0.13575 kg*m^2 from 13 lb assembly
         'relaxationLength', 0.255, ...   % lateral: 0.30 m * (6.2/7.3) [m]
-        'longitudinalRelaxationLength', 0.05, ... % separate slip-ratio force lag [m]
+        'longitudinalRelaxationLength', 0.10, ... % driven-wheel slip lag: shorter than the lateral carcass response (typ. 0.05-0.10 m); validated stable with the attitude predictor (was NaN/shared 0.255)
+        'normalLoadRelaxationLength', 0.255, ... % dual role: patch-transport lag at speed; low-speed launch smoothing (sigma/V_eff floor ~ 0.26 s time constant at launch protects traction — predictor cannot cover this regime, see scripts/audit_stagger_validation.m + scripts/dbg_laptime.m)
         'wheelRadius', 0.2032, ...       % [CSV r14: 16.0 in tire diameter / 2]
         'rollingResistanceCoeff', 0.015, ... % [not in spec sheet]
         'bearingDragCoeff', 0);          % [not in spec sheet]

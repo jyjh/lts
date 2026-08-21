@@ -1,5 +1,5 @@
 classdef TrackReference
-    % TRACKREFERENCE Helpers for route tiling, reference lookup, and projection.
+    % Track tiling, lookup, and world-position projection.
 
     methods (Static)
         function laps = warmupLaps(track)
@@ -34,222 +34,205 @@ classdef TrackReference
             closed = logical(closed);
         end
 
-        function [points, curvature, mu, heading] = repeatClosed(points, curvature, mu, heading, lapCount)
+        function [points, curvature, mu, heading] = repeatClosed( ...
+                points, curvature, mu, heading, lapCount)
             curvature = curvature(:);
             mu = mu(:);
             heading = heading(:);
             lapCount = max(1, round(lapCount));
 
-            basePoints = points;
-            baseCurvature = curvature;
-            baseMu = mu;
-            baseHeading = heading;
-            hasClosurePoint = norm(basePoints(1, :) - basePoints(end, :)) <= 0.05;
-            if ~hasClosurePoint
-                % Track preprocessing removes a duplicate endpoint. Restore
-                % it here so the final-to-initial segment is simulated even
-                % for a single requested lap.
-                basePoints = [basePoints; basePoints(1, :)];
-                baseCurvature = [baseCurvature; baseCurvature(1)];
-                baseMu = [baseMu; baseMu(1)];
-                baseHeading = [baseHeading; baseHeading(1)];
+            if norm(points(1, :) - points(end, :)) > 0.05
+                points = [points; points(1, :)];
+                curvature = [curvature; curvature(1)];
+                mu = [mu; mu(1)];
+                heading = [heading; heading(1)];
             end
+            if lapCount > 1
+                points = [points; repmat(points(2:end, :), lapCount - 1, 1)];
+                curvature = [curvature; repmat(curvature(2:end), lapCount - 1, 1)];
+                mu = [mu; repmat(mu(2:end), lapCount - 1, 1)];
+                heading = [heading; repmat(heading(2:end), lapCount - 1, 1)];
+            end
+        end
 
-            points = basePoints;
-            curvature = baseCurvature;
-            mu = baseMu;
-            heading = baseHeading;
-            for lapIdx = 2:lapCount %#ok<NASGU>
-                points = [points; basePoints(2:end, :)]; %#ok<AGROW>
-                curvature = [curvature; baseCurvature(2:end)]; %#ok<AGROW>
-                mu = [mu; baseMu(2:end)]; %#ok<AGROW>
-                heading = [heading; baseHeading(2:end)]; %#ok<AGROW>
+        function values = repeatClosedColumn(values, hasClosurePoint, lapCount)
+            values = values(:);
+            lapCount = max(1, round(lapCount));
+            if ~hasClosurePoint
+                values = [values; values(1)];
+            end
+            if lapCount > 1
+                values = [values; repmat(values(2:end), lapCount - 1, 1)];
             end
         end
 
         function ref = referenceAtProgress(s, x, y, trackData)
             s = max(0, min(trackData.length, s));
-            idx = find(trackData.arcLen <= s, 1, 'last');
-            if isempty(idx)
-                idx = 1;
-            end
-            idx = max(1, min(idx, trackData.nPts));
-
-            if idx < trackData.nPts && trackData.arcLen(idx+1) > trackData.arcLen(idx)
-                s0 = trackData.arcLen(idx);
-                s1 = trackData.arcLen(idx+1);
-                t = (s - s0) / max(s1 - s0, eps);
-                refPoint = (1 - t) * trackData.points(idx, :) + ...
-                    t * trackData.points(idx+1, :);
-                refHeading = trackData.heading(idx);
-                refCurvature = trackData.curvature(idx);
-                refMu = trackData.mu(idx);
+            idx = min(find(trackData.arcLen <= s, 1, 'last'), trackData.nPts);
+            if idx < trackData.nPts && trackData.arcLen(idx + 1) > trackData.arcLen(idx)
+                t = (s - trackData.arcLen(idx)) / ...
+                    (trackData.arcLen(idx + 1) - trackData.arcLen(idx));
+                point = (1 - t) * trackData.points(idx, :) + ...
+                    t * trackData.points(idx + 1, :);
             else
-                refPoint = trackData.points(idx, :);
-                refHeading = trackData.heading(idx);
-                refCurvature = trackData.curvature(idx);
-                refMu = trackData.mu(idx);
+                point = trackData.points(idx, :);
             end
-
-            dx = x - refPoint(1);
-            dy = y - refPoint(2);
-            lateralError = dx * (-sin(refHeading)) + dy * cos(refHeading);
-            trackHalfWidth = trackData.trackHalfWidth;
-            trackLimitMargin = trackHalfWidth - abs(lateralError);
-            onTrack = trackLimitMargin >= -1e-9;
-
-            ref = struct( ...
-                'idx', idx, ...
-                's', s, ...
-                'x', refPoint(1), ...
-                'y', refPoint(2), ...
-                'heading', refHeading, ...
-                'curvature', refCurvature, ...
-                'mu', refMu, ...
-                'lateralError', lateralError, ...
-                'trackWidth', trackData.trackWidth, ...
-                'trackHalfWidth', trackHalfWidth, ...
-                'trackLimitMargin', trackLimitMargin, ...
-                'onTrack', onTrack);
+            [left, right] = lts.simulation.TrackReference.sideHalfWidthsAt( ...
+                trackData, idx);
+            ref = lts.simulation.TrackReference.makeReference( ...
+                idx, s, point, trackData.heading(idx), trackData.curvature(idx), ...
+                trackData.mu(idx), x, y, trackData, left, right);
         end
 
         function ref = projectToReference(x, y, trackData, previousIdx)
-            % PROJECTTOREFERENCE Project world position to nearest track segment.
-            %
-            % The local search window is a speed optimization that assumes the
-            % car advances mostly forward along the route. If the best local
-            % segment is suspiciously far away or lies on the search boundary,
-            % a full-track scan recovers from spins, large timesteps, or a
-            % badly initialized reference index.
             if nargin < 4 || isempty(previousIdx) || previousIdx < 1
                 previousIdx = 1;
             end
 
-            nSegments = max(trackData.nPts - 1, 1);
-            hasSegmentCache = isfield(trackData, 'segmentVectors') && ...
+            cached = isfield(trackData, 'segmentVectors') && ...
                 isfield(trackData, 'segmentLengths') && ...
                 isfield(trackData, 'segmentInvLen2');
-            if hasSegmentCache
-                nSegments = max(size(trackData.segmentVectors, 1), 1);
+            if cached
+                nSegments = size(trackData.segmentVectors, 1);
+            else
+                nSegments = trackData.nPts - 1;
             end
             previousIdx = max(1, min(previousIdx, trackData.nPts));
-            backWindow = 10;
-            forwardWindow = 80;
-            searchStart = max(1, min(previousIdx - backWindow, nSegments));
-            searchEnd = min(nSegments, max(previousIdx + forwardWindow, searchStart));
+            searchStart = max(1, min(previousIdx - 10, nSegments));
+            searchEnd = min(nSegments, max(previousIdx + 80, searchStart));
 
             [bestDist2, bestIdx, bestT, bestPoint] = ...
                 lts.simulation.TrackReference.nearestSegmentProjection( ...
-                    x, y, trackData, searchStart, searchEnd, hasSegmentCache);
-
-            localHitBoundary = (bestIdx == searchStart && searchStart > 1) || ...
+                    x, y, trackData, searchStart, searchEnd, cached);
+            hitBoundary = (bestIdx == searchStart && searchStart > 1) || ...
                 (bestIdx == searchEnd && searchEnd < nSegments);
-            fallbackDistance = max(2 * trackData.trackHalfWidth, 5);
-            if (localHitBoundary || bestDist2 > fallbackDistance^2) && ...
-                    (searchStart > 1 || searchEnd < nSegments)
-                [bestDist2, bestIdx, bestT, bestPoint] = ...
+            tooFar = bestDist2 > max(2 * trackData.trackHalfWidth, 5)^2;
+            if (hitBoundary || tooFar) && (searchStart > 1 || searchEnd < nSegments)
+                [~, bestIdx, bestT, bestPoint] = ...
                     lts.simulation.TrackReference.nearestSegmentProjection( ...
-                        x, y, trackData, 1, nSegments, hasSegmentCache);
+                        x, y, trackData, 1, nSegments, cached);
             end
 
-            if hasSegmentCache
+            if cached
                 segmentLength = trackData.segmentLengths(bestIdx);
+                segment = trackData.segmentVectors(bestIdx, :);
             else
                 segmentLength = trackData.arcLen(bestIdx + 1) - trackData.arcLen(bestIdx);
+                segment = trackData.points(bestIdx + 1, :) - trackData.points(bestIdx, :);
             end
-            refS = trackData.arcLen(bestIdx) + bestT * max(segmentLength, 0);
-            refS = max(0, min(trackData.length, refS));
-
+            refS = max(0, min(trackData.length, ...
+                trackData.arcLen(bestIdx) + bestT * max(segmentLength, 0)));
             if segmentLength > eps
-                if hasSegmentCache
-                    v = trackData.segmentVectors(bestIdx, :);
-                else
-                    p0 = trackData.points(bestIdx, :);
-                    p1 = trackData.points(bestIdx + 1, :);
-                    v = p1 - p0;
-                end
-                refHeading = atan2(v(2), v(1));
+                refHeading = atan2(segment(2), segment(1));
             else
                 refHeading = trackData.heading(bestIdx);
             end
 
-            interpIdx = min(bestIdx + 1, trackData.nPts);
-            refCurvature = (1 - bestT) * trackData.curvature(bestIdx) + ...
-                bestT * trackData.curvature(interpIdx);
-            refMu = (1 - bestT) * trackData.mu(bestIdx) + ...
-                bestT * trackData.mu(interpIdx);
-
-            dx = x - bestPoint(1);
-            dy = y - bestPoint(2);
-            lateralError = dx * (-sin(refHeading)) + dy * cos(refHeading);
+            nextIdx = min(bestIdx + 1, trackData.nPts);
+            curvature = (1 - bestT) * trackData.curvature(bestIdx) + ...
+                bestT * trackData.curvature(nextIdx);
+            mu = (1 - bestT) * trackData.mu(bestIdx) + bestT * trackData.mu(nextIdx);
+            [left, right] = lts.simulation.TrackReference.sideHalfWidthsInterp( ...
+                trackData, bestIdx, nextIdx, bestT);
             refIdx = min(bestIdx + double(bestT > 0.5), trackData.nPts);
-            trackHalfWidth = trackData.trackHalfWidth;
-            trackLimitMargin = trackHalfWidth - abs(lateralError);
-            onTrack = trackLimitMargin >= -1e-9;
+            ref = lts.simulation.TrackReference.makeReference( ...
+                refIdx, refS, bestPoint, refHeading, curvature, mu, ...
+                x, y, trackData, left, right);
+        end
 
-            ref = struct( ...
-                'idx', refIdx, ...
-                's', refS, ...
-                'x', bestPoint(1), ...
-                'y', bestPoint(2), ...
-                'heading', refHeading, ...
-                'curvature', refCurvature, ...
-                'mu', refMu, ...
-                'lateralError', lateralError, ...
-                'trackWidth', trackData.trackWidth, ...
-                'trackHalfWidth', trackHalfWidth, ...
-                'trackLimitMargin', trackLimitMargin, ...
-                'onTrack', onTrack);
+        function [left, right] = sideHalfWidthsAt(trackData, idx)
+            if isfield(trackData, 'trackLeftHalfWidth') && ...
+                    isfield(trackData, 'trackRightHalfWidth') && ...
+                    ~isempty(trackData.trackLeftHalfWidth)
+                idx = max(1, min(idx, numel(trackData.trackLeftHalfWidth)));
+                left = trackData.trackLeftHalfWidth(idx);
+                right = trackData.trackRightHalfWidth(idx);
+            else
+                left = trackData.trackHalfWidth;
+                right = left;
+            end
+        end
+
+        function [left, right] = sideHalfWidthsInterp(trackData, idx0, idx1, t)
+            if isfield(trackData, 'trackLeftHalfWidth') && ...
+                    isfield(trackData, 'trackRightHalfWidth') && ...
+                    ~isempty(trackData.trackLeftHalfWidth)
+                l = trackData.trackLeftHalfWidth;
+                r = trackData.trackRightHalfWidth;
+                idx0 = max(1, min(idx0, numel(l)));
+                idx1 = max(1, min(idx1, numel(l)));
+                left = (1 - t) * l(idx0) + t * l(idx1);
+                right = (1 - t) * r(idx0) + t * r(idx1);
+            else
+                left = trackData.trackHalfWidth;
+                right = left;
+            end
+        end
+
+        function margin = sideMargin(left, right, lateralError, fallback)
+            if lateralError >= 0
+                halfWidth = left;
+            else
+                halfWidth = right;
+            end
+            if isempty(halfWidth) || ~all(isfinite(halfWidth)) || any(halfWidth <= 0)
+                halfWidth = fallback;
+            end
+            margin = halfWidth - abs(lateralError);
         end
 
         function trackData = precomputeSegments(trackData)
-            if ~isfield(trackData, 'points') || size(trackData.points, 1) < 2
-                trackData.segmentVectors = zeros(0, 2);
-                trackData.segmentLengths = zeros(0, 1);
-                trackData.segmentInvLen2 = zeros(0, 1);
-                return;
-            end
-            segmentVectors = diff(trackData.points, 1, 1);
-            segmentLengths = hypot(segmentVectors(:,1), segmentVectors(:,2));
-            len2 = segmentLengths.^2;
-            segmentInvLen2 = zeros(size(len2));
-            valid = len2 > eps;
-            segmentInvLen2(valid) = 1 ./ len2(valid);
-            trackData.segmentVectors = segmentVectors;
-            trackData.segmentLengths = segmentLengths;
-            trackData.segmentInvLen2 = segmentInvLen2;
+            vectors = diff(trackData.points, 1, 1);
+            lengths = hypot(vectors(:, 1), vectors(:, 2));
+            invLen2 = zeros(size(lengths));
+            valid = lengths > eps;
+            invLen2(valid) = 1 ./ lengths(valid).^2;
+            trackData.segmentVectors = vectors;
+            trackData.segmentLengths = lengths;
+            trackData.segmentInvLen2 = invLen2;
         end
 
-        function [bestDist2, bestIdx, bestT, bestPoint] = nearestSegmentProjection( ...
-                x, y, trackData, searchStart, searchEnd, hasSegmentCache)
-            idxRange = searchStart:searchEnd;
-            p0 = trackData.points(idxRange, :);
-            if hasSegmentCache
-                v = trackData.segmentVectors(idxRange, :);
-                invLen2 = trackData.segmentInvLen2(idxRange);
+        function [bestDist2, bestIdx, bestT, bestPoint] = ...
+                nearestSegmentProjection(x, y, trackData, searchStart, searchEnd, cached)
+            indices = searchStart:searchEnd;
+            p0 = trackData.points(indices, :);
+            if cached
+                vectors = trackData.segmentVectors(indices, :);
+                invLen2 = trackData.segmentInvLen2(indices);
             else
-                p1 = trackData.points(idxRange + 1, :);
-                v = p1 - p0;
-                len2 = sum(v.^2, 2);
+                vectors = trackData.points(indices + 1, :) - p0;
+                len2 = sum(vectors.^2, 2);
                 invLen2 = zeros(size(len2));
-                validLen = len2 > eps;
-                invLen2(validLen) = 1 ./ len2(validLen);
+                valid = len2 > eps;
+                invLen2(valid) = 1 ./ len2(valid);
             end
 
-            qx = x - p0(:, 1);
-            qy = y - p0(:, 2);
-            t = (qx .* v(:, 1) + qy .* v(:, 2)) .* invLen2(:);
-            t(invLen2(:) <= 0) = 0;
+            offset = [x - p0(:, 1), y - p0(:, 2)];
+            t = sum(offset .* vectors, 2) .* invLen2(:);
+            t(invLen2 <= 0) = 0;
             t = lts.util.saturate(t);
+            points = p0 + t .* vectors;
+            dist2 = sum(([x, y] - points).^2, 2);
+            [bestDist2, relativeIdx] = min(dist2);
+            bestIdx = indices(relativeIdx);
+            bestT = t(relativeIdx);
+            bestPoint = points(relativeIdx, :);
+        end
 
-            projX = p0(:, 1) + t .* v(:, 1);
-            projY = p0(:, 2) + t .* v(:, 2);
-            dist2 = (x - projX).^2 + (y - projY).^2;
-
-            [bestDist2, relIdx] = min(dist2);
-            bestIdx = idxRange(relIdx);
-            bestT = t(relIdx);
-            bestPoint = [projX(relIdx), projY(relIdx)];
+        function ref = makeReference(idx, s, point, heading, curvature, mu, ...
+                x, y, trackData, left, right)
+            offset = [x, y] - point;
+            lateralError = offset(1) * -sin(heading) + offset(2) * cos(heading);
+            margin = lts.simulation.TrackReference.sideMargin( ...
+                left, right, lateralError, trackData.trackHalfWidth);
+            ref = struct( ...
+                'idx', idx, 's', s, 'x', point(1), 'y', point(2), ...
+                'heading', heading, 'curvature', curvature, 'mu', mu, ...
+                'lateralError', lateralError, ...
+                'trackWidth', trackData.trackWidth, ...
+                'trackHalfWidth', trackData.trackHalfWidth, ...
+                'leftHalfWidth', left, 'rightHalfWidth', right, ...
+                'trackLimitMargin', margin, 'onTrack', margin >= -1e-9);
         end
     end
 end

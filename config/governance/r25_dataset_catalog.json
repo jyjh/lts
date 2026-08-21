@@ -1,0 +1,44 @@
+{
+  "schema": "lts.governance.dataset-catalog.v1",
+  "vehicle": "R25",
+  "datasets": [
+    {
+      "id": "r25-lap5-raw",
+      "role": "calibration",
+      "vehicleConfiguration": "R25 baseline",
+      "testDay": "unknown-legacy-log",
+      "sourceFile": "data/lap5_raw.ld",
+      "sha256": "4844e607d99c73aa110e03d0c74410d28c56fd2e75ebf3288e24bb2750d5c7e8",
+      "companionSources": [
+        {
+          "sourceFile": "data/lap5_raw.ldx",
+          "sha256": "8b475ed647a07b9341a23b79e17c4bc4bea922a9c6ef95ed733585bc4ee75652"
+        }
+      ],
+      "conditions": {
+        "status": "incomplete",
+        "note": "Weather, tire state, and track condition must be recovered before certification use."
+      },
+      "intervention": {}
+    },
+    {
+      "id": "r25-acceleration-raw",
+      "role": "calibration",
+      "vehicleConfiguration": "R25 baseline",
+      "testDay": "unknown-legacy-log",
+      "sourceFile": "data/accel.ld",
+      "sha256": "36e565011c73c23364e86034ca56d7b7883ef9167c29edff7f3d4108340a34ef",
+      "companionSources": [
+        {
+          "sourceFile": "data/accel.ldx",
+          "sha256": "5a2d11457dcdf072db5f0d4a25e89f7f65bf08bf32389e46e2d220e7d614301c"
+        }
+      ],
+      "conditions": {
+        "status": "incomplete",
+        "note": "Use only for longitudinal calibration until test metadata is recovered."
+      },
+      "intervention": {}
+    }
+  ]
+}

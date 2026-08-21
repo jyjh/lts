@@ -10,7 +10,7 @@ function cfg = R26_base()
     % To define a new car:
     %   1. Copy this file to +lts/+vehicles/<yourcar>.m.
     %   2. Edit the values below.
-    %   3. In lts.app.run_simulation:  config = lts.vehicles.<yourcar>();
+    %   3. Run it with:  lts.app.run_simulation('Car', '<yourcar>');
     %
     % Units: SI throughout (m, kg, N, s, rad, Pa).
 

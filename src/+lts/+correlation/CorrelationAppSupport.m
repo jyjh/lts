@@ -31,8 +31,10 @@ classdef CorrelationAppSupport
 
         function extractMoTeCLap(opts, replayCsv, manifestFile, repoRoot)
             script = fullfile(repoRoot, 'scripts', 'extract_motec_lap.py');
+            pythonToken = lts.util.validatePythonCommand( ...
+                opts.PythonCommand, 'run_correlation');
             args = { ...
-                char(opts.PythonCommand), script, ...
+                pythonToken, script, ...
                 '--input', char(opts.MoTeCFile), ...
                 '--output', replayCsv, ...
                 '--manifest', manifestFile, ...
@@ -40,13 +42,13 @@ classdef CorrelationAppSupport
 
             if ~isempty(opts.Lap)
                 args(end+1:end+2) = { ...
-                    '--laps', lts.correlation.CorrelationAppSupport.lapValue(opts.Lap)}; %#ok<AGROW>
+                    '--laps', lts.correlation.CorrelationAppSupport.lapValue(opts.Lap)};
             end
             if ~isempty(opts.LdxFile)
-                args(end+1:end+2) = {'--ldx', char(opts.LdxFile)}; %#ok<AGROW>
+                args(end+1:end+2) = {'--ldx', char(opts.LdxFile)};
             end
             if ~isempty(opts.ImportFrequency)
-                args(end+1:end+2) = {'--frequency', sprintf('%.9g', opts.ImportFrequency)}; %#ok<AGROW>
+                args(end+1:end+2) = {'--frequency', sprintf('%.9g', opts.ImportFrequency)};
             end
 
             command = lts.util.shellJoin(args);
@@ -97,7 +99,8 @@ classdef CorrelationAppSupport
 
             exportDir = fullfile(repoRoot, 'exports');
             base = fullfile(exportDir, sprintf('correlation_%s%s_%s_%s', ...
-                name, lapSuffix, char(config.name), datestr(now, 'yyyymmdd_HHMMSS')));
+                name, lapSuffix, char(config.name), ...
+                char(datetime('now', 'Format', 'yyyyMMdd_HHmmss'))));
         end
 
         function track = loadTrack(trackSpec, repoRoot)
@@ -111,7 +114,6 @@ classdef CorrelationAppSupport
                 track = lts.components.WaypointTrack.loadMat( ...
                     fullfile(repoRoot, 'tracks', ...
                     'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
-                track.Width = 5.0;
             elseif endsWith(lower(trackText), '.mat')
                 track = lts.components.WaypointTrack.loadMat(trackText);
             elseif endsWith(lower(trackText), '.csv')
@@ -129,6 +131,7 @@ classdef CorrelationAppSupport
             elseif ischar(configSpec) || isstring(configSpec)
                 name = char(configSpec);
                 if contains(name, '.')
+                    lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(name);
                     fn = str2func(name);
                 else
                     fn = str2func(['lts.vehicles.' name]);
@@ -172,10 +175,7 @@ classdef CorrelationAppSupport
             end
         end
 
-        function preflight(profile, track, vehicle, surfaceMu, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
-            % surfaceMu is a deprecated compatibility input. Correlation
-            % reporting follows the simulator's fixed unity-surface contract.
-            surfaceMu = 1.0;
+        function preflight(profile, track, vehicle, ~, manifestFile, brakeMode, powertrainMode, limitMotorTorqueByPackPower, packPowerAdvanceS, motorTorqueCommandDelayS)
             if nargin < 7 || isempty(powertrainMode)
                 powertrainMode = "throttle";
             end
@@ -196,7 +196,7 @@ classdef CorrelationAppSupport
             fprintf('\n=== Correlation Preflight ===\n');
             lts.correlation.CorrelationAppSupport.printExtractionSummary(manifestFile);
             fprintf('Reference mode: free-space replay\n');
-            fprintf('Surface mu: %.3f\n', surfaceMu);
+            fprintf('Surface mu: %.3f\n', 1.0);
             fprintf('Brake mode: %s\n', char(brakeMode));
             fprintf('Powertrain mode: %s\n', char(powertrainMode));
             fprintf('Pack power torque cap: %s\n', packCapText);
@@ -315,7 +315,6 @@ classdef CorrelationAppSupport
                 return;
             end
 
-            correlation = [];
             if isobject(config) && isprop(config, 'correlation')
                 correlation = config.correlation;
             elseif isstruct(config) && isfield(config, 'correlation')
@@ -617,14 +616,21 @@ classdef CorrelationAppSupport
             if strcmpi(ext, '.m')
                 packageName = lts.correlation.CorrelationAppSupport.packageNameFromFolder(folder);
                 if ~isempty(packageName)
-                    fn = str2func([packageName '.' baseName]);
+                    resolved = [packageName '.' baseName];
+                    lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(resolved);
+                    fn = str2func(resolved);
                 else
+                    % Only addpath for folders inside the repository src tree.
+                    % A caller-supplied .m outside src would otherwise execute
+                    % arbitrary code via str2func(baseName).
                     if ~isempty(folder)
+                        lts.correlation.CorrelationAppSupport.assertTrustedFolder(folder);
                         addpath(folder);
                     end
                     fn = str2func(baseName);
                 end
             elseif contains(name, '.')
+                lts.correlation.CorrelationAppSupport.assertTrustedFunctionName(name);
                 fn = str2func(name);
             else
                 fn = str2func(['lts.vehicles.' name]);
@@ -661,6 +667,44 @@ classdef CorrelationAppSupport
                 else
                     config.(field) = overrideValue;
                 end
+            end
+        end
+
+        function assertTrustedFunctionName(name)
+            % Restrict executable function names to project packages.
+            trustedPrefixes = {'lts.vehicles.', 'lts.components.', ...
+                'lts.vehicle.', 'lts.correlation.', 'lts.prediction.', ...
+                'lts.calibration.', 'lts.governance.'};
+            ok = false;
+            for i = 1:numel(trustedPrefixes)
+                if startsWith(name, trustedPrefixes{i})
+                    ok = true;
+                    break;
+                end
+            end
+            if ~ok
+                error('run_correlation:UntrustedFunctionName', ...
+                    ['Vehicle/tuning function "%s" is not in a trusted lts.* ' ...
+                    'package. Resolution is restricted to the project''s own ' ...
+                    'packages to prevent executing arbitrary code.'], name);
+            end
+        end
+
+        function assertTrustedFolder(folder)
+            % Restrict addpath to the repository source tree.
+            folder = char(folder);
+            if ~isempty(folder) && ~exist(folder, 'dir')
+                error('run_correlation:UntrustedFolder', ...
+                    'Tuning file folder "%s" does not exist.', folder);
+            end
+            srcRoot = fullfile(lts.util.repoRoot(mfilename('fullpath')), 'src');
+            canonicalFolder = char(java.io.File(folder).getCanonicalPath());
+            canonicalRoot = char(java.io.File(srcRoot).getCanonicalPath());
+            if ~startsWith(canonicalFolder, [canonicalRoot, filesep])
+                error('run_correlation:UntrustedFolder', ...
+                    ['Tuning file folder "%s" is outside the repository src ' ...
+                    'tree; addpath is restricted to prevent executing ' ...
+                    'arbitrary code.'], folder);
             end
         end
     end

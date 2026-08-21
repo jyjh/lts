@@ -201,6 +201,35 @@ classdef CorrelationTrackAlignment
                 end
             end
 
+            % Forward the per-waypoint corridor through the rebase. Rebasing is
+            % a pure rotation of waypoint order (not a reversal), so the left
+            % and right sides keep their identity -- only the index order
+            % changes, with the same rotation applied to mu above. A scalar
+            % width track stays scalar.
+            widthArgs = {};
+            if ismethod(track, 'getTrackSideWidths')
+                [leftWidth, rightWidth] = track.getTrackSideWidths();
+                if numel(leftWidth) == size(points, 1) && numel(rightWidth) == size(points, 1)
+                    leftWidth = leftWidth(:);
+                    rightWidth = rightWidth(:);
+                    leftStart = (1 - t) * leftWidth(idx) + ...
+                        t * leftWidth(mod(idx, numel(leftWidth)) + 1);
+                    rightStart = (1 - t) * rightWidth(idx) + ...
+                        t * rightWidth(mod(idx, numel(rightWidth)) + 1);
+                    if t <= 1e-9
+                        rebasedLeft = [leftWidth(idx:end); leftWidth(1:idx-1)];
+                        rebasedRight = [rightWidth(idx:end); rightWidth(1:idx-1)];
+                    else
+                        rebasedLeft = [leftStart; leftWidth(idx+1:end); leftWidth(1:idx)];
+                        rebasedRight = [rightStart; rightWidth(idx+1:end); rightWidth(1:idx)];
+                    end
+                    widthArgs = {'LeftWidth', rebasedLeft, 'RightWidth', rebasedRight};
+                end
+            end
+            if isempty(widthArgs)
+                widthArgs = {'Width', track.getTrackWidth()};
+            end
+
             metadata = struct();
             if isprop(track, 'Metadata') && isstruct(track.Metadata)
                 metadata = track.Metadata;
@@ -214,7 +243,7 @@ classdef CorrelationTrackAlignment
             end
 
             trackOut = lts.components.WaypointTrack(rebasedPoints, ...
-                'Width', track.getTrackWidth(), ...
+                widthArgs{:}, ...
                 'Mu', rebasedMu, ...
                 'Closed', true, ...
                 'Name', sprintf('%s rebased %.1fm', name, startStationM), ...

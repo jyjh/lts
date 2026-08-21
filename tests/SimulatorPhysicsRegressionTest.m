@@ -2,13 +2,13 @@ function tests = SimulatorPhysicsRegressionTest
 tests = functiontests(localfunctions);
 end
 
-function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
-tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
-tire.relaxationLength = 0;
-powertrain = SimulatorZeroPowertrain();
-suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
-chassis = SimulatorChassisSpy();
-aero = SimulatorZeroAero();
+function testChassisStepUsesChassisDrivenSuspensionPath(testCase)
+    tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+    tire.relaxationLength = 0;
+    powertrain = SimulatorZeroPowertrain();
+    suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
+    chassis = SimulatorChassisSpy();
+    aero = SimulatorZeroAero();
 
 vehicle = lts.vehicle.VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
 vehicle.totalMass = 256;
@@ -39,7 +39,8 @@ input = struct('throttle', 0, 'brake', 0, 'steer', 0);
 
 simulator.step(state, input, ref);
 
-verifyEqual(testCase, suspension.algebraicCalls, 0);
+% The demanded-load (algebraic) path no longer exists; assert the step
+% resolves loads through the chassis-driven path.
 verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
@@ -527,13 +528,16 @@ verifyError(testCase, @() simulator.step(state, input, ref), ...
 end
 
 function testWheelIterationsDoNotMultiplyAppliedImpulse(testCase)
-dOmegaOne = zeroGripDrivenWheelDelta(1);
-dOmegaThree = zeroGripDrivenWheelDelta(3);
+[dOmegaOne, expectedDelta] = zeroGripDrivenWheelDelta(1);
+[dOmegaThree, expectedDeltaThree] = zeroGripDrivenWheelDelta(3);
 
 verifyGreaterThan(testCase, dOmegaOne, 0);
-% Fixed-point corrections may change the converged contact force, but must
-% not scale angular impulse in proportion to the iteration count.
-verifyEqual(testCase, dOmegaThree, dOmegaOne, 'RelTol', 0.15);
+% With the contact patches unloaded and resistance disabled, there is no
+% tire-force correction to distinguish the iterations: each must apply the
+% commanded driveline impulse exactly once.
+verifyEqual(testCase, expectedDeltaThree, expectedDelta, 'AbsTol', 0);
+verifyEqual(testCase, dOmegaOne, expectedDelta, 'AbsTol', 1e-12);
+verifyEqual(testCase, dOmegaThree, expectedDelta, 'AbsTol', 1e-12);
 end
 
 function testTireAligningMomentsContributeToYawMoment(testCase)
@@ -669,6 +673,46 @@ verifyEqual(testCase, state.speed, speed, 'AbsTol', 1e-3);
 verifyLessThan(testCase, abs(state.bodySlipAngle), 1e-5);
 end
 
+function testStraightLineVehicleSimulationConvergesAcrossTimesteps(testCase)
+% Exercise the complete R25 vehicle, driver, tire, chassis, aero, and
+% driveline chain. The finest run is the reference; coarser runs must remain
+% close in elapsed time, terminal state, and straight-line symmetry.
+dts = [0.001, 0.00075, 0.0005];
+results = repmat(struct( ...
+    'lapTime', NaN, 'finalSpeed', NaN, 'finalX', NaN, ...
+    'finalS', NaN, 'maxLateralExcursion', NaN), size(dts));
+
+for idx = 1:numel(dts)
+    results(idx) = straightLineVehicleResult(dts(idx));
+end
+
+lapTimes = [results.lapTime];
+finalSpeeds = [results.finalSpeed];
+finalX = [results.finalX];
+finalS = [results.finalS];
+maxLateralExcursion = [results.maxLateralExcursion];
+verifyTrue(testCase, all(isfinite([lapTimes, finalSpeeds, finalX, finalS])));
+verifyLessThan(testCase, max(maxLateralExcursion), 1e-10);
+
+fine = numel(dts);
+for idx = 1:fine-1
+    verifyEqual(testCase, lapTimes(idx), lapTimes(fine), 'AbsTol', 0.003);
+    verifyEqual(testCase, finalSpeeds(idx), finalSpeeds(fine), 'RelTol', 5e-4);
+    % Terminal position carries stop-phase quantization: the run ends on
+    % the first step whose projected arc length crosses the track end, so
+    % the world x overshoots by up to one coarse step of travel
+    % (~12 m/s * 0.001 s = 12 mm). Keep the tolerance above that floor;
+    % finalSpeed is the sharp trajectory-convergence metric.
+    verifyEqual(testCase, finalX(idx), finalX(fine), 'AbsTol', 0.015);
+    verifyEqual(testCase, finalS(idx), finalS(fine), 'AbsTol', 0.005);
+end
+
+% Refining from 1 ms through 0.75 ms must improve terminal-speed agreement
+% with the 0.5 ms result, rather than merely staying inside a broad envelope.
+verifyLessThan(testCase, abs(finalSpeeds(2) - finalSpeeds(fine)), ...
+    abs(finalSpeeds(1) - finalSpeeds(fine)));
+end
+
 function testLeanTelemetryAndMotecExportIncludeAxleAccelerations(testCase)
 simulator = lts.simulation.Simulator(lts.vehicle.VehicleManager([], [], [], [], []), [], 0.001);
 stateLog = simulator.createLeanStateLog(2);
@@ -796,6 +840,9 @@ vehicle.maxSpeed = 80;
 end
 
 function testPowertrainModeCacheTracksRuntimePolicyChanges(testCase)
+% The Simulator delegates torque-control to the powertrain's (inherited)
+% resolveTorques contract using the CURRENT mode, so runtime
+% powertrainMode changes are honored on every call.
 [vehicle, ~, ~] = directTorqueVehicle();
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 state = lts.simulation.VehicleState('speed', 10, 'vx', 10, 'vy', 0);
@@ -876,7 +923,7 @@ verifyEqual(testCase, forces.Fz_front * frontArm - ...
     forces.Fz_rear * rearArm, totalDownforce * xPosition, 'AbsTol', 1e-12);
 end
 
-function dOmega = zeroGripDrivenWheelDelta(iterations)
+function [dOmega, expectedDelta] = zeroGripDrivenWheelDelta(iterations)
 [vehicle, tire, ~] = directTorqueVehicle();
 % Isolate the applied driveline impulse with an unloaded contact patch.
 % Surface mu is deliberately not a force-scaling control anymore.
@@ -899,6 +946,27 @@ omega0 = tire.RL.angularVelocity;
 
 simulator.step(state, input, ref);
 dOmega = tire.RL.angularVelocity - omega0;
+expectedDelta = (input.motorTorqueCommandNm / 2) / ...
+    tire.wheelInertia * simulator.dt;
+end
+
+function result = straightLineVehicleResult(dt)
+track = lts.components.TestTrack('straight10');
+vehicle = lts.vehicle.VehicleManager.fromConfig( ...
+    lts.vehicles.R25(), track, dt, 'Verbose', false);
+driver = lts.driver.DriverModel(vehicle);
+simulator = lts.simulation.Simulator(vehicle, driver, dt);
+simulator.telemetryMode = "lean";
+simulator.verbose = false;
+initialState = lts.simulation.VehicleState('s', 0, 'speed', 0.1);
+[stateLog, lapTime] = simulator.simulate(initialState, track);
+
+result = struct( ...
+    'lapTime', lapTime, ...
+    'finalSpeed', stateLog.speed(end), ...
+    'finalX', stateLog.x(end), ...
+    'finalS', stateLog.s(end), ...
+    'maxLateralExcursion', max(abs(stateLog.y)));
 end
 
 function forces = packLimitedMotoringStep(iterations)
