@@ -297,6 +297,7 @@ verifyTrue(testCase, output.stages.identifiability.fullRank);
 end
 
 function testDesignStudyRunsPairedWithoutRefit(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 governed = localGoverned(testCase);
 change = lts.prediction.DesignChange.load(fullfile( ...
     testCase.TestData.root, 'config', 'design_changes', ...
@@ -357,6 +358,7 @@ verifyEqual(testCase, legacy.aero.CdA, 2.65, 'AbsTol', 1e-12);
 end
 
 function testVehicleConfigRejectsObviousTypos(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % B5 regression: the build boundary must catch a nonsensical vehicle-level
 % scalar instead of letting it surface deep in simulation as NaN/div0.
 cfg = lts.vehicles.R25();

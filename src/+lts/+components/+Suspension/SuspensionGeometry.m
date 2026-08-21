@@ -272,55 +272,6 @@ classdef SuspensionGeometry
                 -obj.maxWheelSteerAngle, obj.maxWheelSteerAngle);
         end
 
-        function [x, y] = computeWheelPosition(obj, corner)
-            frontArm = obj.wheelbase * (1 - obj.staticFrontWeight);
-            rearArm = obj.wheelbase * obj.staticFrontWeight;
-            halfTrack = obj.trackWidth / 2;
-
-            switch upper(corner)
-                case 'FL'
-                    x = frontArm;
-                    y = halfTrack;
-                case 'FR'
-                    x = frontArm;
-                    y = -halfTrack;
-                case 'RL'
-                    x = -rearArm;
-                    y = halfTrack;
-                otherwise
-                    x = -rearArm;
-                    y = -halfTrack;
-            end
-        end
-
-        function axis = computeSteeringAxis(obj, corner)
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
-            caster = obj.getAxleValue(axle, 'CasterAngle');
-            kpi = obj.getAxleValue(axle, 'KingpinInclination');
-
-            axis = [-sin(caster), -side * sin(kpi), ...
-                cos(caster) * cos(kpi)];
-            normAxis = norm(axis);
-            if normAxis <= eps
-                axis = [0, 0, 1];
-            else
-                axis = axis ./ normAxis;
-            end
-        end
-
-        function camber = applySteeringAxisCamber(~, baseCamber, wheelHeading, axis, side)
-            % Steering about a tilted axis changes camber even if the static
-            % camber curve is flat. Rotate the wheel-top vector about the
-            % caster/KPI axis, then measure its outward lean in the wheel frame.
-            topVector = [0, side * sin(baseCamber), cos(baseCamber)];
-            topVector = lts.components.Suspension.SuspensionGeometry.rotateVector( ...
-                topVector, axis, wheelHeading);
-
-            outward = side * [-sin(wheelHeading), cos(wheelHeading), 0];
-            camber = atan2(dot(topVector, outward), dot(topVector, [0, 0, 1]));
-        end
-
         function camber = applySteeringAxisCamberFast(~, baseCamber, wheelHeading, axis, side)
             topVector = [0, side * sin(baseCamber), cos(baseCamber)];
             c = cos(wheelHeading);
@@ -338,24 +289,6 @@ classdef SuspensionGeometry
             camber = atan2( ...
                 topVector(1) * outward(1) + topVector(2) * outward(2), ...
                 topVector(3));
-        end
-
-        function [x, y, kingpinX, kingpinY] = computeContactPatchPosition( ...
-                obj, corner, wheelHeading, baseX, baseY)
-            axle = lts.components.Suspension.SuspensionGeometry.getAxle(corner);
-            side = lts.components.Suspension.SuspensionGeometry.getSide(corner);
-            trail = obj.getAxleValue(axle, 'MechanicalTrail');
-            scrub = obj.getEffectiveScrubRadius(axle);
-
-            offset0 = [-trail, side * scrub];
-            forward = [cos(wheelHeading), sin(wheelHeading)];
-            left = [-sin(wheelHeading), cos(wheelHeading)];
-            offset = -trail * forward + side * scrub * left;
-
-            kingpinX = baseX - offset0(1);
-            kingpinY = baseY - offset0(2);
-            x = kingpinX + offset(1);
-            y = kingpinY + offset(2);
         end
 
         function [x, y, kingpinX, kingpinY] = computeContactPatchPositionFast( ...

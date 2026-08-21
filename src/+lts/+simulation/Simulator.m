@@ -324,7 +324,7 @@ classdef Simulator < handle
             % aeroDragHeight is a passthrough of aeroForces.dragHeight
             % (no recomputation needed); only the pitch moments require the
             % moment bookkeeping, which happened in updateFromAccelerations.
-            forces.aeroDragHeight = localGetField(aeroForces, 'dragHeight', 0);
+            forces.aeroDragHeight = lts.util.fieldOr(aeroForces, 'dragHeight', 0);
             forces.downforcePitchMoment = vm.chassis.state.downforcePitchMoment;
             forces.dragPitchMoment = vm.chassis.state.dragPitchMoment;
             forces.aeroPitchMoment = vm.chassis.state.aeroPitchMoment;
@@ -673,12 +673,12 @@ classdef Simulator < handle
                 return;
             end
 
-            domain = localGetField(input, 'replayDomain', '');
+            domain = lts.util.fieldOr(input, 'replayDomain', '');
             switch string(domain)
                 case "time"
-                    text = sprintf('%.3f s', localGetField(input, 'sourceTime', NaN));
+                    text = sprintf('%.3f s', lts.util.fieldOr(input, 'sourceTime', NaN));
                 case "distance"
-                    text = sprintf('%.1f m', localGetField(input, 'sourceDistance', NaN));
+                    text = sprintf('%.1f m', lts.util.fieldOr(input, 'sourceDistance', NaN));
                 otherwise
                     text = sprintf('%.1f%%', input.replayProgress * 100);
             end
@@ -1191,8 +1191,8 @@ classdef Simulator < handle
             % double-count it).
             vm = obj.vehicleManager;
             if isstruct(aeroInput)
-                F_drag = localGetField(aeroInput, 'F_drag', 0);
-                dragXPosition = localGetField(aeroInput, 'dragXPosition', 0);
+                F_drag = lts.util.fieldOr(aeroInput, 'F_drag', 0);
+                dragXPosition = lts.util.fieldOr(aeroInput, 'dragXPosition', 0);
             else
                 % Backward-compatible direct helper/test call.
                 F_drag = aeroInput;
@@ -1424,16 +1424,3 @@ classdef Simulator < handle
     end
 end
 
-function value = localGetField(s, fieldName, defaultValue)
-% Shared struct-field-with-default helper (empty values fall back too).
-% Used by step() force assembly, replay progress text, and planar
-% dynamics. Telemetry-side uses live in lts.telemetry.StateLogBuilder.
-if isstruct(s) && isfield(s, fieldName)
-    value = s.(fieldName);
-    if isempty(value)
-        value = defaultValue;
-    end
-else
-    value = defaultValue;
-end
-end

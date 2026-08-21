@@ -108,15 +108,19 @@ classdef PacejkaTire < lts.components.Tire.TireModel
     end
 
     methods
-        function obj = PacejkaTire(tirFilePath)
+        function obj = PacejkaTire(tirFilePath, varargin)
             % PACEJKATIRE Construct from a .tir file, creating 4 corner states
             %   PacejkaTire(tirFilePath)
+            %   PacejkaTire(tirFilePath, 'Verbose', true)
             %
             %   tirFilePath — path to the .tir file. If relative, resolved
-            %                 relative to the +Tire/ folder.
+            %                 against the repository's data/tires/ folder.
+            %   'Verbose'   — forwarded to TireConstants and gates the
+            %                 corner-state summary print (default false).
 
             % Load shared tire constants
-            obj.tireConstants = lts.components.Tire.TireConstants(tirFilePath);
+            obj.tireConstants = lts.components.Tire.TireConstants( ...
+                tirFilePath, varargin{:});
             obj.cachedMFevalLowSpeed = obj.resolveMFevalLowSpeed();
 
             % Create per-corner state objects
@@ -126,7 +130,13 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             obj.RR = lts.components.Tire.TireState();
             obj.peakMuNumericCache = containers.Map('KeyType', 'double', 'ValueType', 'double');
 
-            fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
+            verboseParser = inputParser;
+            verboseParser.addParameter('Verbose', false, ...
+                @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+            verboseParser.parse(varargin{:});
+            if logical(verboseParser.Results.Verbose)
+                fprintf('  PacejkaTire: 4 corner states created (FL, FR, RL, RR)\n');
+            end
         end
 
         %% ---- Per-corner evaluation ----

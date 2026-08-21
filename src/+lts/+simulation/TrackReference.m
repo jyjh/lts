@@ -66,24 +66,6 @@ classdef TrackReference
             end
         end
 
-        function ref = referenceAtProgress(s, x, y, trackData)
-            s = max(0, min(trackData.length, s));
-            idx = min(find(trackData.arcLen <= s, 1, 'last'), trackData.nPts);
-            if idx < trackData.nPts && trackData.arcLen(idx + 1) > trackData.arcLen(idx)
-                t = (s - trackData.arcLen(idx)) / ...
-                    (trackData.arcLen(idx + 1) - trackData.arcLen(idx));
-                point = (1 - t) * trackData.points(idx, :) + ...
-                    t * trackData.points(idx + 1, :);
-            else
-                point = trackData.points(idx, :);
-            end
-            [left, right] = lts.simulation.TrackReference.sideHalfWidthsAt( ...
-                trackData, idx);
-            ref = lts.simulation.TrackReference.makeReference( ...
-                idx, s, point, trackData.heading(idx), trackData.curvature(idx), ...
-                trackData.mu(idx), x, y, trackData, left, right);
-        end
-
         function ref = projectToReference(x, y, trackData, previousIdx)
             if nargin < 4 || isempty(previousIdx) || previousIdx < 1
                 previousIdx = 1;

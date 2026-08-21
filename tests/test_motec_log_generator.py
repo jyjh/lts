@@ -1,10 +1,15 @@
-import sys
-from pathlib import Path
+import pytest
 
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "external" / "MotecLogGenerator"))
+try:
+    from data_log import DataLog  # noqa: E402
+    HAS_SUBMODULE = True
+except ImportError:  # pragma: no cover - depends on local checkout state
+    HAS_SUBMODULE = False
 
-from data_log import DataLog  # noqa: E402
+pytestmark = pytest.mark.skipif(
+    not HAS_SUBMODULE,
+    reason="external/MotecLogGenerator submodule not initialized",
+)
 
 
 def test_resample_preserves_endpoint_count_and_requested_frequency():

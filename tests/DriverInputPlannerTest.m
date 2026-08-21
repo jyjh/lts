@@ -50,6 +50,7 @@ verifyEqual(testCase, overSpeed.throttle, 0, 'AbsTol', 1e-12);
 end
 
 function testPlannerUsesConfiguredRollingResistance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 lowProfile = createStraightProfileWithCrr(0);
 highProfile = createStraightProfileWithCrr(0.10);
 
@@ -59,6 +60,7 @@ verifyGreaterThan(testCase, mean(highProfile.throttle), mean(lowProfile.throttle
 end
 
 function testRacingLineCutsInsideApexOnNinetyTurn(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % The minimum-curvature line cuts toward the inside of a corner at the apex
 % (a left turn biases the line left / positive offset), and stays within the
 % drivable corridor. Unlike the old cosine heuristic it does not force a
@@ -76,6 +78,7 @@ verifyLessThanOrEqual(testCase, max(abs(offset)), ...
 end
 
 function testRacingLineHandlesLeftAndRightCorners(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % On alternating corners the apex offset sign must flip with the turn
 % direction: a left turn cuts left (positive), a right turn cuts right
 % (negative). This is the core property of any sane racing line.
@@ -91,6 +94,7 @@ verifyLessThan(testCase, offset(rightApex), -0.05);    % right turn -> right
 end
 
 function testSlalomRacingLineOffsetIsSmooth(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [profile, ~, ~] = createPlannedProfile(lts.components.TestTrack('slalom'));
 
 offsetStep = abs(diff(profile.targetLateralError));
@@ -99,6 +103,7 @@ verifyGreaterThan(testCase, max(abs(profile.targetLateralError)), 0.05);
 end
 
 function testRacingLineMinimizesCurvatureVsCenterline(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % Regression guard for the minimum-curvature optimizer: on a track with real
 % corners the racing-line peak curvature must be strictly lower than the
 % centerline peak curvature. This is the property that fails if the line
@@ -113,6 +118,7 @@ verifyLessThan(testCase, linePeak, centerPeak, ...
 end
 
 function testEnduranceProfileHasBoundedLongitudinalReference(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 repoRoot = fileparts(fileparts(mfilename('fullpath')));
 % Load the endurance track with its exported per-waypoint corridor as-is.
 track = lts.components.WaypointTrack.loadMat( ...
@@ -127,6 +133,7 @@ verifyTrue(testCase, isfield(profile, 'lineCurvature'));
 end
 
 function testPlannedProfileStaysFiniteOnSharpCorner(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % Regression guard for the backward-speed-profile sqrt guards in
 % DriverModel.computeBackwardSpeedProfile / computeCornerSpeedLimit: a
 % degenerate (<=0) maxLateralAccel or signed maxBrakeAccel must not poison

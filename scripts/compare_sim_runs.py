@@ -597,10 +597,6 @@ def mask_mean(values: List[float], mask: List[bool]) -> Optional[float]:
     return mean(value for value, keep in zip(values, mask) if keep)
 
 
-def mask_count(mask: List[bool]) -> int:
-    return sum(1 for keep in mask if keep)
-
-
 def mask_distance(grid: List[float], mask: List[bool]) -> float:
     if len(grid) < 2 or len(mask) < 2:
         return 0.0

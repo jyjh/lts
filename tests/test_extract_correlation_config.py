@@ -1,12 +1,8 @@
 import json
-import sys
 import unittest
 from pathlib import Path
 
 import numpy as np
-
-REPO_ROOT = Path(__file__).resolve().parents[1]
-sys.path.insert(0, str(REPO_ROOT / "scripts"))
 
 import extract_correlation_config  # noqa: E402
 

@@ -85,6 +85,7 @@ verifyLessThan(testCase, state.speed, v0);
 end
 
 function testLowSlipSteadyStateMatchesLinearBicycleModel(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, simulator] = createPlanarFixture(0);
 speed = tire.tireConstants.refVelocity;
 delta = 0.002;
@@ -119,6 +120,7 @@ verifyEqual(testCase, axleForces.front + axleForces.rear, ...
 end
 
 function testPlanarTireResponseIsMirrorSymmetric(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehiclePositive, tirePositive, simulatorPositive] = createPlanarFixture(0);
 [vehicleNegative, tireNegative, simulatorNegative] = createPlanarFixture(0);
 speed = 15;
@@ -170,6 +172,7 @@ end
 end
 
 function testZeroDriveBrakingCannotIncreaseMechanicalEnergy(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, simulator] = createPlanarFixture(0.015);
 speed = 20;
 corners = {tire.FL, tire.FR, tire.RL, tire.RR};

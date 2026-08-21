@@ -206,10 +206,11 @@ If `external/MotecLogGenerator` is missing after cloning, initialize it:
 git submodule update --init --recursive
 ```
 
-The `.ld` conversion uses Python and MotecLogGenerator's dependencies:
+Python tooling (`.ld` conversion, vehicle generator, correlation scripts) uses
+the dependencies pinned in [`requirements.txt`](requirements.txt):
 
 ```bash
-python -m pip install cantools numpy
+python -m pip install -r requirements.txt
 ```
 
 The vehicle generator and analysis scripts under `scripts/` are documented in
@@ -236,9 +237,21 @@ Guides that live at the repo root: [setup.md](setup.md) (initial car model) and
 ## Requirements
 
 - MATLAB R2019b or later
-- [MFeval](https://www.mathworks.com/matlabcentral/fileexchange/63618-mfeval) for Pacejka Magic Formula tire evaluation
-- The provided EMRAX and tire data files in `src/+lts/+components/+Powertrain` and `src/+lts/+components/+Tire`
-- Python 3 with `cantools` and `numpy` for MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/jyjh/MotecLogGenerator) submodule
+- MFeval for Pacejka Magic Formula tire evaluation — vendored at
+  [`third-party/mfeval`](third-party/mfeval) (see its README for provenance);
+  add it to the path alongside `src/`
+- The provided EMRAX motor maps in `src/+lts/+components/+Powertrain`
+- Tire `.tir` data files in `src/+lts/+components/+Tire` — **not included**:
+  they are fitted from FSAE Tire Test Consortium member data and are not
+  committed for redistribution reasons. See
+  [`src/+lts/+components/+Tire/README.md`](src/+lts/+components/+Tire/README.md)
+  for the file list and how to place them locally. Tire-dependent tests skip
+  automatically when they are absent.
+- Python 3 with the packages in [`requirements.txt`](requirements.txt) for
+  MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/jyjh/MotecLogGenerator) submodule
+
+Both test suites (MATLAB and Python) run automatically on GitHub Actions;
+MATLAB is licensed on CI runners for public repositories.
 
 ## License
 

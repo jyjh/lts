@@ -3,6 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testFreeRollingWheelConvergesToRoadSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 Fz = 1000;
@@ -24,6 +25,7 @@ verifyLessThan(testCase, abs(corner.angularVelocity * corner.wheelRadius - longS
 end
 
 function testLargeBrakeTorqueCanIntegrateWheelSpeedThroughZero(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 longSpeed = 20;
@@ -47,6 +49,7 @@ verifyEqual(testCase, corner.angularVelocity, expectedOmega, 'AbsTol', 1e-12);
 end
 
 function testDrivenWheelProducesPositiveSlipAndForce(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.RL;
 Fz = 1000;
@@ -66,6 +69,7 @@ verifyGreaterThan(testCase, corner.Fx, 0);
 end
 
 function testPacejkaPeakMuCacheIncludesEvaluationSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 warningState = warning('query', 'Solver:Limits:Exceeded');
@@ -83,6 +87,7 @@ verifyGreaterThan(testCase, keysAfterHighSpeed, keysAfterLowSpeed);
 end
 
 function testInterfaceForceQueriesIgnoreSurfaceMuArgument(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 
@@ -95,6 +100,7 @@ verifyEqual(testCase, tire.computeLateralForce(1000, 0.04, 0.2), ...
 end
 
 function testSlipRatioMatchesMFevalDriveConvention(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.RL;
 corner.wheelRadius = 0.2;
@@ -115,6 +121,7 @@ verifyEqual(testCase, ...
 end
 
 function testTrueRestClearsStaleLongitudinalSlip(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 corner = tire.FL;
@@ -131,6 +138,7 @@ verifyEqual(testCase, corner.Fx, expectedFx, 'AbsTol', 1e-9);
 end
 
 function testHoldRelaxationUsesCommittedLaggedSlip(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 corner = tire.FL;
@@ -145,6 +153,7 @@ verifyLessThan(testCase, abs(corner.Fx), 100);
 end
 
 function testZeroSpeedWheelBrakingFollowsTorqueBalance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -165,6 +174,7 @@ verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
 function testPositiveSlipProducesRestoringAligningMoment(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.updateCorner(tire.FL, 1000, 0.05, 0, 0, 0, 10, true, 'steady');
@@ -174,6 +184,7 @@ verifyLessThan(testCase, tire.FL.Mz, 0);
 end
 
 function testMirroredRightTiresCancelSymmetricLateralForces(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 normalLoad = 1000;
@@ -196,6 +207,7 @@ verifyEqual(testCase, tire.FL.Fy + tire.FR.Fy + tire.RL.Fy + tire.RR.Fy, ...
 end
 
 function testCamberThrustPointsTowardLeanOnBothCorners(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % Regression lock for the corner-mirroring convention. Camber is measured
 % corner-locally ("positive = top tilted outward") and is therefore EVEN
 % under the left-right mirror: the same outward-positive camber on both
@@ -223,6 +235,7 @@ verifyLessThan(testCase, abs(tire.FL.Fy + tire.FR.Fy), 1e-9);
 end
 
 function testRelaxedSlipStoresPhysicalAngleBeforeStiffnessScaling(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 tire.lateralStiffnessScale = 2;
@@ -247,6 +260,7 @@ verifyEqual(testCase, tire.FL.slipAngle, expectedAlpha, 'AbsTol', 1e-12);
 end
 
 function testLongitudinalRelaxationLengthIsIndependent(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0.30;
 tire.longitudinalRelaxationLength = 0.05;
@@ -272,6 +286,7 @@ verifyGreaterThan(testCase, tire.FL.slipRatio / targetKappa, ...
 end
 
 function testNormalLoadRelaxationLagsForceEvaluationLoad(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.normalLoadRelaxationLength = 0.25;
@@ -316,6 +331,7 @@ verifyEqual(testCase, tire.FL.Fx, 0, 'AbsTol', 1e-12);
 end
 
 function testNormalLoadRelaxationPreviewDoesNotCommitLaggedLoad(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.normalLoadRelaxationLength = 0.25;
@@ -342,6 +358,7 @@ verifyEqual(testCase, tire.FL.relaxedNormalLoad, expectedLoad, ...
 end
 
 function testNormalLoadRelaxationDisabledByDefaultKeepsLegacyForce(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 verifyEqual(testCase, tire.normalLoadRelaxationLength, 0);
@@ -361,6 +378,7 @@ verifyEqual(testCase, tire.FL.Fy, steadyAtLoad.FL.Fy, 'AbsTol', 1e-12);
 end
 
 function testPerCornerLateralStiffnessScaleChangesForceNotSlipState(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 tire.relaxationLength = 0;
 tire.lateralStiffnessScaleByCorner = [0.65 0.65 1 1];
@@ -382,6 +400,7 @@ verifyLessThan(testCase, abs(tire.FR.Fy), abs(tire.RR.Fy));
 end
 
 function testPassiveWheelCanRollNegativeWithReverseLocalRoadSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -395,6 +414,7 @@ verifyLessThan(testCase, corner.angularVelocity, 0);
 end
 
 function testReverseRoadSpeedBrakeTorqueFollowsTorqueBalance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = createPacejkaTire();
 corner = tire.FL;
 corner.normalForce = 1000;
@@ -416,6 +436,7 @@ verifyGreaterThan(testCase, corner.angularVelocity, 0);
 end
 
 function testR25ScaledTireRepresents43075GeometryAndPhysicsScales(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 constants = lts.components.Tire.TireConstants( ...
     'Hoosier 43100 18.0x6.0-10 R20_7 - Scaled.tir');
 p = constants.params;

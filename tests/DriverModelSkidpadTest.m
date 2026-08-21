@@ -53,6 +53,7 @@ verifyEqual(testCase, input.brake, 0, 'AbsTol', 1e-12);
 end
 
 function testFallbackDriverUsesConfiguredRollingResistance(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [lowDriver, lowState] = createStraightDriverWithCrr(0);
 [highDriver, highState] = createStraightDriverWithCrr(0.10);
 

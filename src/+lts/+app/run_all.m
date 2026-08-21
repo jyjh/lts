@@ -37,8 +37,6 @@ function results = run_all(varargin)
 % '..._VehicleConfig_...' (the lts.vehicle.VehicleConfig default). That is inherent to the
 % config, not this script.
 
-clc; close all;
-
 %% ====================================================================
 %  PARSE NAME/VALUE ARGUMENTS
 %  ====================================================================

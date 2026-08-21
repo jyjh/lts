@@ -387,6 +387,7 @@ verifyEqual(testCase, stateWithoutYawRate.vy, 0, 'AbsTol', 1e-12);
 end
 
 function testStateInitializerUsesBoundaryFitAndReconstructsCgAcceleration(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 profile = lts.correlation.CorrelationReplayProfile( ...
@@ -417,6 +418,7 @@ verifyEqual(testCase, state.rearAxleAy, 1.8 * 9.80665, 'AbsTol', 1e-12);
 end
 
 function testStateInitializerPreservesBoundaryYawAccelerationSign(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 dt = 0.001;
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, dt);
@@ -511,6 +513,7 @@ verifyEqual(testCase, state.speed, 10, 'AbsTol', 1e-12);
 end
 
 function testStateInitializerSeedsLoggedWheelSpeedsWithMissingCornerFallback(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 profile = lts.correlation.CorrelationReplayProfile( ...
@@ -538,6 +541,7 @@ verifyEqual(testCase, vehicle.tire.RR.angularVelocity, ...
 end
 
 function testStateInitializerPreservesFrontWheelSlipWhenBraking(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 profile = lts.correlation.CorrelationReplayProfile( ...
@@ -563,6 +567,7 @@ verifyEqual(testCase, vehicle.tire.FR.angularVelocity, ...
 end
 
 function testStateInitializerCanUseKinematicWheelSpeeds(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 profile = lts.correlation.CorrelationReplayProfile( ...
@@ -595,6 +600,7 @@ end
 end
 
 function testStateInitializerCanSeedDrivenCarrierFromMotorRpm(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 ratio = vehicle.powertrain.getTotalGearRatio();
@@ -632,6 +638,7 @@ verifyEqual(testCase, vehicle.tire.FR.angularVelocity * ...
 end
 
 function testStateInitializerTreatsMovingZeroWheelSpeedAsFailedSensor(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 yawRate = 1.0;
@@ -659,6 +666,7 @@ verifyEqual(testCase, vehicle.tire.RR.angularVelocity, ...
 end
 
 function testStateInitializerWarmStartsMidCornerTransients(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, 0.001);
 profile = lts.correlation.CorrelationReplayProfile( ...
@@ -692,6 +700,7 @@ verifyTrue(testCase, isfinite(vehicle.tire.FL.ssSlipAngle));
 end
 
 function testReplayPreservesWarmStartedComponentState(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 dt = 0.001;
 track = lts.components.TestTrack('straight10');
 vehicle = lts.vehicle.VehicleManager.fromConfig(lts.vehicles.R25(), track, dt);
@@ -798,6 +807,7 @@ verifyEqual(testCase, simulator.brakeMode, "pressure");
 end
 
 function testRunCorrelationRepairsOldReplayCsvDeliveredRegen(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 replayFile = [tempname '.csv'];
 outputBase = tempname;
 cleanup = onCleanup(@() cleanupCorrelationFiles(replayFile, outputBase)); %#ok<NASGU>
@@ -838,6 +848,7 @@ verifyEqual(testCase, stateLog.replayMotorTorqueDeliveredNm, ...
 end
 
 function testRunCorrelationAppliesVehicleTuningFile(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 replayFile = [tempname '.csv'];
 configFile = [tempname '.json'];
 outputBase = tempname;
@@ -923,6 +934,7 @@ verifyEqual(testCase, uncappedStateLog.motorTorque, ...
 end
 
 function testReplayContinuesOffTrackToReplayEnd(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 dt = 0.01;
 track = localCircleTrack(20, 40);
 track.Width = 2;
@@ -1004,6 +1016,7 @@ verifyEqual(testCase, stateLog.replayYawRate, linspace(1.0, 1.4, 5)', 'AbsTol', 
 end
 
 function testFreeReplayDoesNotProjectToTrack(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 dt = 0.01;
 track = localCircleTrack(20, 40);
 track.Width = 2;

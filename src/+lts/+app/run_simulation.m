@@ -30,7 +30,6 @@ function [stateLog, lapTime] = run_simulation(varargin)
 %   - lts.driver.DriverModel decides throttle/brake inputs based on track lookahead.
 %   - lts.simulation.Simulator runs the physics loop: state + inputs -> next state.
 
-clc; close all;
 stateLog = [];
 lapTime = NaN;
 

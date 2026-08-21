@@ -1,7 +1,20 @@
-/src/node_modules
-/src/package-lock.json
-/src/package.json
+# Python
+__pycache__/
+*.pyc
+.pytest_cache/
+
+# Local outputs and data
 /exports/
-/data/
-/gitignore/
+/.tmp_gps_extract/
+# Local-only team telemetry datasets (see config/governance/r25_dataset_catalog.json)
+/data/*.ld
+/data/*.ldx
+
+# TTC member tire data — untracked on purpose, see
+# src/+lts/+components/+Tire/README.md
+data/tires/
+src/+lts/+components/+Tire/*.tir
+
+# Tooling droppings
 /.zcode
+.claude/settings.local.json

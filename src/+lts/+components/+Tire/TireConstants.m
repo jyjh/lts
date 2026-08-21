@@ -32,13 +32,23 @@ classdef TireConstants
     end
     
     methods
-        function obj = TireConstants(tirFilePath)
+        function obj = TireConstants(tirFilePath, varargin)
             % TIRECONSTANTS Construct from a .tir file
             %   TireConstants(tirFilePath)
+            %   TireConstants(tirFilePath, 'Verbose', true)
             %
             %   tirFilePath — path to the .tir file. Relative names resolve
             %                 against the repository's data/tires/ folder
             %                 (legacy locations are searched as fallbacks).
+            %   'Verbose'   — print the loaded nominal operating point
+            %                 (default false; the VehicleManager build
+            %                 report already summarizes the tire).
+
+            verboseParser = inputParser;
+            verboseParser.addParameter('Verbose', false, ...
+                @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
+            verboseParser.parse(varargin{:});
+            verbose = logical(verboseParser.Results.Verbose);
 
             % Resolve relative paths: data/tires/ -> +Tire/ -> src/ -> root
             if ~startsWith(tirFilePath, '/') && ~startsWith(tirFilePath, '\') ...
@@ -55,6 +65,13 @@ classdef TireConstants
                         tirFilePath = candidates{i};
                         break;
                     end
+                end
+                if ~exist(tirFilePath, 'file')
+                    error('TireConstants:TirFileNotFound', ...
+                        ['Tire data file "%s" was not found in data/tires/, +Tire/, src/, or ' ...
+                         'the repo root. The .tir files are untracked because they are fitted ' ...
+                         'from FSAE TTC member data; see src/+lts/+components/+Tire/README.md ' ...
+                         'for the required files.'], tirFilePath);
                 end
             end
             obj.tirFilePath = tirFilePath;
@@ -81,9 +98,11 @@ classdef TireConstants
                 obj.refVelocity = 10;  % Default reference velocity [m/s]
             end
             
-            fprintf('TireConstants: Loaded from %s\n', tirFilePath);
-            fprintf('  Nominal pressure: %.0f Pa, Nominal load: %.0f N\n', ...
-                obj.nomPressure, obj.nomLoad);
+            if verbose
+                fprintf('TireConstants: Loaded from %s\n', tirFilePath);
+                fprintf('  Nominal pressure: %.0f Pa, Nominal load: %.0f N\n', ...
+                    obj.nomPressure, obj.nomLoad);
+            end
         end
     end
 end
