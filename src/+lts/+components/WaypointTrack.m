@@ -180,28 +180,6 @@ classdef WaypointTrack < lts.components.Track
             data.metadata = obj.Metadata;
         end
 
-        function exportCsv(obj, fileName)
-            points = obj.getTrackPoints();
-            T = table();
-            T.s_m = obj.getStation();
-            T.x_m = points(:,1);
-            T.y_m = points(:,2);
-            T.heading_rad = obj.getHeading();
-            T.curvature_1pm = obj.getCurvature();
-            T.mu = obj.getSurfaceFriction();
-            width = obj.getTrackWidth();
-            if isscalar(width)
-                T.width_m = repmat(width, height(T), 1);
-            else
-                T.width_m = width(:);
-            end
-            if ~isempty(obj.LeftWidth)
-                T.left_width_m = obj.LeftWidth;
-                T.right_width_m = obj.RightWidth;
-            end
-            writetable(T, fileName);
-        end
-
         function saveMat(obj, fileName)
             track = obj.toStruct(); %#ok<NASGU>
             save(fileName, 'track');

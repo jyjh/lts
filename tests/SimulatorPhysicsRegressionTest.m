@@ -3,6 +3,7 @@ tests = functiontests(localfunctions);
 end
 
 function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.relaxationLength = 0;
 powertrain = SimulatorZeroPowertrain();
@@ -44,6 +45,7 @@ verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
 function testPressureBrakeModeUsesLoggedAxlePressures(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.relaxationLength = 0;
 powertrain = SimulatorZeroPowertrain();
@@ -103,6 +105,7 @@ verifyEqual(testCase, forces.brakeTorque_RR, expectedRearTorque, 'AbsTol', 1e-12
 end
 
 function testMotorTorqueCommandModeUsesLoggedMotorTorque(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -142,6 +145,7 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
 function testMotorTorqueCommandModeCapsPositiveTorqueByPackPower(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -184,6 +188,7 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
 function testDeliveredMotorTorqueModeUsesShaftTorqueWithoutRequestLimits(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.97;
@@ -221,6 +226,7 @@ verifyEqual(testCase, forces.packPowerW, 300, 'AbsTol', 1e-12);
 end
 
 function testWheelIterationFeedsCarrierSpeedBackIntoPackTorqueCap(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 forcesOne = packLimitedMotoringStep(1);
 forcesTwo = packLimitedMotoringStep(2);
 
@@ -234,6 +240,7 @@ verifyEqual(testCase, forcesTwo.driveTorqueTotal, ...
 end
 
 function testMotorTorqueCommandPowerCapUsesLoggedRpmBeforeSimulatedMotorSpeed(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -272,6 +279,7 @@ verifyTrue(testCase, forces.motorTorquePowerLimitActive);
 end
 
 function testMotorTorqueCommandModeCutsPositiveTorqueAtRpmLimit(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -308,6 +316,7 @@ verifyTrue(testCase, forces.rpmLimitActive);
 end
 
 function testMotorTorqueCommandModeAllowsNegativeTorqueAtRpmLimit(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -342,6 +351,7 @@ verifyFalse(testCase, forces.rpmLimitActive);
 end
 
 function testMotorTorqueCommandModeUsesNegativeTorqueAsCoastdown(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -377,6 +387,7 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
 function testMotorTorqueCommandModeUsesSeparateRegenEfficiency(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.8;
@@ -411,6 +422,7 @@ verifyEqual(testCase, vehicle.powertrain.state.drivetrainEfficiency, ...
 end
 
 function testMotorTorqueCommandModeCapsNegativeTorqueByRegenPackPower(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -453,6 +465,7 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
 function testMotorTorqueCommandModeUsesRegenCommandWhenPackIsCharging(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 vehicle.powertrain.totalRatio = 3.4;
 vehicle.powertrain.efficiency = 0.9;
@@ -491,6 +504,7 @@ verifyEqual(testCase, forces.wheelTorque, expectedWheelTorque, 'AbsTol', 1e-12);
 end
 
 function testMotorTorqueCommandModeRequiresReplayCommand(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, ~] = directTorqueVehicle();
 
 speed = 10;
@@ -527,6 +541,7 @@ verifyError(testCase, @() simulator.step(state, input, ref), ...
 end
 
 function testWheelIterationsDoNotMultiplyAppliedImpulse(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [dOmegaOne, expectedDelta] = zeroGripDrivenWheelDelta(1);
 [dOmegaThree, expectedDeltaThree] = zeroGripDrivenWheelDelta(3);
 
@@ -540,6 +555,7 @@ verifyEqual(testCase, dOmegaThree, expectedDelta, 'AbsTol', 1e-12);
 end
 
 function testTireAligningMomentsContributeToYawMoment(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, ~] = directTorqueVehicle();
 tire.relaxationLength = 0;
 tire.rollingResistanceCoeff = 0;
@@ -626,6 +642,7 @@ verifyLessThan(testCase, abs(state.bodySlipAngle), 1e-5);
 end
 
 function testStraightLineVehicleSimulationConvergesAcrossTimesteps(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % Exercise the complete R25 vehicle, driver, tire, chassis, aero, and
 % driveline chain. The finest run is the reference; coarser runs must remain
 % close in elapsed time, terminal state, and straight-line symmetry.
@@ -792,6 +809,7 @@ vehicle.maxSpeed = 80;
 end
 
 function testPowertrainModeCacheTracksRuntimePolicyChanges(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, ~, ~] = directTorqueVehicle();
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 state = lts.simulation.VehicleState('speed', 10, 'vx', 10, 'vy', 0);
@@ -811,6 +829,7 @@ verifyEqual(testCase, coastTorque, -20, 'AbsTol', 1e-12);
 end
 
 function testFullRunResetClearsComponentDynamics(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, tire, powertrain] = directTorqueVehicle();
 tire.FL.angularVelocity = 100;
 tire.RR.slipRatio = -0.8;

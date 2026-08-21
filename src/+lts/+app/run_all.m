@@ -21,8 +21,6 @@ function results = run_all()
 % '..._VehicleConfig_...' (the lts.vehicle.VehicleConfig default). That is inherent to the
 % config, not this script.
 
-clc; close all;
-
 %% ====================================================================
 %  EDIT THESE LISTS TO NARROW THE RUN
 %  Cars   -> function names in src/+lts/+vehicles/<name>.m

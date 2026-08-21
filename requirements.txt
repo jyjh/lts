@@ -1,0 +1,7 @@
+# Python tooling for lts: telemetry export (.ld conversion), vehicle
+# generation, correlation extraction/surrogate scripts, and the pytest suite.
+numpy
+scipy
+scikit-learn
+cantools
+pytest

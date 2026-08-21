@@ -11,6 +11,8 @@ from pathlib import Path
 
 import numpy as np
 
+import geo_common
+
 
 SCHEMA = "lts.correlation.config.v1"
 
@@ -480,11 +482,7 @@ def gps_speed_from_lat_lon(time: np.ndarray, lat_deg: np.ndarray, lon_deg: np.nd
     keep = np.isfinite(lat) & np.isfinite(lon)
     if np.count_nonzero(keep) < 3:
         return np.full(time.shape, np.nan)
-    lat0 = float(lat[keep][0])
-    lon0 = float(lon[keep][0])
-    earth_radius_m = 6378137.0
-    east = np.deg2rad(lon - lon0) * earth_radius_m * math.cos(math.radians(lat0))
-    north = np.deg2rad(lat - lat0) * earth_radius_m
+    east, north = geo_common.local_en_from_lat_lon(lat, lon)
     ve = finite_gradient(east, time)
     vn = finite_gradient(north, time)
     return np.hypot(ve, vn)

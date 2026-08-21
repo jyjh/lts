@@ -302,6 +302,7 @@ verifyEqual(testCase, kin.RR.camberAngle, -0.02, 'AbsTol', 1e-12);
 end
 
 function testVehicleConfigBuildLinksChassisAndUsesSprungMass(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 config = lts.vehicles.baseline();
 vehicle = lts.vehicle.VehicleManager.fromConfig(config, lts.components.TestTrack('straight10'), 0.001);
 

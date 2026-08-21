@@ -105,6 +105,7 @@ verifyGreaterThan(testCase, expectedDriven, 0.5);
 end
 
 function testSimulatorKeepsReflectedRotorInertiaAsCarrierCoupling(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 pt = createPowertrain();
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.wheelInertia = 0.5;
@@ -121,6 +122,7 @@ verifyEqual(testCase, inertia.reflectedRotorInertia, ...
 end
 
 function testReflectedRotorInertiaOnlyResistsCarrierAcceleration(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.rollingResistanceCoeff = 0;
 tire.bearingDragCoeff = 0;
@@ -184,6 +186,7 @@ verifyEqual(testCase, plannerForce, liveWheelTorque / actualRadius, ...
 end
 
 function testVehicleManagerSynchronizesPowertrainToTireRadius(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 cfg = lts.vehicle.VehicleConfig();
 cfg.tire.wheelRadius = 0.267;
 vehicle = lts.vehicle.VehicleManager.fromConfig( ...
@@ -294,6 +297,7 @@ verifyError(testCase, @() diff.solveDrive(100, 30, 60, 0.5, 0.001), ...
 end
 
 function testDrexlerVehicleConfigRequiresCalibration(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.differential = struct('type', 'drexler');
 
@@ -401,6 +405,7 @@ verifyEqual(testCase, motulOut.TR, referenceOut.TR, 'RelTol', 1e-12);
 end
 
 function testDrexlerMetadataCarriesThroughVehicleConfig(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.differential = struct( ...
     'type', 'drexler', ...
@@ -553,6 +558,7 @@ verifyEqual(testCase, pt.computeDriveTorque(12, pedal), 0.3 * fullTorque, ...
 end
 
 function testVehicleConfigDoesNotHideEmptyThrottleMap(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 cfg = lts.vehicle.VehicleConfig();
 cfg.powertrain.throttleMapInput = [];
 cfg.powertrain.throttleMapOutput = [];

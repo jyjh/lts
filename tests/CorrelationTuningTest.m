@@ -177,6 +177,7 @@ verifyError(testCase, @() lts.app.tune_correlation( ...
 end
 
 function testReducedReplayRespondsToPhysicalCandidate(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 root = lts.util.repoRoot(mfilename('fullpath'));
 registry = lts.correlation.CorrelationParameterRegistry.load(fullfile( ...
     root, 'config', 'correlation', 'lap5_ml_parameter_space.json'));
@@ -219,6 +220,7 @@ verifyGreaterThan(testCase, abs(scoreA.score - scoreB.score), 1e-12);
 end
 
 function testCandidateReusesVehicleAcrossWindows(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 % A1 regression guard: a candidate with multiple windows must build the
 % vehicle once and reuse it (via resetForSimulation) for each window. The
 % per-window scores must be finite and the candidate must not rebuild the

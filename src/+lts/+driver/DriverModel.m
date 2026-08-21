@@ -1029,47 +1029,6 @@ classdef DriverModel < handle
             speedLimit = min(speedLimit, vm.maxSpeed);
         end
 
-        function brake = computeBrakeCommand(obj, speedError)
-            % COMPUTEBRAKECOMMAND Gradual proportional brake from speed error.
-            %   No longer floored at minBrakeCommand; the new pedal map
-            %   (computePedals) produces gradual [0,1] brake commands. Kept for
-            %   any callers that want a direct speed-error -> brake mapping.
-            brake = speedError / max(obj.brakeBlendSpeed, eps);
-            brake = lts.util.saturate(brake);
-        end
-
-        function [apexDistance, atApex, inActiveCorner, afterApex] = distanceToRelevantApex(obj, idx, s)
-            [arcLen, curvature] = obj.getTrackGeometry();
-            absKappa = abs(curvature);
-            nPts = numel(curvature);
-            apexDistance = inf;
-            atApex = false;
-            inActiveCorner = false;
-            afterApex = false;
-
-            if idx > nPts || all(absKappa <= obj.curvatureTol)
-                return;
-            end
-            if obj.isSteadyCircleControl()
-                idx = max(1, min(idx, nPts));
-                inActiveCorner = absKappa(idx) > obj.curvatureTol;
-                return;
-            end
-
-            [segmentStart, segmentEnd, ~, found] = obj.findCornerSegment(idx);
-            if ~found
-                return;
-            end
-
-            apexS = obj.computeApexS(arcLen, segmentStart, segmentEnd);
-            apexDistance = apexS - s;
-            inActiveCorner = idx >= segmentStart && idx <= segmentEnd && ...
-                absKappa(idx) > obj.curvatureTol;
-            afterApex = inActiveCorner && s >= apexS;
-            atApex = abs(apexDistance) <= obj.apexDistanceTol && ...
-                inActiveCorner;
-        end
-
         function [steer, steeringUsageFrac] = computeSteeringCommand(obj, idx, s)
             [arcLen, curvature] = obj.getTrackGeometry();
             steer = 0;

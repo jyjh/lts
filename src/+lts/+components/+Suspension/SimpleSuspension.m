@@ -382,24 +382,6 @@ classdef SimpleSuspension
             cornerState.demandedLoad = F_suspension;
         end
 
-        function wheelRate = getEffectiveWheelRate(obj, cornerState)
-            % GETEFFECTIVEWHEELRATE Small-signal wheel rate about static ride.
-            % Includes bump-stop tangent stiffness when the current dynamic
-            % wheel-domain travel has reached the configured stop.
-            % damperPosition and bumpStopLength are both measured from
-            % static ride height in that same wheel domain.
-            if nargin < 2 || isempty(cornerState)
-                cornerState = obj.state;
-            end
-
-            MR_eff = obj.getEffectiveMotionRatio(cornerState);
-            wheelRate = obj.springRate * MR_eff^2;
-
-            if obj.bumpStopRate > 0 && ...
-                    cornerState.damperPosition >= max(obj.bumpStopLength, 0) - 1e-12
-                wheelRate = wheelRate + obj.bumpStopRate;
-            end
-        end
     end
 
     methods (Access = private)

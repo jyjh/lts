@@ -665,19 +665,6 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
                 obj.frontLeft.wheelbase);
         end
 
-        function setAntiRollBarRates(obj, frontRate, rearRate)
-            % SETANTIROLLBARRATES Configure front/rear anti-roll bars from a
-            %   differential wheel-coupling rate B [N/m] (the same quantity
-            %   getWheelRateStiffness returns).
-            if nargin >= 2 && ~isempty(frontRate)
-                obj.frontAntiRollBar = obj.makeWheelRateBar(max(frontRate, 0));
-                obj.frontAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.frontAntiRollBar);
-            end
-            if nargin >= 3 && ~isempty(rearRate)
-                obj.rearAntiRollBar = obj.makeWheelRateBar(max(rearRate, 0));
-                obj.rearAntiRollBarWheelRate = obj.getAxleBarWheelRate(obj.rearAntiRollBar);
-            end
-        end
     end
 
     methods (Static, Access = private)

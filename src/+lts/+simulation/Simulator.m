@@ -310,7 +310,7 @@ classdef Simulator < handle
             % aeroDragHeight is a passthrough of aeroForces.dragHeight
             % (no recomputation needed); only the pitch moments require the
             % moment bookkeeping, which happened in updateFromAccelerations.
-            forces.aeroDragHeight = localGetField(aeroForces, 'dragHeight', 0);
+            forces.aeroDragHeight = lts.util.fieldOr(aeroForces, 'dragHeight', 0);
             forces.downforcePitchMoment = vm.chassis.state.downforcePitchMoment;
             forces.dragPitchMoment = vm.chassis.state.dragPitchMoment;
             forces.aeroPitchMoment = vm.chassis.state.aeroPitchMoment;
@@ -469,13 +469,13 @@ classdef Simulator < handle
                 [newState, forces] = obj.step(currentState, input, ref);
                 
                 if step <= maxSteps
-                    inputSourceDist   = localGetField(input, 'sourceDistance',      currentState.s);
-                    inputSourceTime   = localGetField(input, 'sourceTime',          currentState.time);
-                    inputTargetSpeed  = localGetField(input, 'targetSpeed',         NaN);
-                    inputAxRef        = localGetField(input, 'axRef',               NaN);
-                    inputTargetLatErr = localGetField(input, 'targetLateralError',  NaN);
-                    inputLineCurv     = localGetField(input, 'lineCurvature',       NaN);
-                    inputSpeedError   = localGetField(input, 'speedError',          NaN);
+                    inputSourceDist   = lts.util.fieldOr(input, 'sourceDistance',      currentState.s);
+                    inputSourceTime   = lts.util.fieldOr(input, 'sourceTime',          currentState.time);
+                    inputTargetSpeed  = lts.util.fieldOr(input, 'targetSpeed',         NaN);
+                    inputAxRef        = lts.util.fieldOr(input, 'axRef',               NaN);
+                    inputTargetLatErr = lts.util.fieldOr(input, 'targetLateralError',  NaN);
+                    inputLineCurv     = lts.util.fieldOr(input, 'lineCurvature',       NaN);
+                    inputSpeedError   = lts.util.fieldOr(input, 'speedError',          NaN);
 
                     stateLog.time(step)        = newState.time;
                     stateLog.s(step)           = newState.s;
@@ -861,12 +861,12 @@ classdef Simulator < handle
                 return;
             end
 
-            domain = localGetField(input, 'replayDomain', '');
+            domain = lts.util.fieldOr(input, 'replayDomain', '');
             switch string(domain)
                 case "time"
-                    text = sprintf('%.3f s', localGetField(input, 'sourceTime', NaN));
+                    text = sprintf('%.3f s', lts.util.fieldOr(input, 'sourceTime', NaN));
                 case "distance"
-                    text = sprintf('%.1f m', localGetField(input, 'sourceDistance', NaN));
+                    text = sprintf('%.1f m', lts.util.fieldOr(input, 'sourceDistance', NaN));
                 otherwise
                     text = sprintf('%.1f%%', input.replayProgress * 100);
             end
@@ -903,7 +903,7 @@ classdef Simulator < handle
                     end
 
                 case "motor_torque_command"
-                    motorTorqueCommandNm = localGetField(input, ...
+                    motorTorqueCommandNm = lts.util.fieldOr(input, ...
                         'motorTorqueCommandNm', NaN);
                     if ~isfinite(motorTorqueCommandNm)
                         error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
@@ -919,7 +919,7 @@ classdef Simulator < handle
                     totalCoastdownTorque = min(0, wheelTorque);
 
                 case "motor_torque_delivered"
-                    deliveredMotorTorqueNm = localGetField(input, ...
+                    deliveredMotorTorqueNm = lts.util.fieldOr(input, ...
                         'motorTorqueDeliveredNm', NaN);
                     if ~isfinite(deliveredMotorTorqueNm)
                         error('lts_simulation_Simulator:MissingMotorTorqueDelivered', ...
@@ -953,10 +953,10 @@ classdef Simulator < handle
             end
 
             driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
-            requestedMotorTorqueNm = localGetField(input, ...
+            requestedMotorTorqueNm = lts.util.fieldOr(input, ...
                 'motorTorqueCommandNm', deliveredMotorTorqueNm);
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
+            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
             vm.powertrain.state.updateOutputs( ...
                 throttle, deliveredMotorTorqueNm, wheelTorque, driveForce, ...
                 efficiency, false);
@@ -1031,7 +1031,7 @@ classdef Simulator < handle
                 efficiency = lts.util.saturate(efficiency);
                 return;
             end
-            motorRPM = localGetField(input, 'motorRpm', NaN);
+            motorRPM = lts.util.fieldOr(input, 'motorRpm', NaN);
             if ~isfinite(motorRPM) && ~isempty(vm.powertrain.state)
                 motorRPM = vm.powertrain.state.motorRPM;
             end
@@ -1044,13 +1044,13 @@ classdef Simulator < handle
                 return;
             end
 
-            regenTorqueNm = localGetField(input, 'regenTorqueNm', NaN);
+            regenTorqueNm = lts.util.fieldOr(input, 'regenTorqueNm', NaN);
             if ~isfinite(regenTorqueNm) || regenTorqueNm >= 0
                 return;
             end
 
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
+            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
             if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
                 return;
             end
@@ -1068,8 +1068,8 @@ classdef Simulator < handle
                 limitMotorTorqueCommandByPackPower(obj, requestedMotorTorqueNm, input)
             appliedMotorTorqueNm = requestedMotorTorqueNm;
             powerLimitNm = NaN;
-            packVoltageV = localGetField(input, 'packVoltageV', NaN);
-            packCurrentA = localGetField(input, 'packCurrentA', NaN);
+            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
+            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
             packPowerW = NaN;
             powerLimitActive = false;
 
@@ -1142,13 +1142,13 @@ classdef Simulator < handle
         function motorOmega = motorAngularVelocityForPowerLimit(obj, input)
             motorOmega = NaN;
             vm = obj.vehicleManager;
-            loggedMotorRpm = localGetField(input, 'motorRpm', NaN);
+            loggedMotorRpm = lts.util.fieldOr(input, 'motorRpm', NaN);
             if isfinite(loggedMotorRpm)
                 motorOmega = loggedMotorRpm * 2 * pi / 60;
                 return;
             end
 
-            replaySpeed = localGetField(input, 'targetSpeed', NaN);
+            replaySpeed = lts.util.fieldOr(input, 'targetSpeed', NaN);
             if isfinite(replaySpeed) && replaySpeed > 0 && ...
                     ~isempty(vm) && ~isempty(vm.powertrain)
                 ratio = vm.powertrain.getTotalGearRatio();
@@ -1603,8 +1603,8 @@ classdef Simulator < handle
             % double-count it).
             vm = obj.vehicleManager;
             if isstruct(aeroInput)
-                F_drag = localGetField(aeroInput, 'F_drag', 0);
-                dragXPosition = localGetField(aeroInput, 'dragXPosition', 0);
+                F_drag = lts.util.fieldOr(aeroInput, 'F_drag', 0);
+                dragXPosition = lts.util.fieldOr(aeroInput, 'dragXPosition', 0);
             else
                 % Backward-compatible direct helper/test call.
                 F_drag = aeroInput;
@@ -1928,17 +1928,6 @@ for j = 1:numel(corners)
         end
     end
     stateLog.(['tireUtilization_' corner])(step) = utilization;
-end
-end
-
-function value = localGetField(s, fieldName, defaultValue)
-if isstruct(s) && isfield(s, fieldName)
-    value = s.(fieldName);
-    if isempty(value)
-        value = defaultValue;
-    end
-else
-    value = defaultValue;
 end
 end
 

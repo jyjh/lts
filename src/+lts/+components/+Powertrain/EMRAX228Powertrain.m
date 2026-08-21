@@ -249,12 +249,6 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
                 efficiency, false);
         end
 
-        function F_drive = computeDriveForce(obj, speed, throttle)
-            % Compatibility helper: requested wheel torque as equivalent force.
-            wheelTorque = obj.computeDriveTorque(speed, throttle);
-            F_drive = wheelTorque / max(obj.wheelRadius, eps);
-        end
-
         function F_drive = computeMaxDriveForce(obj, speed)
             % COMPUTEMAXDRIVEFORCE Full-throttle wheel-equivalent drive force [N]
             %

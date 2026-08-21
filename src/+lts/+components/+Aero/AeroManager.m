@@ -46,25 +46,6 @@ classdef AeroManager < lts.components.Aero.AeroComponent
             obj.components{end+1} = aeroComp;
         end
         
-        function obj = removeComponent(obj, name)
-            % REMOVECOMPONENT Remove a component by name
-            idx = cellfun(@(component) strcmp(component.name, name), obj.components);
-            obj.components = obj.components(~idx);
-        end
-        
-        function n = numComponents(obj)
-            n = numel(obj.components);
-        end
-        
-        function listComponents(obj)
-            % LISTCOMPONENTS Print all managed components
-            for i = 1:numel(obj.components)
-                c = obj.components{i};
-                fprintf('  [%d] %s | x=%.3f m, z=%.3f m\n', i, c.getName(), ...
-                    c.getLongitudinalPosition(), c.getNominalHeight());
-            end
-        end
-        
         %% ---- Main force computation ----
         
         function forces = computeForces(obj, vehicleState)

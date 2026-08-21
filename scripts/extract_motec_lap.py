@@ -12,6 +12,8 @@ from pathlib import Path
 
 import numpy as np
 
+import geo_common
+
 
 REPLAY_COLUMNS = [
     "time_s",
@@ -288,7 +290,7 @@ def derive_speed_from_wheel_speed_median(data, output_name: str, spec: dict, der
         names,
     )
 
-    values, enough = derive_speed_rows_from_components(
+    values = derive_speed_rows_from_components(
         speed_matrix,
         names,
         derive_spec,
@@ -404,9 +406,8 @@ def derive_speed_rows_from_components(
     names: list[str],
     derive_spec: dict,
     minimum_channels: int,
-) -> tuple[np.ndarray, np.ndarray]:
+) -> np.ndarray:
     values = np.full(matrix.shape[0], np.nan)
-    enough = np.zeros(matrix.shape[0], dtype=bool)
 
     preferred = [
         str(name)
@@ -422,19 +423,18 @@ def derive_speed_rows_from_components(
                 min(minimum_channels, len(preferred_idx)),
             )
         )
-        values, enough = median_rows_with_minimum(
+        values, _ = median_rows_with_minimum(
             preferred_matrix,
             max(1, preferred_minimum),
         )
 
-    fallback_values, fallback_enough = median_rows_with_minimum(
+    fallback_values, _ = median_rows_with_minimum(
         matrix,
         minimum_channels,
     )
     fill = ~np.isfinite(values) & np.isfinite(fallback_values)
     values[fill] = fallback_values[fill]
-    enough = enough | fallback_enough
-    return values, enough
+    return values
 
 
 def median_rows_with_minimum(matrix: np.ndarray, minimum_channels: int) -> tuple[np.ndarray, np.ndarray]:
@@ -710,14 +710,9 @@ def derive_gps_kinematics(
     latitude = np.interp(time_s, valid_time, latitude[valid])
     longitude = np.interp(time_s, valid_time, longitude[valid])
     origin = int(np.flatnonzero(valid)[0])
-    earth_radius_m = 6371008.8
-    latitude_origin_rad = np.deg2rad(latitude[origin])
-    east_m = (
-        earth_radius_m
-        * np.deg2rad(longitude - longitude[origin])
-        * np.cos(latitude_origin_rad)
+    east_m, north_m = geo_common.local_en_from_lat_lon(
+        latitude, longitude, origin_index=origin
     )
-    north_m = earth_radius_m * np.deg2rad(latitude - latitude[origin])
 
     positive_dt = np.diff(time_s)
     positive_dt = positive_dt[np.isfinite(positive_dt) & (positive_dt > 0)]
@@ -947,12 +942,6 @@ def write_csv(path: Path, table: dict[str, np.ndarray]) -> None:
     with path.open("w", encoding="utf-8", newline="") as handle:
         handle.write(",".join(REPLAY_COLUMNS) + "\n")
         np.savetxt(handle, matrix, delimiter=",", fmt="%.12g")
-
-
-def format_value(value: float) -> str:
-    if value is None or not math.isfinite(float(value)):
-        return "NaN"
-    return f"{float(value):.12g}"
 
 
 def default_from_spec(spec: dict) -> float:

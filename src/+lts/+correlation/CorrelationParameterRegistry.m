@@ -151,12 +151,6 @@ classdef CorrelationParameterRegistry
             end
         end
 
-        function T = candidateTable(registry, candidateIds, physical)
-            names = cellstr(lts.correlation.CorrelationParameterRegistry.names(registry));
-            T = array2table(physical, 'VariableNames', names);
-            T = addvars(T, candidateIds(:), 'Before', 1, ...
-                'NewVariableNames', 'candidate_id');
-        end
     end
 
     methods (Static, Access = private)

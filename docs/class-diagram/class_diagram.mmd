@@ -86,7 +86,6 @@ classDiagram
     class lts.components.Aero.AeroManager {
         +components
         +addComponent(aeroComp)
-        +removeComponent(name)
         +computeForces(vehicleState)
     }
 
@@ -153,7 +152,6 @@ classDiagram
 
     class lts.components.Powertrain.PowertrainComponent {
         <<abstract>>
-        +computeDriveForce(speed, throttle)*
         +getMaxTorque(engineSpeed)*
         +getTotalGearRatio()*
         +getDrivetrainEfficiency()*
@@ -166,7 +164,6 @@ classDiagram
         +rpmFalloffStartRPM
         +rpmFalloffFactor
         +rpmLimitRPM
-        +computeDriveForce(speed, throttle)
         +updateStateFromDrivenWheels(omega)
         +limitDrivenWheelAngularVelocity(omega)
     }
@@ -234,7 +231,6 @@ classDiagram
         +computeHeading(points, closed)$
         +cumulativeArcLength(points, closed)$
         +pathLength(points, closed)$
-        +smoothTrack(points, span, closed)$
         +cleanPoints(points, closed)$
     }
 
@@ -251,7 +247,6 @@ classDiagram
         +getHeading()
         +getTrackWidth()
         +toStruct()
-        +exportCsv(fileName)
         +saveMat(fileName)
         +loadMat(fileName)$
         +fromCsv(fileName)$
