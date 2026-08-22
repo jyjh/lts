@@ -10,8 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      # Only external/MotecLogGenerator (public) is needed by the pytest
+      # suite (conftest.py). external/LTSTelemetryVisualizer is private and
+      # cannot be cloned with the job's repo-scoped GITHUB_TOKEN, so avoid
+      # recursive submodule init.
+      - name: Initialize MotecLogGenerator submodule
+        run: git submodule update --init external/MotecLogGenerator
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
