@@ -115,7 +115,8 @@ for i in "${!REPO_DIRS[@]}"; do
             exit 1; }
     fi
     if [ -n "$(git -C "$repo" status --porcelain)" ]; then
-        echo "ABORT: '$repo_name' has a dirty working tree." >&2
+        echo "ABORT: '$repo_name' has a dirty working tree:" >&2
+        git -C "$repo" status --short >&2
         exit 1
     fi
     if [ "$has_origin" -eq 1 ]; then
