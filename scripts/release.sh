@@ -114,9 +114,14 @@ for i in "${!REPO_DIRS[@]}"; do
             echo "ABORT: cannot fetch '$repo_name' from origin." >&2
             exit 1; }
     fi
-    if [ -n "$(git -C "$repo" status --porcelain)" ]; then
+    # --ignore-submodules=dirty: content changes inside submodules (e.g.
+    # the phantom CRLF "modified" files the external/ checkouts show on
+    # Windows with core.autocrlf=true) do not affect the cascade, which
+    # never enters them. Moved submodule pointers (uncommitted bump work)
+    # still abort — they appear as ` M` even with this flag.
+    if [ -n "$(git -C "$repo" status --porcelain --ignore-submodules=dirty)" ]; then
         echo "ABORT: '$repo_name' has a dirty working tree:" >&2
-        git -C "$repo" status --short >&2
+        git -C "$repo" status --short --ignore-submodules=dirty >&2
         exit 1
     fi
     if [ "$has_origin" -eq 1 ]; then
