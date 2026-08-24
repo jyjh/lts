@@ -155,7 +155,9 @@ for name in $SUBMODULES; do
     set_gitmodules_branch "$MAIN_ROOT" "$name" staging
 done
 commit_if_changed "chore(release): staging keeps tracking component staging branches"
-run git -C "$MAIN_ROOT" submodule update --init
+# protocol.file.allow=always: no-op for https remotes; required while the
+# local checkout resolves component submodules from sibling directories.
+run git -C "$MAIN_ROOT" -c protocol.file.allow=always submodule update --init
 run git -C "$MAIN_ROOT" checkout -q main
 
 echo

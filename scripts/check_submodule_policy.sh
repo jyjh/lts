@@ -58,8 +58,10 @@ for name in $submodule_names; do
             continue
         }
     fi
-    if ! git -C "$path" fetch --quiet origin main staging >/dev/null 2>&1 \
-            && ! git -C "$path" fetch --quiet origin >/dev/null 2>&1; then
+    # protocol.file.allow=always: no-op for https remotes; required while
+    # submodules resolve from local sibling directories.
+    if ! git -C "$path" -c protocol.file.allow=always fetch --quiet origin main staging >/dev/null 2>&1 \
+            && ! git -C "$path" -c protocol.file.allow=always fetch --quiet origin >/dev/null 2>&1; then
         echo "WARN: cannot fetch '$name' remote branches; skipping containment check"
         containment_skipped=1
         continue
