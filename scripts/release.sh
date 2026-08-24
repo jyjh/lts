@@ -32,6 +32,8 @@
 # component's main must be an ancestor of its staging (the script
 # verifies all of this and aborts otherwise). Pushes happen only where
 # an `origin` remote exists; run this from the main repository checkout.
+# main/staging are ruleset-protected; the pushes below succeed only for
+# an actor on the rulesets' bypass list (the integration lead).
 set -euo pipefail
 
 DRY_RUN=0
@@ -189,9 +191,27 @@ if [ "$DRY_RUN" -eq 0 ]; then
         echo "  merge conflict — resolving to the staging-proven versions"
         for name in $SUBMODULES; do
             path=$(git -C "$MAIN_ROOT" config -f .gitmodules --get "submodule.$name.path")
-            git -C "$MAIN_ROOT" checkout --theirs -- "$path" 2>/dev/null || true
+            # Resolve only paths that actually conflicted; a bare
+            # `checkout --theirs` on a cleanly merged path errors.
+            if [ -n "$(git -C "$MAIN_ROOT" ls-files --unmerged -- "$path")" ]; then
+                git -C "$MAIN_ROOT" checkout --theirs -- "$path" || {
+                    echo "ABORT: could not resolve the submodule pin for '$name'." >&2
+                    exit 1; }
+                git -C "$MAIN_ROOT" add -- "$path"
+            fi
         done
-        git -C "$MAIN_ROOT" checkout --theirs -- .gitmodules 2>/dev/null || true
+        if [ -n "$(git -C "$MAIN_ROOT" ls-files --unmerged -- .gitmodules)" ]; then
+            git -C "$MAIN_ROOT" checkout --theirs -- .gitmodules || {
+                echo "ABORT: could not resolve .gitmodules." >&2
+                exit 1; }
+        fi
+        if [ -n "$(git -C "$MAIN_ROOT" ls-files --unmerged)" ]; then
+            echo "ABORT: conflicts remain outside .gitmodules and the submodule pins." >&2
+            echo "  Nothing has been pushed, but step 1 already fast-forwarded the" >&2
+            echo "  component repositories' local main branches. Resolve the merge" >&2
+            echo "  by hand, push it, and re-run this script (step 1 is idempotent)." >&2
+            exit 1
+        fi
         # Stage only the resolved files: a bare `git add -A` here could
         # sweep in submodule working-copy states left behind by step 1
         # and record pin bumps that were never tested.
@@ -212,8 +232,17 @@ run git -C "$MAIN_ROOT" checkout -q staging
 if [ "$DRY_RUN" -eq 0 ]; then
     if ! git -C "$MAIN_ROOT" merge --ff-only main; then
         git -C "$MAIN_ROOT" merge main -m "chore(release): bring release into staging" || {
-            git -C "$MAIN_ROOT" checkout --ours -- .gitmodules
-            git -C "$MAIN_ROOT" add .gitmodules
+            if [ -n "$(git -C "$MAIN_ROOT" ls-files --unmerged -- .gitmodules)" ]; then
+                git -C "$MAIN_ROOT" checkout --ours -- .gitmodules
+                git -C "$MAIN_ROOT" add .gitmodules
+            fi
+            if [ -n "$(git -C "$MAIN_ROOT" ls-files --unmerged)" ]; then
+                echo "ABORT: unresolved conflicts bringing the release into staging." >&2
+                echo "  Nothing has been pushed, but step 1 already fast-forwarded the" >&2
+                echo "  component repositories' local main branches. Resolve by hand," >&2
+                echo "  push, and re-run this script (step 1 is idempotent)." >&2
+                exit 1
+            fi
             git -C "$MAIN_ROOT" commit -q --no-edit
         }
     fi
@@ -234,7 +263,11 @@ echo "== Push =="
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "  (dry run: no pushes)"
 else
-    for i in "${!REPO_DIRS[@]}"; do
+    # Push the main repository last: its submodule pins reference the
+    # components, so their new main branches should exist first. (The
+    # pinned commits are already on the components' remotes from their
+    # staging pushes — this is ordering hygiene, not correctness.)
+    for ((i=${#REPO_DIRS[@]} - 1; i >= 0; i--)); do
         repo="${REPO_DIRS[$i]}"
         repo_name="${REPO_NAMES[$i]}"
         if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
