@@ -2,10 +2,12 @@
 	path = external/MotecLogGenerator
 	url = https://github.com/jyjh/MotecLogGenerator.git
 	branch = master
+	ignore = dirty
 [submodule "external/LTSTelemetryVisualizer"]
 	path = external/LTSTelemetryVisualizer
 	url = https://github.com/jyjh/LTSTelemetryVisualizer.git
 	branch = main
+	ignore = dirty
 [submodule "kit"]
 	path = src/+lts/+util
 	url = ../lts-kit
