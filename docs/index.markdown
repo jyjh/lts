@@ -114,14 +114,19 @@ src/+lts/+telemetry/GraphPlotter.m           Simulation dashboards
 
 | Page | Covers |
 |---|---|
+| [Repositories & Sync](repos/) | The repository family, who works where, how main stays in sync with the components |
+| [Department Workflow](workflow/) | Subsystem-data assembly diagram |
+| [Tracks](tracks/) | Track `.mat` files, direction handling, variable widths |
 | [Class Diagram](class-diagram/) | UML, design patterns, composition |
 | [Simulation Loop](simulation-loop/) | Per-timestep sequence |
 | [Physics Flow](physics-flow/) | Force equations, sign conventions, source map |
 | [Data Ingestion](data-ingestion/) | EMRAX/tire data, MoTeC export, correlation data flow |
 | [Correlation Replay](correlation/) | Channel maps, brake/powertrain modes, tuning overlays |
 | [Governed Prediction](governed-prediction/) | Parameter roles, calibration, certification gate |
-| [Department Workflow](workflow/) | Subsystem-data assembly diagram |
+| [Repository Split Plan](repo-split/) | Why the repositories were split; contracts; decision log |
 
+Contributing (no git experience needed):
+[`CONTRIBUTING.md`](https://github.com/jyjh/lts/blob/main/CONTRIBUTING.md).
 Guides on the repo: [`setup.md`](https://github.com/jyjh/lts/blob/main/setup.md)
 (initial car model) and [`workflow.md`](https://github.com/jyjh/lts/blob/main/workflow.md)
 (car data → design decision).

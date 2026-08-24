@@ -177,8 +177,8 @@ Do not confuse the vehicle axle `trackWidth` with the **circuit** track
 width. The circuit width is a property of the loaded `WaypointTrack`, not the
 vehicle config, and is now allowed to vary per waypoint and per side
 (`left_width_m`/`right_width_m` from the fsae track image tool's cone-aware
-export). The simulator consumes that corridor with per-side fidelity; see
-[Track files](README.md#track-files).
+export). The simulator consumes that corridor with per-side fidelity; see the
+[Tracks](https://jyjh.github.io/lts/tracks/) documentation page.
 
 ### 4.3 Static weight distribution
 

@@ -11,13 +11,14 @@ plugins:
   - jekyll-feed
 
 header_pages:
-  - class-diagram/index.md
+  - repos/index.md
+  - workflow/index.md
+  - tracks/index.md
   - simulation-loop/index.md
   - physics-flow/index.md
+  - class-diagram/index.md
   - data-ingestion/index.md
   - correlation/index.md
   - governed-prediction/index.md
-  - workflow/index.md
-  - repo-split/index.md
   - about.md
 

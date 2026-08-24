@@ -20,6 +20,24 @@ and predicting a vehicle intervention:
    refitting and runs the same hierarchical optimizer policy for baseline and
    variant.
 
+## Quick Predict
+
+```matlab
+addpath('src')
+result = lts.app.predict_design_change( ...
+    'Change', 'config/design_changes/example_ballast_removal.json', ...
+    'Track', '2026enduro', ...
+    'AllowProvisional', true)
+```
+
+`AllowProvisional=true` explicitly opts into an uncertified engineering study;
+it does not promote the calibration. A close replay fit is not by itself
+evidence that a modified vehicle is predicted correctly: production studies
+accept only a governed parameter manifest and a non-legacy calibration
+artifact, and a changed vehicle remains `uncertified` until a known real-car
+A/B intervention passes the transport-validation gate. The supplied R25
+artifact is intentionally `provisional`.
+
 ## Parameter roles
 
 - `design`: permitted vehicle interventions; prohibited from calibration.

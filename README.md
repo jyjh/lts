@@ -1,280 +1,52 @@
 # FSAE Transient Lap Time Simulation
 
-An object-oriented MATLAB lap-time simulation framework for FSAE vehicles. The project composes swappable aero, suspension, powertrain, tire, and track models, then runs a transient simulation loop through `lts.simulation.Simulator`.
+An object-oriented MATLAB lap-time simulation for FSAE vehicles. This
+repository — **lts**, the *main integration repository* — assembles the
+department component repositories into a complete vehicle and runs the
+transient simulation loop through `lts.simulation.Simulator`. Each
+department's model lives in its own repository; this page only tells you
+where to go.
 
-## Quick Start
-
-```matlab
-addpath('src')
-lts.app.run_simulation
-```
-
-Each run writes a MotecLogGenerator-compatible CSV to `exports/motec_<track>_<config.name>_<timestamp>.csv`
-and, through the `external/MotecLogGenerator` submodule, a `.ld` for MoTeC i2.
-Pass `'ExportMoTeC', false` to skip the CSV/`.ld` export:
-
-```matlab
-lts.app.run_simulation('ExportMoTeC', false)
-```
-
-The CSV header uses MotecLogGenerator's `Channel Name (unit)` format (e.g.
-`Engine RPM (rpm)`). The exporter also creates fake `GPS Latitude (deg)` /
-`GPS Longitude (deg)` channels from the simulated position trace so MoTeC can
-show a map path; the `.ld` conversion writes MoTeC-compatible display-unit bytes
-and an M1/pro-enabled log header so i2 treats exported channels as real
-quantities.
-
-Switch the car and track with the `Car` and `Track` name/value parameters
-instead of editing the script:
-
-```matlab
-lts.app.run_simulation('Car', 'R26_base', 'Track', 'autocross')
-```
-
-`Track` selects between:
-
-- `straight10`, `straight`, `straight75` — acceleration / top-speed validation
-- `oval`, `skidpad`, `autocross`, `busstop`, `slalom`, `90turn` — built-in courses
-- `2026enduro` — loads a `.mat` centerline from `tracks/` (see [Track files](#track-files))
-
-`skidpad` simulates one warmup lap before the timed lap; returned plots and
-MoTeC exports contain only the second lap.
-
-## Running the tests
-
-```matlab
-addpath('src'); addpath('scripts')
-run_audit_tests            % full suite; prints failures with names
-```
-
-`run_audit_tests` also accepts individual files, e.g.
-`run_audit_tests('TireContactTest.m')`. The suite covers tire contact and
-relaxation behavior, chassis load-transfer conservation, energy accounting,
-Simulator physics regressions, correlation replay, and a golden lap-time
-baseline (`GoldenLapTimeTest`). Tests require the same MFeval dependency as
-the simulation (see [Requirements](#requirements)) and run headless — no
-figures are created. Expect roughly 2.5 minutes for the full suite.
-
-## Project objective and evidence policy
-
-The primary output is a transportable prediction of absolute lap time and the
-change in lap time caused by a physical vehicle modification. Correlation is
-split into component evidence, governed plant calibration, whole-run plant
-validation, and minimum-lap-time optimization.
-
-A close replay fit is not by itself evidence that a modified vehicle is
-predicted correctly. Production studies accept only a governed parameter
-manifest and a non-legacy calibration artifact. Parameters classified as
-`design` or `fixed_measured` cannot be fitted. A changed vehicle reuses the
-same global calibration and run scenario, and remains `uncertified` until a
-known real-car A/B intervention passes the transport-validation gate. The
-supplied R25 artifact is intentionally `provisional`: current baseline-only
-logs cannot establish counterfactual accuracy.
-
-- **Build the initial model** — see [setup.md](setup.md).
-- **Calibrate, validate, run a design study, transport-validate** — see [workflow.md](workflow.md).
-- **Governed plant correlation & certification** — see the [Governed Prediction](https://jyjh.github.io/lts/governed-prediction/) page.
-
-### Quick Predict
-
-```matlab
-addpath('src')
-result = lts.app.predict_design_change( ...
-    'Change', 'config/design_changes/example_ballast_removal.json', ...
-    'Track', '2026enduro', ...
-    'AllowProvisional', true)
-```
-
-`AllowProvisional=true` explicitly opts into an uncertified engineering study;
-it does not promote the calibration. Normalize a complete run with
-`lts.app.preprocess_plant_data`, catalog it by whole-run role, and validate it
-with `lts.app.run_plant_validation`.
-
-## Correlation Replay
-
-`lts.app.run_correlation` replays real MoTeC controls through the simulator: it
-extracts the measured throttle, brake, steer, and starting speed from a selected
-lap (or the whole log when `Lap` is omitted) and uses those controls instead of
-`lts.driver.DriverModel`, then exports a new simulated CSV/`.ld` for overlay in
-MoTeC i2.
-
-```matlab
-addpath('src')
-lts.app.run_correlation( ...
-    'MoTeCFile', 'data/real_run.ld', ...
-    'Lap', 4, ...
-    'VehicleConfig', @lts.vehicles.R25, ...
-    'TuningFile', 'R25_correlation_tuning', ...
-    'Track', '2026enduro')
-```
-
-Replay is free-space input replay: the imported controls and initial state drive
-the physics, which then produces its own path. There is no GPS/course alignment,
-track rebasing, or track-limit stop. The configured track is loaded for export
-metadata only. Channel maps, brake/powertrain modes (`throttle` /
-`motor_torque_command` / `motor_torque_delivered`), pack-power limiting, the R25
-inverter-channel decoding, steering transfer curve, and tuning-overlay options
-are documented on the **[Correlation Replay](https://jyjh.github.io/lts/correlation/)** page.
-
-### Legacy ML-assisted tuning
-
-`lts.app.tune_correlation` is retained only to reproduce historical diagnostic
-work. It requires `LegacyDiagnostic=true`, and its generated overlays cannot be
-used by governed design studies.
-
-```matlab
-result = lts.app.tune_correlation( ...
-    'LegacyDiagnostic', true, ...
-    'MoTeCFile', 'data/lap5_raw.ld', ...
-    'HorizonS', [3 6 12], 'MaxHours', 8, 'MaxCandidates', 1200, 'Workers', 8)
-```
-
-See the **[Correlation Replay](https://jyjh.github.io/lts/correlation/)** page
-for the anchor-split, GPS-kinematics scoring, and checkpoint/resume behavior.
-
-## Track files
-
-`2026enduro` and other real circuits are loaded from `.mat` files in `tracks/`
-via `lts.components.WaypointTrack.loadMat`. These files are produced by the separate
-[`fsae track image tool`](https://github.com/jyjh/fsae-track-image-tool), which
-traces a track image into `[x, y]` waypoints.
-
-**Travel direction.** The exporter bakes the requested clockwise/anticlockwise
-direction into the ordering of `points_m` and also records it in a `direction`
-field. `loadMat` honors that order by default; an explicit override forces a
-direction:
-
-```matlab
-track = lts.components.WaypointTrack.loadMat('tracks/<file>.mat', 'Direction', 'anticlockwise');
-```
-
-If the override conflicts with the direction stored in the file (for example
-because the file is a **stale copy** that was re-exported the other way), the
-waypoints are reversed — keeping the start/finish point fixed — and a warning is
-emitted. `lts.app.run_simulation` loads the endurance track without a
-`Direction` override, so the stored `direction` field is honored as-is, and
-prints the resolved direction at startup, so a wrong or stale track is obvious
-immediately. A file with no direction field at all also warns.
-
-**Updating a track.** The exporter writes to its own `examples/` directory; it
-does **not** touch this repo's `tracks/`. After re-running the exporter (with a
-changed `Direction` or otherwise), copy the new `.mat` into `tracks/` yourself.
-`Direction` only reorders points *inside* the file — the filename is unchanged —
-so a re-export silently overwrites the previous output.
-
-**Variable track widths.** As of the cone-aware exporter, the `.mat`/`.csv`
-carry the real track corridor, not a single width: each waypoint has its own
-`width_m` plus asymmetric `left_width_m`/`right_width_m` derived from the cone
-marks. `WaypointTrack.loadMat` reads these into `LeftWidth`/`RightWidth`, and
-the simulator consumes them with full per-side fidelity — the off-track margin,
-edge slowdown/steering, racing-line offset, and feasibility all use the actual
-local half-width on whichever side of the centerline the car is on (positive
-lateral error = left of the line, bounded by `left_width_m`; negative by
-`right_width_m`). When a direction override reverses the waypoint order, the
-left and right sides are swapped to stay consistent with the new travel
-direction. Scalar-width files (no `left_width_m`/`right_width_m`) load exactly
-as before and run with a symmetric `Width/2` corridor.
-
-```matlab
-track = lts.components.WaypointTrack.loadMat('tracks/<file>.mat');
-[leftWidth, rightWidth] = track.getTrackSideWidths();   % per-waypoint [m]
-```
-
-The app entry points (`run_simulation`, `run_all`, `CorrelationAppSupport`)
-load the file's widths as-is; do not override `track.Width`, since that would
-discard the exported corridor and force a uniform width back on.
-
-## Current Model
-
-- **Whole-car aero** — `lts.components.Aero.WholeCarAero` uses a single ClA/CdA and center-of-pressure location from `cfg.aero`.
-- **Transient chassis platform** — `lts.components.Chassis.SimpleChassis` tracks heave, pitch, and separate front/rear roll DOFs coupled by chassis torsional rigidity for chassis-driven corner loads. Telemetry includes front/rear roll angles and roll rates.
-- **Four-corner transient suspension** — `lts.components.Suspension.SuspensionManager` manages one `SimpleSuspension` and `SuspensionState` per corner.
-- **Table-based suspension and steering geometry** — `lts.components.Suspension.SuspensionGeometry` provides camber, toe, motion ratio, steering axis caster/trail/scrub radius/kingpin inclination, and Ackermann steering presets. Positive caster tilts the axis rearward, positive trail places the contact patch behind the kingpin ground point, and positive scrub radius places it outboard.
-- **EMRAX 228 powertrain** — `lts.components.Powertrain.EMRAX228Powertrain` loads `EMRAX228LC Single_3.36.mat`, tracks motor RPM with `PowertrainState`, applies a constant-power torque rolloff above the data endpoint, and enforces a hard RPM cap.
-- **Pacejka tire model** — `lts.components.Tire.PacejkaTire` loads the provided `.tir` file and tracks per-corner tire state, including suspension-derived camber and per-corner slip angles.
-- **Test tracks** — `lts.components.TestTrack` provides straight, oval, skidpad, autocross, busstop, slalom, and 90-turn layouts.
-- **MoTeC telemetry export** — `lts.telemetry.TelemetryExporter.exportToMoTeCLog` writes simulation logs as MotecLogGenerator-compatible CSVs and converts them to MoTeC `.ld` files through the MotecLogGenerator submodule.
-
-For the force equations and per-step data flow, see the
-[Physics Flow](https://jyjh.github.io/lts/physics-flow/) page.
-
-## Submodules, component repositories, and Python tooling
-
-The department component packages live in their own sibling repositories
-and are mounted here at their original paths, so `addpath('src')` is
-unchanged:
-
-| Submodule | Mounted at | Contents |
-|---|---|---|
-| `lts-kit` | `src/+lts/+util` | shared kernel (`clamp`, `PhysicalConstants`, ...) |
-| `lts-aero` | `src/+lts/+components/+Aero` | aero package |
-| `lts-suspension` | `src/+lts/+components/+Suspension` | suspension package |
-| `lts-powertrain` | `src/+lts/+components/+Powertrain` | powertrain package + EMRAX maps |
-| `lts-chassis` | `src/+lts/+components/+Chassis` | chassis package |
-| `external/MotecLogGenerator` | `external/` | `.ld` export (Python) |
-| `external/LTSTelemetryVisualizer` | `external/` | telemetry viewer (private, not needed by tests) |
-
-Clone with submodules:
+## Quick start
 
 ```bash
-git clone --recurse-submodules <repository URL>
+git clone --recurse-submodules <this repository>
 ```
 
-Branch model (this repository and every component repository): `staging`
-is where PRs from forks land, and its submodule pointers track the
-components' `staging` branches; `main` is stable/release-only and tracks
-the components' `main` branches — staging pulls from staging, main pulls
-from main. See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork workflow
-and the maintainer pointer-bump procedure.
-
-Python tooling (`.ld` conversion, vehicle generator, correlation scripts) uses
-the dependencies pinned in [`requirements.txt`](requirements.txt):
-
-```bash
-python -m pip install -r requirements.txt
+```matlab
+addpath('src')
+lts.app.run_simulation          % writes exports/motec_<track>_<car>_<time>.csv/.ld
 ```
 
-The vehicle generator and analysis scripts under `scripts/` are documented in
-[`scripts/README.md`](scripts/README.md).
+Full environment setup (MATLAB version, tire data, Python tooling):
+[setup.md](setup.md) and [Requirements](https://jyjh.github.io/lts/#requirements).
 
-## Documentation
+## Where to go
 
-Full documentation is available at [jyjh.github.io/lts](https://jyjh.github.io/lts).
-
-| Page | Covers |
+| You want to... | Go to |
 |---|---|
-| [Architecture & Usage](https://jyjh.github.io/lts/) | Component model, simulation loop, key files |
-| [Class Diagram](https://jyjh.github.io/lts/class-diagram/) | UML, design patterns, composition |
-| [Simulation Loop](https://jyjh.github.io/lts/simulation-loop/) | Per-timestep sequence |
-| [Physics Flow](https://jyjh.github.io/lts/physics-flow/) | Force equations, sign conventions, source map |
-| [Data Ingestion](https://jyjh.github.io/lts/data-ingestion/) | EMRAX/tire data, MoTeC export, correlation data flow |
-| [Correlation Replay](https://jyjh.github.io/lts/correlation/) | Channel maps, brake/powertrain modes, tuning overlays |
-| [Governed Prediction](https://jyjh.github.io/lts/governed-prediction/) | Parameter roles, calibration, certification gate |
-| [Department Workflow](https://jyjh.github.io/lts/workflow/) | Subsystem-data assembly diagram |
-| [Repository Split Plan](https://jyjh.github.io/lts/repo-split/) | Target repo map, contracts, phases, decision log |
+| Set up the environment and run your first simulation | [setup.md](setup.md) |
+| Take department data to a design decision | [workflow.md](workflow.md) · [Department Workflow](https://jyjh.github.io/lts/workflow/) |
+| Change the aero / suspension / powertrain / chassis model | Your department's own repository (`lts-aero`, `lts-suspension`, `lts-powertrain`, `lts-chassis`) — overview: [Repositories & Sync](https://jyjh.github.io/lts/repos/) |
+| Add or change shared helper code | `lts-kit` — ask the integration lead first ([Repositories & Sync](https://jyjh.github.io/lts/repos/)) |
+| Contribute code or report a problem | [CONTRIBUTING.md](CONTRIBUTING.md) — written for first-time contributors, no git experience needed |
+| Understand how the repositories stay in sync | [Repositories & Sync](https://jyjh.github.io/lts/repos/) |
+| Understand the simulation itself | [Architecture & Usage](https://jyjh.github.io/lts/) · [Simulation Loop](https://jyjh.github.io/lts/simulation-loop/) · [Physics Flow](https://jyjh.github.io/lts/physics-flow/) · [Class Diagram](https://jyjh.github.io/lts/class-diagram/) |
+| Work with real MoTeC logs (replay, tuning) | [Correlation Replay](https://jyjh.github.io/lts/correlation/) |
+| Make a governed design prediction | [Governed Prediction](https://jyjh.github.io/lts/governed-prediction/) |
+| Add or update a track | [Tracks](https://jyjh.github.io/lts/tracks/) |
+| See how data flows into the models | [Data Ingestion](https://jyjh.github.io/lts/data-ingestion/) |
+| Why the repositories were split — engineering record and contracts | [Repository Split Plan](https://jyjh.github.io/lts/repo-split/) |
 
-Guides that live at the repo root: [setup.md](setup.md) (initial car model) and
-[workflow.md](workflow.md) (car data → design decision).
+The component repositories are mounted inside this one at their original
+paths (`src/+lts/+util`, `src/+lts/+components/+Aero`, ...), so `addpath('src')`
+works unchanged — you never edit those folders here; see
+[Repositories & Sync](https://jyjh.github.io/lts/repos/).
 
-## Requirements
+## Documentation site
 
-- MATLAB R2019b or later
-- MFeval for Pacejka Magic Formula tire evaluation — vendored at
-  [`third-party/mfeval`](third-party/mfeval) (see its README for provenance);
-  add it to the path alongside `src/`
-- The provided EMRAX motor maps in `src/+lts/+components/+Powertrain`
-- Tire `.tir` data files in `src/+lts/+components/+Tire` — **not included**:
-  they are fitted from FSAE Tire Test Consortium member data and are not
-  committed for redistribution reasons. See
-  [`src/+lts/+components/+Tire/README.md`](src/+lts/+components/+Tire/README.md)
-  for the file list and how to place them locally. Tire-dependent tests skip
-  automatically when they are absent.
-- Python 3 with the packages in [`requirements.txt`](requirements.txt) for
-  MoTeC `.ld` export through the [MotecLogGenerator](https://github.com/jyjh/MotecLogGenerator) submodule
-
-Both test suites (MATLAB and Python) run automatically on GitHub Actions;
-MATLAB is licensed on CI runners for public repositories.
+All guides live at [jyjh.github.io/lts](https://jyjh.github.io/lts).
 
 ## License
 
-See [LICENSE](LICENSE) for details.
+MIT — see [LICENSE](LICENSE).
