@@ -20,10 +20,18 @@
 #   --dry-run  print the plan, change nothing
 #   --yes      do not ask for confirmation
 #
-# Requirements: clean working trees everywhere, and each component's
-# `main` must be an ancestor of its `staging` (the script verifies this
-# and aborts otherwise). Pushes happen only where an `origin` remote
-# exists; run this from the main repository checkout.
+# Component repositories: by default the cascade operates on this
+# checkout's own submodule working copies (src/+lts/+util, ...), which
+# are full clones with origin remotes — `git submodule update --init` is
+# the only preparation needed. Alternatively, set LTS_COMPONENTS_ROOT to
+# a directory holding sibling clones (lts-kit, lts-aero, ...) and those
+# are used instead.
+#
+# Requirements: clean working trees everywhere; every repository's local
+# main/staging branches, where they exist, must match origin; and each
+# component's main must be an ancestor of its staging (the script
+# verifies all of this and aborts otherwise). Pushes happen only where
+# an `origin` remote exists; run this from the main repository checkout.
 set -euo pipefail
 
 DRY_RUN=0
@@ -37,16 +45,37 @@ for arg in "$@"; do
 done
 
 MAIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
-COMPONENTS="lts-kit lts-aero lts-suspension lts-powertrain lts-chassis"
 SUBMODULES="kit aero suspension powertrain chassis"
 
-component_path() {  # resolve a component repo from .gitmodules relative URL
-    local name="$1" url path
-    url=$(git -C "$MAIN_ROOT" config -f .gitmodules --get "submodule.$name.url")
-    path="$MAIN_ROOT/$url"
-    [ -d "$path/.git" ] || { echo "component repo for '$name' not found at $path" >&2; exit 1; }
-    echo "$path"
-}
+# Resolve every repository up front and abort before touching anything
+# if one is missing — a resolution failure inside the preflight loop
+# would otherwise die in a subshell and leave the checks silently
+# skipped (that is how "preflight OK" once printed over missing repos).
+REPO_DIRS=("$MAIN_ROOT")
+REPO_NAMES=(lts)
+COMPONENT_DIRS=()
+COMPONENT_NAMES=()
+for name in $SUBMODULES; do
+    if [ -n "${LTS_COMPONENTS_ROOT:-}" ]; then
+        dir="$LTS_COMPONENTS_ROOT/lts-$name"
+        [ -d "$dir/.git" ] || {
+            echo "ABORT: component repo 'lts-$name' not found at $dir." >&2
+            exit 1; }
+    else
+        path=$(git -C "$MAIN_ROOT" config -f .gitmodules --get "submodule.$name.path") || {
+            echo "ABORT: submodule '$name' missing from .gitmodules." >&2
+            exit 1; }
+        dir="$MAIN_ROOT/$path"
+        [ -e "$dir/.git" ] || {
+            echo "ABORT: no working copy for '$name' at $path." \
+                 "Run: git submodule update --init  (or set LTS_COMPONENTS_ROOT)." >&2
+            exit 1; }
+    fi
+    REPO_NAMES+=("lts-$name")
+    REPO_DIRS+=("$dir")
+    COMPONENT_NAMES+=("lts-$name")
+    COMPONENT_DIRS+=("$dir")
+done
 
 run() {  # echo + execute (or just echo in dry-run)
     echo "  \$ $*"
@@ -73,25 +102,54 @@ echo "== Release cascade =="
 
 echo
 echo "== Preflight =="
-for repo in "$MAIN_ROOT" $(for c in $COMPONENTS; do component_path "${c#lts-}"; done); do
-    repo_name=$(basename "$repo")
-    [ "$DRY_RUN" -eq 1 ] || git -C "$repo" fetch --quiet origin 2>/dev/null || true
+for i in "${!REPO_DIRS[@]}"; do
+    repo="${REPO_DIRS[$i]}"
+    repo_name="${REPO_NAMES[$i]}"
+    has_origin=0
+    if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+        has_origin=1
+        git -C "$repo" fetch --quiet origin || {
+            echo "ABORT: cannot fetch '$repo_name' from origin." >&2
+            exit 1; }
+    fi
     if [ -n "$(git -C "$repo" status --porcelain)" ]; then
         echo "ABORT: '$repo_name' has a dirty working tree." >&2
         exit 1
     fi
-    for b in main staging; do
-        git -C "$repo" rev-parse --verify -q "$b" >/dev/null || {
-            echo "ABORT: '$repo_name' is missing branch '$b'." >&2; exit 1; }
-    done
-    if ! git -C "$repo" merge-base --is-ancestor main staging; then
+    if [ "$has_origin" -eq 1 ]; then
+        for b in main staging; do
+            git -C "$repo" rev-parse -q --verify "refs/remotes/origin/$b" >/dev/null || {
+                echo "ABORT: '$repo_name' has no origin/$b branch." >&2
+                exit 1; }
+            # A local branch that exists must be in sync — the cascade
+            # both reads and pushes these branches.
+            if git -C "$repo" rev-parse -q --verify "refs/heads/$b" >/dev/null; then
+                if [ "$(git -C "$repo" rev-parse "refs/heads/$b")" != \
+                     "$(git -C "$repo" rev-parse "refs/remotes/origin/$b")" ]; then
+                    echo "ABORT: '$repo_name' local '$b' does not match origin/$b — sync first." >&2
+                    exit 1
+                fi
+            fi
+        done
+        main_ref=refs/remotes/origin/main
+        staging_ref=refs/remotes/origin/staging
+    else
+        for b in main staging; do
+            git -C "$repo" rev-parse -q --verify "refs/heads/$b" >/dev/null || {
+                echo "ABORT: '$repo_name' is missing branch '$b'." >&2
+                exit 1; }
+        done
+        main_ref=refs/heads/main
+        staging_ref=refs/heads/staging
+    fi
+    if ! git -C "$repo" merge-base --is-ancestor "$main_ref" "$staging_ref"; then
         echo "ABORT: '$repo_name' main is NOT an ancestor of staging." \
              "Reconcile first (merge main into staging)." >&2
         exit 1
     fi
     printf '  %-16s main=%s staging=%s\n' "$repo_name" \
-        "$(git -C "$repo" rev-parse --short main)" \
-        "$(git -C "$repo" rev-parse --short staging)"
+        "$(git -C "$repo" rev-parse --short "$main_ref")" \
+        "$(git -C "$repo" rev-parse --short "$staging_ref")"
 done
 echo "  preflight OK"
 
@@ -105,13 +163,21 @@ fi
 
 echo
 echo "== 1/3 Cascade component repositories (fast-forward staging -> main) =="
-# Component .gitmodules are branch-agnostic (no branch = lines), so the
-# fast-forward leaves both branches identical — no normalization needed.
-for c in $COMPONENTS; do
-    repo=$(component_path "${c#lts-}")
-    echo "-- $c"
-    run git -C "$repo" checkout -q main
-    run git -C "$repo" merge --ff-only staging
+# Component .gitmodules are branch-agnostic on both branches (no
+# branch = lines), so the fast-forward leaves both branches identical —
+# no normalization needed.
+for i in "${!COMPONENT_DIRS[@]}"; do
+    repo="${COMPONENT_DIRS[$i]}"
+    repo_name="${COMPONENT_NAMES[$i]}"
+    echo "-- $repo_name"
+    if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
+        run git -C "$repo" checkout -q -B main refs/remotes/origin/main
+        run git -C "$repo" merge --ff-only refs/remotes/origin/staging
+    else
+        run git -C "$repo" checkout -q main
+        run git -C "$repo" merge --ff-only staging
+    fi
+    run git -C "$repo" branch -f staging main
 done
 
 echo
@@ -126,7 +192,10 @@ if [ "$DRY_RUN" -eq 0 ]; then
             git -C "$MAIN_ROOT" checkout --theirs -- "$path" 2>/dev/null || true
         done
         git -C "$MAIN_ROOT" checkout --theirs -- .gitmodules 2>/dev/null || true
-        git -C "$MAIN_ROOT" add -A
+        # Stage only the resolved files: a bare `git add -A` here could
+        # sweep in submodule working-copy states left behind by step 1
+        # and record pin bumps that were never tested.
+        git -C "$MAIN_ROOT" add .gitmodules
         git -C "$MAIN_ROOT" commit -q --no-edit
     fi
 else
@@ -155,8 +224,8 @@ for name in $SUBMODULES; do
     set_gitmodules_branch "$MAIN_ROOT" "$name" staging
 done
 commit_if_changed "chore(release): staging keeps tracking component staging branches"
-# protocol.file.allow=always: no-op for https remotes; required while the
-# local checkout resolves component submodules from sibling directories.
+# protocol.file.allow=always: no-op for https remotes; required while
+# submodules may resolve from local sibling directories.
 run git -C "$MAIN_ROOT" -c protocol.file.allow=always submodule update --init
 run git -C "$MAIN_ROOT" checkout -q main
 
@@ -165,22 +234,24 @@ echo "== Push =="
 if [ "$DRY_RUN" -eq 1 ]; then
     echo "  (dry run: no pushes)"
 else
-    for repo in "$MAIN_ROOT" $(for c in $COMPONENTS; do component_path "${c#lts-}"; done); do
+    for i in "${!REPO_DIRS[@]}"; do
+        repo="${REPO_DIRS[$i]}"
+        repo_name="${REPO_NAMES[$i]}"
         if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
-            echo "  pushing $(basename "$repo")"
+            echo "  pushing $repo_name"
             git -C "$repo" push origin main staging
         else
-            echo "  $(basename "$repo") has no origin remote — push skipped (pre-transfer local setup)"
+            echo "  $repo_name has no origin remote — push skipped (pre-transfer local setup)"
         fi
     done
 fi
 
 echo
 echo "== Done =="
-for repo in "$MAIN_ROOT" $(for c in $COMPONENTS; do component_path "${c#lts-}"; done); do
-    printf '  %-16s main=%s staging=%s\n' "$(basename "$repo")" \
-        "$(git -C "$repo" rev-parse --short main)" \
-        "$(git -C "$repo" rev-parse --short staging)"
+for i in "${!REPO_DIRS[@]}"; do
+    printf '  %-16s main=%s staging=%s\n' "${REPO_NAMES[$i]}" \
+        "$(git -C "${REPO_DIRS[$i]}" rev-parse --short main)" \
+        "$(git -C "${REPO_DIRS[$i]}" rev-parse --short staging)"
 done
 echo
 echo "Next: watch CI on every repository's main branch. If any goes red,"
