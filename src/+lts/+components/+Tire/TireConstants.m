@@ -37,8 +37,9 @@ classdef TireConstants
             %   TireConstants(tirFilePath)
             %   TireConstants(tirFilePath, 'Verbose', true)
             %
-            %   tirFilePath — path to the .tir file. If relative, resolved
-            %                 relative to this class's folder (+Tire/).
+            %   tirFilePath — path to the .tir file. Relative names resolve
+            %                 against the repository's data/tires/ folder
+            %                 (legacy locations are searched as fallbacks).
             %   'Verbose'   — print the loaded nominal operating point
             %                 (default false; the VehicleManager build
             %                 report already summarizes the tire).
@@ -48,32 +49,29 @@ classdef TireConstants
                 @(x) islogical(x) || (isnumeric(x) && isscalar(x)));
             verboseParser.parse(varargin{:});
             verbose = logical(verboseParser.Results.Verbose);
-            
-            % Resolve relative paths: search +Tire/ → src/ → project root
+
+            % Resolve relative paths: data/tires/ -> +Tire/ -> src/ -> root
             if ~startsWith(tirFilePath, '/') && ~startsWith(tirFilePath, '\') ...
                     && ~contains(tirFilePath, ':')
-                % Try +Tire/ folder first
-                tireFolder = fullfile(fileparts(mfilename('fullpath')), tirFilePath);
-                if exist(tireFolder, 'file')
-                    tirFilePath = tireFolder;
-                else
-                    % Try src/ folder
-                    srcFolder = fullfile(fileparts(fileparts(mfilename('fullpath'))), tirFilePath);
-                    if exist(srcFolder, 'file')
-                        tirFilePath = srcFolder;
-                    else
-                        % Try project root
-                        rootFolder = fullfile(lts.util.repoRoot(mfilename('fullpath')), tirFilePath);
-                        if exist(rootFolder, 'file')
-                            tirFilePath = rootFolder;
-                        else
-                            error('TireConstants:TirFileNotFound', ...
-                                ['Tire data file "%s" was not found in +Tire/, src/, or the ' ...
-                                 'repo root. The .tir files are untracked because they are fitted ' ...
-                                 'from FSAE TTC member data; see src/+lts/+components/+Tire/README.md ' ...
-                                 'for the required files.'], tirFilePath);
-                        end
+                root = lts.util.repoRoot(mfilename('fullpath'));
+                candidates = { ...
+                    fullfile(root, 'data', 'tires', tirFilePath); ...
+                    fullfile(fileparts(mfilename('fullpath')), tirFilePath); ...
+                    fullfile(fileparts(fileparts(mfilename('fullpath'))), tirFilePath); ...
+                    fullfile(root, tirFilePath)};
+                tirFilePath = candidates{1};
+                for i = 1:numel(candidates)
+                    if exist(candidates{i}, 'file')
+                        tirFilePath = candidates{i};
+                        break;
                     end
+                end
+                if ~exist(tirFilePath, 'file')
+                    error('TireConstants:TirFileNotFound', ...
+                        ['Tire data file "%s" was not found in data/tires/, +Tire/, src/, or ' ...
+                         'the repo root. The .tir files are untracked because they are fitted ' ...
+                         'from FSAE TTC member data; see src/+lts/+components/+Tire/README.md ' ...
+                         'for the required files.'], tirFilePath);
                 end
             end
             obj.tirFilePath = tirFilePath;

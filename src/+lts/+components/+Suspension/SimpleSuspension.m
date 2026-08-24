@@ -22,13 +22,6 @@ classdef SimpleSuspension
         wheelbase                    % Wheelbase [m]
         cgHeight                     % Center of gravity height [m]
 
-        % --- Suspension tuning ---
-        % DEPRECATED: the front/rear elastic load-transfer split is now
-        % derived from springs + anti-roll bars (see
-        % SuspensionManager.deriveFrontRollStiffnessFraction). Kept only to
-        % preserve the constructor signature; no longer read for the split.
-        rollStiffDist                % Legacy roll stiffness distribution [0-1]
-
         % --- Per-corner spring-damper ---
         springRate                   % Heave spring rate [N/m]
         dampingCoeff                 % Low-speed compression slope [N*s/m]
@@ -37,6 +30,9 @@ classdef SimpleSuspension
         % low-speed slope holds; above it the slope drops to
         % dampingHighSpeedRatio x the low-speed slope. Inf => linear damper.
         dampingKneeSpeed = Inf
+        % Rebound-side knee override [m/s]. NaN (default) shares
+        % dampingKneeSpeed; real dampers often run a different rebound knee.
+        dampingReboundKneeSpeed = NaN
         % High-speed damper slope as a fraction of the low-speed slope [-].
         % 1.0 => linear (no digression). Typical racing dampers ~0.2-0.3.
         dampingHighSpeedRatio = 1.0
@@ -54,25 +50,39 @@ classdef SimpleSuspension
         % --- Transient state ---
         state                        % SuspensionState handle object
 
+        % Optional pluggable force elements (lts.components.Suspension.
+        % ForceElement instances), summed into the suspension force after
+        % the built-in spring/damper/bump-stop. Empty (default) keeps the
+        % corner exactly at the built-in force law. See ForceElement for
+        % the contract and the roll-stiffness limitation.
+        forceElements = {}
+
         % Internal integration cap for stiff tire/suspension vertical modes.
+        % Derived at construction from the wheel-hop natural frequency so
+        % omega*dt <= 0.3 (well inside the semi-implicit Euler stability
+        % region), bounded above by the legacy 0.001 s cap.
+        % integrationSubsteps() subdivides any larger requested step, so
+        % stability holds for any dt; a stiff/light configuration simply
+        % costs more substeps.
         maxIntegrationStep = 0.001
     end
 
     methods
-        function obj = SimpleSuspension(vehicleManager, rollStiffDist, ...
+        function obj = SimpleSuspension(vehicleManager, ...
                 springRate, dampingCoeff, reboundCoeff, ...
                 motionRatio, bumpStopLength, bumpStopRate, ...
                 tireSpringRate, unsprungMass, sprungMass, ...
-                dampingKneeSpeed, dampingHighSpeedRatio)
+                dampingKneeSpeed, dampingHighSpeedRatio, dampingReboundKneeSpeed)
             % SIMPLESUSPENSION Construct a per-corner suspension unit
-            %   SimpleSuspension(vehicleManager, rollStiffDist, ...
+            %   SimpleSuspension(vehicleManager, ...
             %       springRate, dampingCoeff, reboundCoeff, ...
             %       motionRatio, bumpStopLength, bumpStopRate, ...
             %       tireSpringRate, unsprungMass, sprungMass)
             %   SimpleSuspension(..., dampingKneeSpeed, dampingHighSpeedRatio)
+            %   SimpleSuspension(..., dampingKneeSpeed, dampingHighSpeedRatio, ...
+            %       dampingReboundKneeSpeed)
             %
             %   vehicleManager  - lts.vehicle.VehicleManager handle (geometry pulled at construction)
-            %   rollStiffDist   - Roll stiffness distribution for this end [0-1]
             %   springRate      - Heave spring rate [N/m]
             %   dampingCoeff    - Low-speed compression slope [N*s/m]
             %   reboundCoeff    - Low-speed rebound slope [N*s/m]
@@ -87,6 +97,8 @@ classdef SimpleSuspension
             %                           (default) keeps a linear damper.
             %   dampingHighSpeedRatio - Optional high-speed slope / low-speed slope.
             %                           1.0 (default) keeps a linear damper.
+            %   dampingReboundKneeSpeed - Optional rebound knee override [m/s].
+            %                           NaN (default) shares dampingKneeSpeed.
 
             % Pull vehicle-level geometry from lts.vehicle.VehicleManager
             obj.trackWidth   = vehicleManager.trackWidth;
@@ -94,7 +106,6 @@ classdef SimpleSuspension
             obj.cgHeight     = vehicleManager.cgHeight;
 
             % Store suspension-specific parameters
-            obj.rollStiffDist     = rollStiffDist;
             obj.springRate        = springRate;
             obj.dampingCoeff      = dampingCoeff;
             obj.reboundCoeff      = reboundCoeff;
@@ -103,21 +114,36 @@ classdef SimpleSuspension
             obj.bumpStopRate      = bumpStopRate;
             obj.tireSpringRate    = tireSpringRate;
             obj.unsprungMass      = unsprungMass;
-            if nargin >= 12 && ~isempty(dampingKneeSpeed) && isnumeric(dampingKneeSpeed) ...
+            if nargin >= 11 && ~isempty(dampingKneeSpeed) && isnumeric(dampingKneeSpeed) ...
                     && (isinf(dampingKneeSpeed) || (isscalar(dampingKneeSpeed) && ...
                         isfinite(dampingKneeSpeed) && dampingKneeSpeed > 0))
                 obj.dampingKneeSpeed = dampingKneeSpeed;
             end
-            if nargin >= 13 && ~isempty(dampingHighSpeedRatio) && isnumeric(dampingHighSpeedRatio) ...
+            if nargin >= 12 && ~isempty(dampingHighSpeedRatio) && isnumeric(dampingHighSpeedRatio) ...
                     && isscalar(dampingHighSpeedRatio) && isfinite(dampingHighSpeedRatio) ...
                     && dampingHighSpeedRatio > 0
                 obj.dampingHighSpeedRatio = dampingHighSpeedRatio;
             end
-            if nargin >= 11 && ~isempty(sprungMass)
+            if nargin >= 13 && ~isempty(dampingReboundKneeSpeed) && ...
+                    isnumeric(dampingReboundKneeSpeed) && isscalar(dampingReboundKneeSpeed) && ...
+                    (isinf(dampingReboundKneeSpeed) || ...
+                    (isfinite(dampingReboundKneeSpeed) && dampingReboundKneeSpeed > 0))
+                obj.dampingReboundKneeSpeed = dampingReboundKneeSpeed;
+            end
+            if nargin >= 10 && ~isempty(sprungMass)
                 obj.sprungMass = sprungMass;
             else
                 obj.sprungMass = max(vehicleManager.totalMass / 4 - unsprungMass, eps);
             end
+
+            % Stiffness-derived integration cap: wheel-hop mode is the
+            % stiffest vertical dynamics this corner integrates
+            % (suspension spring + tire spring, both at the wheel, on the
+            % unsprung mass; bump stop adds tangent stiffness when engaged).
+            stiffness = springRate * max(motionRatio, eps)^2 + ...
+                max(tireSpringRate, 0) + max(bumpStopRate, 0);
+            hopOmega = sqrt(stiffness / max(unsprungMass, eps));
+            obj.maxIntegrationStep = min(obj.maxIntegrationStep, 0.3 / hopOmega);
 
             % Initialize transient state
             obj.state = lts.components.Suspension.SuspensionState();
@@ -148,101 +174,12 @@ classdef SimpleSuspension
             cornerState.demandedLoad = staticLoad;
         end
 
-        function updateCorner(obj, cornerState, demandedLoad, dt, antiRollBarForce)
-            % UPDATECORNER Update one corner's transient state
-            %   updateCorner(cornerState, demandedLoad, dt, antiRollBarForce)
-            %
-            %   cornerState  - SuspensionState handle for this corner
-            %   demandedLoad - Total static + aero + load-transfer force [N]
-            %   dt           - Timestep [s]
-            %   antiRollBarForce - Optional axle coupling force [N]
-            %
-            %   Mutates cornerState in-place, updating:
-            %     .damperPosition, .damperVelocity, .tireDeflection,
-            %     .tireNormalForce, .suspensionForce, .demandedLoad
-            %
-            % Physics model:
-            %   sprung mass:   m_s * z_s_ddot = demandedLoad - F_suspension
-            %   unsprung mass: m_u * z_u_ddot = F_suspension - F_tire
-            % where positive z is downward/compression-producing. Spring,
-            % damper, bump-stop, and anti-roll-bar forces act through
-            % F_suspension; the tire is a vertical spring to the road.
-
-            if nargin < 5 || isempty(antiRollBarForce)
-                antiRollBarForce = 0;
-            end
-            if ~isfinite(antiRollBarForce)
-                antiRollBarForce = 0;
-            end
-
-            cornerState.demandedLoad = demandedLoad;
-            cornerState.antiRollBarForce = antiRollBarForce;
-            if cornerState.staticLoad <= 0 && cornerState.tireNormalForce <= 0
-                obj.initializeStaticLoad(cornerState, max(demandedLoad, 0));
-                cornerState.antiRollBarForce = antiRollBarForce;
-            end
-
-            nSubsteps = obj.integrationSubsteps(dt);
-            if nSubsteps > 1
-                subDt = dt / nSubsteps;
-                for idx = 1:nSubsteps
-                    obj.updateCorner(cornerState, demandedLoad, subDt, antiRollBarForce);
-                end
-                return;
-            end
-
-            z_s_prev = cornerState.sprungPosition;
-            v_s_prev = cornerState.sprungVelocity;
-            z_u_prev = cornerState.unsprungPosition;
-            v_u_prev = cornerState.unsprungVelocity;
-
-            MR_eff = obj.getEffectiveMotionRatio(cornerState);
-            K_eff = obj.springRate * MR_eff^2;
-
-            suspensionDeflection = z_s_prev - z_u_prev;
-            suspensionVelocity = v_s_prev - v_u_prev;
-            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
-                cornerState, suspensionDeflection, suspensionVelocity, K_eff, MR_eff);
-            F_suspension = F_suspension + antiRollBarForce;
-            F_tire = obj.computeTireNormalForce(cornerState, z_u_prev);
-
-            z_s_ddot = (demandedLoad - F_suspension) / max(obj.sprungMass, eps);
-            z_u_ddot = (F_suspension - F_tire) / max(obj.unsprungMass, eps);
-
-            % Semi-implicit Euler integration
-            v_s_new = v_s_prev + z_s_ddot * dt;
-            v_u_new = v_u_prev + z_u_ddot * dt;
-            z_s_new = z_s_prev + v_s_new * dt;
-            z_u_new = z_u_prev + v_u_new * dt;
-
-            suspensionDeflection = z_s_new - z_u_new;
-            suspensionVelocity = v_s_new - v_u_new;
-            [F_suspension, ~, ~, ~] = obj.computeSuspensionForce( ...
-                cornerState, suspensionDeflection, suspensionVelocity, K_eff, MR_eff);
-            F_suspension = F_suspension + antiRollBarForce;
-            F_tire = obj.computeTireNormalForce(cornerState, z_u_new);
-
-            % --- Update state ---
-            cornerState.sprungPosition = z_s_new;
-            cornerState.sprungVelocity = v_s_new;
-            cornerState.unsprungPosition = z_u_new;
-            cornerState.unsprungVelocity = v_u_new;
-            cornerState.damperPosition = suspensionDeflection;
-            cornerState.damperVelocity = suspensionVelocity;
-            cornerState.tireDeflection = max( ...
-                cornerState.staticTireDeflection + z_u_new, 0);
-            cornerState.tireNormalForce = F_tire;
-            cornerState.suspensionForce = F_suspension;
-        end
-
         function updateCornerFromChassis(obj, cornerState, sprungPosition, ...
                 sprungVelocity, dt, antiRollBarForce)
             % UPDATECORNERFROMCHASSIS Update unsprung/tire load from chassis motion.
-            % Sprung motion is imposed by the chassis heave/pitch/roll model.
-            %
-            % Compared with updateCorner(), the sprung DOF is not integrated
-            % here. The chassis has already solved it; this corner only
-            % advances the unsprung mass against suspension and tire springs.
+            % Sprung motion is imposed by the chassis heave/pitch/roll model;
+            % this corner only advances the unsprung mass against suspension
+            % and tire springs (the chassis has already solved the sprung DOF).
 
             if nargin < 6 || isempty(antiRollBarForce)
                 antiRollBarForce = 0;
@@ -410,6 +347,8 @@ classdef SimpleSuspension
             % Suspension force is measured relative to static equilibrium:
             % staticLoad carries the steady car weight, while spring/damper
             % and bump-stop deltas add transient load from chassis motion.
+            % Pluggable force elements (obj.forceElements) add their
+            % wheel-domain force on top.
             F_spring = K_eff * suspensionDeflection;
             F_damper = obj.computeDamperForce(suspensionVelocity, MR_eff);
 
@@ -421,28 +360,48 @@ classdef SimpleSuspension
 
             F_suspension = cornerState.staticLoad + F_spring + ...
                 F_damper + F_bumpstop;
+            for i = 1:numel(obj.forceElements)
+                F_suspension = F_suspension + obj.forceElements{i}.force( ...
+                    cornerState, suspensionDeflection, suspensionVelocity);
+            end
         end
 
         function F = computeDamperForce(obj, velocity, MR_eff)
             % COMPUTEDAMPERFORCE Digressive damper force in the wheel domain.
             %   The low-speed slope (compressionCoeff for v >= 0, reboundCoeff
-            %   for v < 0, each * MR_eff^2) holds up to dampingKneeSpeed; above
-            %   it the slope drops to lowSpeed * dampingHighSpeedRatio.
-            %   dampingHighSpeedRatio = 1 or dampingKneeSpeed = Inf reproduces
-            %   a linear damper exactly, so the default config is unchanged.
+            %   for v < 0, each * MR_eff^2) holds up to the knee speed; above
+            %   it the slope drops to lowSpeed * dampingHighSpeedRatio. The
+            %   rebound side uses dampingReboundKneeSpeed when set (NaN
+            %   shares dampingKneeSpeed). dampingHighSpeedRatio = 1 or
+            %   dampingKneeSpeed = Inf reproduces a linear damper exactly, so
+            %   the default config is unchanged.
             MR2 = MR_eff * MR_eff;
             if velocity >= 0
                 cLow = obj.dampingCoeff * MR2;
+                knee = obj.dampingKneeSpeed;
             else
                 cLow = obj.reboundCoeff * MR2;
+                knee = obj.resolvedReboundKneeSpeed();
             end
             % Unified piecewise magnitude: low-speed up to the knee, then the
-            % reduced high-speed slope. Equals |velocity| when ratio == 1 or
-            % knee == Inf, giving the legacy linear law with no branch.
+            %   reduced high-speed slope. Equals |velocity| when ratio == 1 or
+            %   knee == Inf, giving the legacy linear law with no branch.
             av = abs(velocity);
-            beyond = max(av - obj.dampingKneeSpeed, 0);
-            mag = min(av, obj.dampingKneeSpeed) + obj.dampingHighSpeedRatio * beyond;
+            beyond = max(av - knee, 0);
+            mag = min(av, knee) + obj.dampingHighSpeedRatio * beyond;
             F = cLow * mag * sign(velocity);
+        end
+
+        function knee = resolvedReboundKneeSpeed(obj)
+            % Rebound knee override when it is Inf (linear) or a finite
+            % positive scalar; anything else (including the NaN default)
+            % shares the compression knee.
+            knee = obj.dampingReboundKneeSpeed;
+            valid = isnumeric(knee) && isscalar(knee) && ...
+                (isinf(knee) || (isfinite(knee) && knee > 0));
+            if isempty(knee) || ~valid
+                knee = obj.dampingKneeSpeed;
+            end
         end
 
         function F_tire = computeTireNormalForce(obj, cornerState, unsprungPosition)

@@ -8,6 +8,14 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
     % this model reads the full-throttle tractive-force map by motor RPM,
     % scales by throttle request and efficiency, and returns total rear-axle
     % wheel torque for the differential to split.
+    %
+    % Torque-control modes (throttle / motor_torque_command /
+    % motor_torque_delivered, pack-power and rev limiting) are resolved by
+    % the inherited PowertrainComponent.resolveTorques contract, which uses
+    % this model's optional hooks (getMotoringEfficiencyAtRPM,
+    % getRegenDrivetrainEfficiency, getDeliveredTorqueDrivetrainEfficiency,
+    % isRPMLimitActive, computeCoastdownTorque). Override resolveTorques or
+    % the hooks to add SoC/thermal/torque-map behavior.
     
     properties
         matFilePath = ""
@@ -65,8 +73,23 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             %   EMRAX228Powertrain(matFilePath, drivetrainEfficiency, motorRotorInertia)
 
             if nargin < 1 || isempty(matFilePath)
-                classDir = fileparts(mfilename('fullpath'));
-                matFilePath = fullfile(classDir, 'EMRAX228LC Single_3.36.mat');
+                matFilePath = 'EMRAX228LC Single_3.36.mat';
+            end
+            % Resolve relative names against the repository's
+            % data/powertrain/ folder (legacy class-folder fallback kept).
+            if ~startsWith(matFilePath, '/') && ~startsWith(matFilePath, '\') ...
+                    && ~contains(matFilePath, ':') && ~exist(matFilePath, 'file')
+                root = lts.util.repoRoot(mfilename('fullpath'));
+                candidates = { ...
+                    fullfile(root, 'data', 'powertrain', matFilePath); ...
+                    fullfile(fileparts(mfilename('fullpath')), matFilePath); ...
+                    fullfile(root, matFilePath)};
+                for i = 1:numel(candidates)
+                    if exist(candidates{i}, 'file')
+                        matFilePath = candidates{i};
+                        break;
+                    end
+                end
             end
             if nargin >= 2
                 obj.drivetrainEfficiency = lts.util.saturate(drivetrainEfficiency);

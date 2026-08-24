@@ -2,14 +2,15 @@ function tests = SimulatorPhysicsRegressionTest
 tests = functiontests(localfunctions);
 end
 
-function testChassisStepDoesNotCallAlgebraicSuspensionCorrection(testCase)
+function testChassisStepUsesChassisDrivenSuspensionPath(testCase)
     assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
-tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
-tire.relaxationLength = 0;
-powertrain = SimulatorZeroPowertrain();
-suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
-chassis = SimulatorChassisSpy();
-aero = SimulatorZeroAero();
+    tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
+    tire.relaxationLength = 0;
+    powertrain = SimulatorZeroPowertrain();
+    suspension = SimulatorChassisOnlySuspensionSpy(256 * 9.80665 / 4);
+    chassis = SimulatorChassisSpy();
+    aero = SimulatorZeroAero();
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 
 vehicle = lts.vehicle.VehicleManager(aero, suspension, powertrain, tire, [], chassis, []);
 vehicle.totalMass = 256;
@@ -40,7 +41,8 @@ input = struct('throttle', 0, 'brake', 0, 'steer', 0);
 
 simulator.step(state, input, ref);
 
-verifyEqual(testCase, suspension.algebraicCalls, 0);
+% The demanded-load (algebraic) path no longer exists; assert the step
+% resolves loads through the chassis-driven path.
 verifyGreaterThanOrEqual(testCase, suspension.chassisCalls, 1);
 end
 
@@ -590,6 +592,59 @@ verifyEqual(testCase, tireData.yawMoment, forceMoment + aligningMoment, ...
     'AbsTol', 1e-9);
 end
 
+function testWheelSolveDoesNotDoubleIntegrateOmegaAtDefaultIterations(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+% Regression guard: at the default wheelSolveIterations = 2, each solve
+% iteration must be a fresh fixed-point attempt from omega0, NOT an
+% accumulation. Before the snapshot/reset fix, omega advanced by ~2*dt
+% per step (effective wheel inertia halved). Compare a 1-iteration step
+% against a 2-iteration step from identical initial conditions: the
+% 2-iteration step must still be ONE dt of integration. Because the
+% contact-solve re-evaluates tire force each iteration, the 2-iteration
+% result sits at a different point of the oscillating fixed-point
+% sequence (measured ratio ~0.5-0.7 in this aggressive transient), so
+% the guard bounds the ratio well away from the buggy ~2x.
+speed = 10;
+
+[v1, tire1] = directTorqueVehicle();
+v1.powertrain.totalRatio = 3.4;
+v1.powertrain.efficiency = 0.9;
+initializeWheelSpeeds(tire1, speed);
+state1 = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state1.vehicleManager = v1;
+sim1 = lts.simulation.Simulator(v1, [], 0.001);
+sim1.powertrainMode = "motor_torque_command";
+sim1.wheelSolveIterations = 1;
+ref = struct('heading', 0, 'x', 0, 'y', 0, 'idx', 1, ...
+    'trackData', straightTrackData());
+input = struct('throttle', 0.7, 'brake', 0, 'steer', 0, ...
+    'motorTorqueCommandNm', 50);
+omega0 = tire1.RL.angularVelocity;
+sim1.step(state1, input, ref);
+deltaOmega1Iter = tire1.RL.angularVelocity - omega0;
+
+[v2, tire2] = directTorqueVehicle();
+v2.powertrain.totalRatio = 3.4;
+v2.powertrain.efficiency = 0.9;
+initializeWheelSpeeds(tire2, speed);
+state2 = lts.simulation.VehicleState('speed', speed, 'vx', speed, 'vy', 0, ...
+    'yaw', 0, 'x', 0, 'y', 0, 'mu', 1.2);
+state2.vehicleManager = v2;
+sim2 = lts.simulation.Simulator(v2, [], 0.001);
+sim2.powertrainMode = "motor_torque_command";
+sim2.wheelSolveIterations = 2;
+omega0b = tire2.RL.angularVelocity;
+sim2.step(state2, input, ref);
+deltaOmega2Iter = tire2.RL.angularVelocity - omega0b;
+
+% Both iteration counts must advance omega by one dt, not 2x: with the
+% double-integration bug, deltaOmega2Iter ~= 2 * deltaOmega1Iter.
+verifyGreaterThan(testCase, abs(deltaOmega1Iter), 1e-6);
+verifyLessThan(testCase, deltaOmega2Iter, 1.5 * deltaOmega1Iter);
+verifyGreaterThan(testCase, deltaOmega2Iter, 0.25 * deltaOmega1Iter);
+end
+
 function testPlanarDynamicsReportsAxleSpecificLateralAcceleration(testCase)
 vehicle = lts.vehicle.VehicleManager([], [], [], [], []);
 vehicle.totalMass = 256;
@@ -809,6 +864,10 @@ vehicle.maxSpeed = 80;
 end
 
 function testPowertrainModeCacheTracksRuntimePolicyChanges(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+% The Simulator delegates torque-control to the powertrain's (inherited)
+% resolveTorques contract using the CURRENT mode, so runtime
+% powertrainMode changes are honored on every call.
     assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
 [vehicle, ~, ~] = directTorqueVehicle();
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);

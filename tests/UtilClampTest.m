@@ -69,12 +69,13 @@ end
 
 function testShellQuoteEscapesShellMetacharacters(testCase)
 % C4 regression: shellQuote must neutralize cmd.exe / POSIX metacharacters
-% so a free-text field cannot break out of its quoted argument. On Windows
-% (ispc) each metacharacter is prefixed with cmd's escape char '^'.
-plain = lts.util.shellQuote('hello');
-verifyEqual(testCase, plain(1), '"');
-verifyEqual(testCase, plain(end), '"');
+% so a free-text field cannot break out of its quoted argument. Quoting is
+% shell-specific: cmd.exe double quotes with '^' escapes; POSIX wraps in
+% single quotes.
 if ispc
+    plain = lts.util.shellQuote('hello');
+    verifyEqual(testCase, plain(1), '"');
+    verifyEqual(testCase, plain(end), '"');
     % On Windows the raw metacharacter must be escaped (^$ / ^&), not bare.
     dollar = lts.util.shellQuote('a$b');
     verifyTrue(testCase, contains(dollar, '^$'));
@@ -85,10 +86,15 @@ if ispc
     pipe = lts.util.shellQuote('a|b');
     verifyTrue(testCase, contains(pipe, '^|'));
 else
-    % On POSIX, single-quoting neutralizes metacharacters.
+    % On POSIX, single-quoting neutralizes metacharacters: the value sits
+    % verbatim inside single quotes, so metacharacters stay inert.
+    plain = lts.util.shellQuote('hello');
+    verifyEqual(testCase, plain(1), '''');
+    verifyEqual(testCase, plain(end), '''');
     amp = lts.util.shellQuote('a&b');
     verifyEqual(testCase, amp(1), '''');
     verifyEqual(testCase, amp(end), '''');
+    verifyTrue(testCase, contains(amp, 'a&b'));
 end
 end
 

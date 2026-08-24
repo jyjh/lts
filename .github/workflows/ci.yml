@@ -10,8 +10,12 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-        with:
-          submodules: recursive
+      # Only external/MotecLogGenerator (public) is needed by the pytest
+      # suite (conftest.py). external/LTSTelemetryVisualizer is private and
+      # cannot be cloned with the job's repo-scoped GITHUB_TOKEN, so avoid
+      # recursive submodule init.
+      - name: Initialize MotecLogGenerator submodule
+        run: git submodule update --init external/MotecLogGenerator
       - uses: actions/setup-python@v5
         with:
           python-version: "3.12"
@@ -35,11 +39,22 @@ jobs:
         with:
           release: R2026a
       - name: Run MATLAB tests
-        uses: matlab-actions/run-tests@v3
+        # run-tests' source-folder string is forwarded to MATLAB verbatim,
+        # where ';' only separates paths on Windows — on Linux runners
+        # "src;third-party/mfeval" is a single nonexistent folder and the
+        # whole suite fails to resolve the lts package. Run an explicit
+        # cross-platform command instead.
+        uses: matlab-actions/run-command@v3
         with:
-          source-folder: "src;third-party/mfeval"
-          select-by-folder: tests
-          test-results-junit: test-results/matlab-results.xml
+          command: |
+            addpath('src', 'third-party/mfeval');
+            suite = testsuite('tests');
+            if ~exist('test-results', 'dir'); mkdir('test-results'); end
+            runner = matlab.unittest.TestRunner.withTextOutput;
+            runner.addPlugin(matlab.unittest.plugins.XMLPlugin.producingJUnitFormat( ...
+                fullfile('test-results', 'matlab-results.xml')));
+            results = runner.run(suite);
+            assertSuccess(results);
       - name: Upload test results
         if: always()
         uses: actions/upload-artifact@v4

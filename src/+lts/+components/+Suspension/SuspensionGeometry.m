@@ -60,6 +60,14 @@ classdef SuspensionGeometry
         frontRollCenterLateral = 0
         rearRollCenterLateral = 0
 
+        % Longitudinal anti-geometry [0-1]. Anti-dive: fraction of the
+        % sprung braking transfer carried by the front links instead of the
+        % springs (no nose-down pitch from that share). Anti-squat: the
+        % acceleration counterpart through the rear links. 0 = spring-only
+        % legacy path; typical FSAE values 0.1-0.4.
+        frontAntiDiveFraction = 0
+        rearAntiSquatFraction = 0
+
         % Anti-roll bars per axle. Empty/disabled => the axle's roll
         % stiffness is its wheel springs only.
         frontAntiRollBar = []
@@ -331,6 +339,9 @@ classdef SuspensionGeometry
             obj.frontRollCenterHeight = f.rollCenterHeight;
             obj.frontRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 f, {'rollCenterLateral', 'rollCenterY'}, 0);
+            obj.frontAntiDiveFraction = ...
+                lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                f, {'antiDiveFraction', 'antiDive'}, 0);
             obj.frontCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 f, {'casterAngle', 'caster'}, 0);
             obj.frontMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
@@ -350,6 +361,9 @@ classdef SuspensionGeometry
             obj.rearRollCenterHeight = r.rollCenterHeight;
             obj.rearRollCenterLateral = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 r, {'rollCenterLateral', 'rollCenterY'}, 0);
+            obj.rearAntiSquatFraction = ...
+                lts.components.Suspension.SuspensionGeometry.readConfigField( ...
+                r, {'antiSquatFraction', 'antiSquat'}, 0);
             obj.rearCasterAngle = lts.components.Suspension.SuspensionGeometry.readConfigField( ...
                 r, {'casterAngle', 'caster'}, 0);
             obj.rearMechanicalTrail = lts.components.Suspension.SuspensionGeometry.readConfigField( ...

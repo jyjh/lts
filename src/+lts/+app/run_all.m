@@ -1,9 +1,26 @@
-function results = run_all()
+function results = run_all(varargin)
 % RUN_ALL Batch runner: every car x every track, with MoTeC export
 %
 % Convenience runner for regression testing: instead of editing lts.app.run_simulation
 % and re-running by hand for each circuit, this loops a car list across a track
 % list, runs the full simulation pipeline per combo, and exports MoTeC logs.
+%
+%   results = run_all()                                  % current defaults
+%   results = run_all('Cars', {'R25'}, ...
+%       'Tracks', {'skidpad', 'autocross'}, ...
+%       'ExportMoTeC', false)
+%
+% Name/value parameters (all optional, defaults shown):
+%   'Cars'        {'R25', 'R26_base'}   Car names: functions in
+%                                       src/+lts/+vehicles/<name>.m.
+%   'Tracks'      {'2026enduro', 'autocross', 'straight75', 'skidpad'}
+%                                       '2026enduro' or any TestTrack type
+%                                       ('straight10','straight','straight75',
+%                                        'oval','skidpad','autocross',
+%                                        'busstop','slalom','90turn').
+%   'dt'          0.001                 Simulation timestep [s].
+%   'ExportMoTeC' true                  Export MoTeC CSV + .ld per combo
+%                                       (the point of this script).
 %
 % The pipeline is inlined here (build track -> lts.vehicle.VehicleManager -> lts.driver.DriverModel ->
 % lts.simulation.Simulator -> simulate -> lts.telemetry.TelemetryExporter) so each
@@ -11,10 +28,9 @@ function results = run_all()
 % the vehicle/driver/simulator fresh so no learned driver state leaks between runs.
 %
 % Usage (from MATLAB):
-%   addpath('src'); lts.app.run_all
+%   addpath('src'); results = lts.app.run_all
 %
-% Edit the car/track cell arrays below to narrow the run. Output MoTeC files
-% are written to <repo>/exports/motec_<track>_<config.name>_<timestamp>.{csv,ld},
+% Output MoTeC files are written to <repo>/exports/motec_<track>_<config.name>_<timestamp>.{csv,ld},
 % exactly as in lts.app.run_simulation.
 %
 % Note: lts.vehicles.baseline does not set cfg.name, so its files read
@@ -22,17 +38,31 @@ function results = run_all()
 % config, not this script.
 
 %% ====================================================================
-%  EDIT THESE LISTS TO NARROW THE RUN
-%  Cars   -> function names in src/+lts/+vehicles/<name>.m
-%  Tracks -> '2026enduro' or any TestTrack type
-%            ('straight10','straight','straight75','oval','skidpad',
-%             'autocross','busstop','slalom','90turn')
+%  PARSE NAME/VALUE ARGUMENTS
 %  ====================================================================
-cars   = {'R25', 'R26_base'};
-tracks = {'2026enduro', 'autocross', 'straight75', 'skidpad'};
+carsFolder = fullfile(lts.util.repoRoot(mfilename('fullpath')), ...
+    'src', '+lts', '+vehicles');
+carFiles = dir(fullfile(carsFolder, '*.m'));
+carChoices = sort(erase({carFiles.name}, '.m'));   % every function in +vehicles/
 
-dt           = 0.001;   % simulation timestep [s]
-exportMoTeC  = true;    % export MoTeC CSV + .ld per combo (the point of this script)
+trackChoices = {'2026enduro', 'straight10', 'straight', 'straight75', ...
+    'oval', 'skidpad', 'autocross', 'busstop', 'slalom', '90turn'};
+
+parser = inputParser;
+addParameter(parser, 'Cars', {'R25', 'R26_base'}, ...
+    @(x) validateCellOfChoices(x, carChoices, 'Cars'));
+addParameter(parser, 'Tracks', {'2026enduro', 'autocross', 'straight75', 'skidpad'}, ...
+    @(x) validateCellOfChoices(x, trackChoices, 'Tracks'));
+addParameter(parser, 'dt', 0.001, ...
+    @(x) validateattributes(x, {'numeric'}, {'scalar', 'positive'}));
+addParameter(parser, 'ExportMoTeC', true, ...
+    @(x) validateattributes(x, {'logical'}, {'scalar'}));
+parse(parser, varargin{:});
+
+cars        = parser.Results.Cars;
+tracks      = parser.Results.Tracks;
+dt          = parser.Results.dt;       % simulation timestep [s]
+exportMoTeC = parser.Results.ExportMoTeC;
 
 %% ====================================================================
 %  SETUP PATHS
@@ -172,10 +202,25 @@ end
 
 
 function out = ternaryStr(cond, a, b)
-    if cond
-        out = a;
-    else
-        out = b;
+if cond
+    out = a;
+else
+    out = b;
+end
+end
+
+
+function validateCellOfChoices(values, choices, name)
+% VALIDATECELLOFCHOICES Cell array of char/string scalars from `choices`.
+validateattributes(values, {'cell'}, {'vector'}, name, 'run_all');
+for k = 1:numel(values)
+    validateattributes(values{k}, {'char', 'string'}, {'scalartext'}, ...
+        sprintf('%s{%d}', name, k), 'run_all');
+    if isempty(regexp(char(values{k}), ['^(' strjoin(choices, '|') ')$'], 'once'))
+        error('run_all:InvalidChoice', ...
+            '%s value "%s" is not one of: %s.', name, char(values{k}), ...
+            strjoin(choices, ', '));
     end
+end
 end
 end

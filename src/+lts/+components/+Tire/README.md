@@ -1,7 +1,8 @@
 # Tire data files (`.tir`) are intentionally NOT tracked
 
-This folder has no `.tir` files in a fresh clone. The tire property files used
-by the vehicle configs and tests are:
+A fresh clone has no `.tir` files anywhere in the repository (the canonical
+location is `data/tires/`). The tire property files used by the vehicle
+configs and tests are:
 
 | File | Used by |
 |---|---|
@@ -26,8 +27,8 @@ locally.
 1. Get the fitted `.tir` files from the team's data store (they were fitted
    from TTC data under the team's membership — ask the team's TTC account
    holder).
-2. Place the four files listed above in this folder
-   (`src/+lts/+components/+Tire/`).
+2. Place the four files listed above in `data/tires/` (the legacy
+   `src/+lts/+components/+Tire/` location is still searched as a fallback).
 3. Tire-dependent tests auto-skip when the files are absent (see
    `tests/tireDataAvailable.m`); with the files present they run normally.
 

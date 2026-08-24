@@ -1,2 +1,12 @@
 # Auto detect text files and perform LF normalization
 * text=auto
+
+# MATLAB sources: normalize line endings (the index uses LF)
+*.m text eol=lf
+
+# MATLAB data assets are binary; avoid any diff/merge text handling
+*.mat binary
+*.tir text eol=lf
+
+# Common Windows scripts stay CRLF
+*.bat text eol=crlf

@@ -188,15 +188,6 @@ classdef VehicleManager
                 tire.lateralStiffnessScaleByCorner = ...
                     config.tire.lateralStiffnessScaleByCorner;
             end
-            % Legacy surfaceMuReference is deliberately ignored. The tire
-            % file is the sole source of grip and all surfaces report Mu=1.
-            tire.surfaceMuReference = 1.0;
-            % Let wheels spin down through zero when the powertrain applies
-            % coastdown/regen drag, so the drag is not masked by the one-way
-            % clutch. Forward-only sims keep the clamp (stable default).
-            if powertrain.reverseCapable
-                tire.allowReverseRotation = true;
-            end
             if isfield(config.tire, 'rollingResistanceCoeff')
                 tire.rollingResistanceCoeff = config.tire.rollingResistanceCoeff;
             end
@@ -252,15 +243,16 @@ classdef VehicleManager
             end
 
             %% ---- Suspension (needs vehicleManager for geometry) ----
-            %  frontRollStiffDist (arg 2) is legacy/deprecated; the split is
-            %  derived from springs + ARBs unless rollStiffnessOverride is set.
+            %  The front/rear elastic load-transfer split is derived from
+            %  springs + ARBs unless rollStiffnessOverride is set (below).
             %  dampingKneeSpeed/dampingHighSpeedRatio default to a linear
             %  damper when the config omits them (fieldOr fallback).
             dampingKnee = lts.util.fieldOr(suspCfg, 'dampingKneeSpeed', Inf);
             dampingRatio = lts.util.fieldOr(suspCfg, 'dampingHighSpeedRatio', 1.0);
+            dampingReboundKnee = lts.util.fieldOr( ...
+                suspCfg, 'dampingReboundKneeSpeed', NaN);
             suspension = lts.components.Suspension.SuspensionManager( ...
                 vehicle, ...
-                suspCfg.rollStiffnessOverride, ...
                 suspCfg.front.springRate, suspCfg.front.dampingCoeff, suspCfg.front.reboundCoeff, ...
                 suspCfg.rear.springRate,  suspCfg.rear.dampingCoeff,  suspCfg.rear.reboundCoeff, ...
                 suspCfg.motionRatio, ...
@@ -270,7 +262,7 @@ classdef VehicleManager
                 config.unsprungMass, ...
                 geometry, ...
                 [], [], ...
-                dampingKnee, dampingRatio);
+                dampingKnee, dampingRatio, dampingReboundKnee);
             suspension.rollStiffnessOverride = suspCfg.rollStiffnessOverride;
             suspension.coupleChassisRollToLoadTransfer = suspCfg.coupleChassisRollToLoadTransfer;
             vehicle.suspension = suspension;

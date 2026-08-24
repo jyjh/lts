@@ -11,7 +11,11 @@ lts.app.run_simulation
 
 Each run writes a MotecLogGenerator-compatible CSV to `exports/motec_<track>_<config.name>_<timestamp>.csv`
 and, through the `external/MotecLogGenerator` submodule, a `.ld` for MoTeC i2.
-Set `exportMoTeC = false` in `src/+lts/+app/run_simulation.m` to disable `.ld` conversion.
+Pass `'ExportMoTeC', false` to skip the CSV/`.ld` export:
+
+```matlab
+lts.app.run_simulation('ExportMoTeC', false)
+```
 
 The CSV header uses MotecLogGenerator's `Channel Name (unit)` format (e.g.
 `Engine RPM (rpm)`). The exporter also creates fake `GPS Latitude (deg)` /
@@ -20,7 +24,14 @@ show a map path; the `.ld` conversion writes MoTeC-compatible display-unit bytes
 and an M1/pro-enabled log header so i2 treats exported channels as real
 quantities.
 
-Edit `trackType` in `src/+lts/+app/run_simulation.m` to switch between:
+Switch the car and track with the `Car` and `Track` name/value parameters
+instead of editing the script:
+
+```matlab
+lts.app.run_simulation('Car', 'R26_base', 'Track', 'autocross')
+```
+
+`Track` selects between:
 
 - `straight10`, `straight`, `straight75` — acceleration / top-speed validation
 - `oval`, `skidpad`, `autocross`, `busstop`, `slalom`, `90turn` — built-in courses
@@ -28,6 +39,21 @@ Edit `trackType` in `src/+lts/+app/run_simulation.m` to switch between:
 
 `skidpad` simulates one warmup lap before the timed lap; returned plots and
 MoTeC exports contain only the second lap.
+
+## Running the tests
+
+```matlab
+addpath('src'); addpath('scripts')
+run_audit_tests            % full suite; prints failures with names
+```
+
+`run_audit_tests` also accepts individual files, e.g.
+`run_audit_tests('TireContactTest.m')`. The suite covers tire contact and
+relaxation behavior, chassis load-transfer conservation, energy accounting,
+Simulator physics regressions, correlation replay, and a golden lap-time
+baseline (`GoldenLapTimeTest`). Tests require the same MFeval dependency as
+the simulation (see [Requirements](#requirements)) and run headless — no
+figures are created. Expect roughly 2.5 minutes for the full suite.
 
 ## Project objective and evidence policy
 

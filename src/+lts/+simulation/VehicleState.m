@@ -70,7 +70,9 @@ classdef VehicleState
                 obj.yaw = obj.heading;
             end
             obj.mu = 1;
-            obj.bodySlipAngle = atan2(obj.vy, obj.vx);
+            if hypot(obj.vx, obj.vy) > eps
+                obj.bodySlipAngle = atan2(obj.vy, obj.vx);
+            end
         end
 
         function obj = updateFromPlanarDynamics(obj, ax, ay, yawAccel, ...
@@ -91,7 +93,10 @@ classdef VehicleState
             obj.vx = vx;
             obj.vy = vy;
             obj.speed = hypot(vx, vy);
-            obj.bodySlipAngle = atan2(vy, vx);
+            obj.bodySlipAngle = 0;
+            if obj.speed > eps
+                obj.bodySlipAngle = atan2(vy, vx);
+            end
             obj.yawRate = yawRate;
             obj.yaw = yaw;
             obj.heading = yaw;
@@ -112,10 +117,20 @@ classdef VehicleState
         function obj = updateAttitude(obj)
             vm = obj.vehicleManager;
             if isempty(vm) || isempty(vm.chassis)
+                obj.pitchAngle = 0;
                 if ~isempty(vm) && ~isempty(vm.suspension) && ...
                         ismethod(vm.suspension, 'computePitchAngle')
                     obj.pitchAngle = vm.suspension.computePitchAngle();
                 end
+                obj.rollAngle = 0;
+                obj.rollRate = 0;
+                obj.frontRollAngle = 0;
+                obj.rearRollAngle = 0;
+                obj.frontRollRate = 0;
+                obj.rearRollRate = 0;
+                obj.twistAngle = 0;
+                obj.twistRate = 0;
+                obj.rideHeight = 0;
                 return;
             end
 

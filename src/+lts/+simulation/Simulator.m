@@ -11,6 +11,12 @@ classdef Simulator < handle
         % Semi-implicit wheel/contact iterations.
         wheelSolveIterations = 2
 
+        % Extrapolate the chassis attitude one timestep before imposing it
+        % on the suspension (see
+        % SuspensionManager.computeCornerLoadsFromChassis). Removes the
+        % one-step stagger between tire loads and platform attitude.
+        useAttitudePredictor = true
+
         telemetryMode = "full"
         verbose = true
 
@@ -38,6 +44,7 @@ classdef Simulator < handle
         cachedRearArm = NaN
         cachedRollingResistanceCoeff = NaN
         cachedPowertrainHasCoastdown
+        cachedPowertrainHasResolver
         cachedMaxSteeringAngle
         cachedSteeringRampTime
         cachedPowertrainMode = []
@@ -87,11 +94,12 @@ classdef Simulator < handle
             
             W = vm.totalMass * vm.g;
             
-            % Use the sprung-mass attitude from the previous completed step
-            % to impose corner motion on the suspension. The chassis is then
-            % advanced later in this step with the newly computed
-            % accelerations, giving a stable one-step stagger between tire
-            % loads and platform attitude.
+            % Read chassis-driven corner loads. The attitude predictor (on
+            % by default) extrapolates the chassis attitude to the end of
+            % this step, so the loads see the attitude being produced by
+            % this step's accelerations rather than the previous step's.
+            % The chassis is advanced later in this step with the newly
+            % computed accelerations.
             cornerLoads = obj.getCurrentCornerLoads(steer);
             
             % Motor speed follows the differential carrier.
@@ -135,11 +143,17 @@ classdef Simulator < handle
                 vm.tire.RL.angularVelocity; vm.tire.RR.angularVelocity];
 
             nWheelIter = max(1, round(obj.wheelSolveIterations));
+            % Reset each solve iteration to the step-start omega so it
+            % integrates a fresh fixed-point attempt with the latest Fx
+            % convergence candidate instead of accumulating: without the
+            % reset, nWheelIter=2 would advance omega by ~2*dt per step
+            % (effective inertia halved).
             for iter = 1:nWheelIter
                 vm.tire.FL.angularVelocity = omegaStart(1);
                 vm.tire.FR.angularVelocity = omegaStart(2);
                 vm.tire.RL.angularVelocity = omegaStart(3);
                 vm.tire.RR.angularVelocity = omegaStart(4);
+
                 vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds(1));
                 vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds(2));
                 vm.tire.updateDrivenWheelPairDynamics( ...
@@ -416,8 +430,9 @@ classdef Simulator < handle
                 maxSteps = max(maxSteps, ceil(max(0, obj.stopTime - initialState.time) / obj.dt) + 2);
             end
             maxSteps = max(maxSteps, 100000);
-            leanTelemetry = obj.isLeanTelemetry();
-            stateLog = localCreateStateLog(maxSteps, leanTelemetry);
+            stateLogBuilder = lts.telemetry.StateLogBuilder(vm, obj.telemetryMode);
+            stateLogBuilder.beginRun(maxSteps, trackData, ...
+                obj.isFreeReferenceMode());
             
             currentState = initialState;
             lts.simulation.DrivelineSupport.initializeWheelSpeeds( ...
@@ -469,127 +484,8 @@ classdef Simulator < handle
                 [newState, forces] = obj.step(currentState, input, ref);
                 
                 if step <= maxSteps
-                    inputSourceDist   = lts.util.fieldOr(input, 'sourceDistance',      currentState.s);
-                    inputSourceTime   = lts.util.fieldOr(input, 'sourceTime',          currentState.time);
-                    inputTargetSpeed  = lts.util.fieldOr(input, 'targetSpeed',         NaN);
-                    inputAxRef        = lts.util.fieldOr(input, 'axRef',               NaN);
-                    inputTargetLatErr = lts.util.fieldOr(input, 'targetLateralError',  NaN);
-                    inputLineCurv     = lts.util.fieldOr(input, 'lineCurvature',       NaN);
-                    inputSpeedError   = lts.util.fieldOr(input, 'speedError',          NaN);
-
-                    stateLog.time(step)        = newState.time;
-                    stateLog.s(step)           = newState.s;
-                    stateLog.controlS(step)    = inputSourceDist;
-                    stateLog.x(step)           = newState.x;
-                    stateLog.y(step)           = newState.y;
-                    stateLog.yaw(step)         = newState.yaw;
-                    stateLog.vx(step)          = newState.vx;
-                    stateLog.vy(step)          = newState.vy;
-                    stateLog.bodySlipAngle(step) = newState.bodySlipAngle;
-                    stateLog.speed(step)       = newState.speed;
-                    stateLog.speedKmh(step)    = newState.speed * 3.6;
-                    stateLog.controlTime(step) = inputSourceTime;
-                    stateLog.ax(step)          = newState.ax;
-                    stateLog.ay(step)          = newState.ay;
-                    stateLog.frontAxleAy(step) = newState.frontAxleAy;
-                    stateLog.rearAxleAy(step)  = newState.rearAxleAy;
-                    stateLog.yawRate(step)     = newState.yawRate;
-                    stateLog.yawAccel(step)    = newState.yawAccel;
-                    stateLog.refS(step)        = newState.refS;
-                    stateLog.refHeading(step)  = newState.refHeading;
-                    stateLog.refCurvature(step) = newState.refCurvature;
-                    stateLog.lateralError(step) = newState.lateralError;
-                    stateLog.onTrack(step)     = newState.onTrack;
-                    if obj.isFreeReferenceMode()
-                        stateLog.trackWidth(step) = 0;
-                        stateLog.trackLimitMargin(step) = 0;
-                    else
-                        refIdxStep = find(trackData.arcLen <= newState.refS, 1, 'last');
-                        if isempty(refIdxStep)
-                            refIdxStep = 1;
-                        end
-                        refIdxStep = max(1, min(refIdxStep, ...
-                            numel(trackData.trackLeftHalfWidth)));
-                        % Track width remains a scalar telemetry channel.
-                        stateLog.trackWidth(step) = ...
-                            trackData.trackLeftHalfWidth(refIdxStep) + ...
-                            trackData.trackRightHalfWidth(refIdxStep);
-                        [localLeft, localRight] = ...
-                            lts.simulation.TrackReference.sideHalfWidthsAt( ...
-                            trackData, refIdxStep);
-                        stateLog.trackLimitMargin(step) = ...
-                            lts.simulation.TrackReference.sideMargin( ...
-                            localLeft, localRight, newState.lateralError, ...
-                            trackData.trackHalfWidth);
-                    end
-                    stateLog.throttle(step)    = input.throttle;
-                    stateLog.brake(step)       = forces.brake;
-                    stateLog.brakeRequested(step) = forces.brakeCommand;
-                    stateLog.brakePressureMode(step) = forces.brakePressureMode;
-                    stateLog.brakePressureFrontBar(step) = forces.brakePressureFrontBar;
-                    stateLog.brakePressureRearBar(step) = forces.brakePressureRearBar;
-                    stateLog.steer(step)       = input.steer;
-                    stateLog.targetSpeed(step) = inputTargetSpeed;
-                    stateLog.axRef(step)       = inputAxRef;
-                    stateLog.targetLateralError(step) = inputTargetLatErr;
-                    stateLog.lineCurvature(step) = inputLineCurv;
-                    if isfinite(inputSpeedError)
-                        stateLog.speedError(step) = inputSpeedError;
-                    elseif isfinite(inputTargetSpeed)
-                        stateLog.speedError(step) = currentState.speed - inputTargetSpeed;
-                    end
-                    stateLog.curvature(step)   = newState.refCurvature;
-                    stateLog.heading(step)     = newState.heading;
-                    stateLog.F_downforce(step) = forces.F_downforce;
-                    stateLog.F_drag(step)      = forces.F_drag;
-                    stateLog.F_drive(step)     = forces.F_drive;
-                    stateLog.F_brake(step)     = forces.F_brake;
-                    stateLog.F_tire_long(step) = forces.F_tire_long;
-                    stateLog.F_tire_lat(step)  = forces.F_tire_lat;
-                    stateLog.yawMoment(step)   = forces.yawMoment;
-                    stateLog.rollResistance(step) = forces.rollResistance;
-                    stateLog.F_brake_front(step) = forces.F_brake_front;
-                    stateLog.F_brake_rear(step) = forces.F_brake_rear;
-                    stateLog.F_brake_FL(step)  = forces.F_brake_FL;
-                    stateLog.F_brake_FR(step)  = forces.F_brake_FR;
-                    stateLog.F_brake_RL(step)  = forces.F_brake_RL;
-                    stateLog.F_brake_RR(step)  = forces.F_brake_RR;
-                    stateLog.brakeGrip_FL(step) = forces.brakeGrip_FL;
-                    stateLog.brakeGrip_FR(step) = forces.brakeGrip_FR;
-                    stateLog.brakeGrip_RL(step) = forces.brakeGrip_RL;
-                    stateLog.brakeGrip_RR(step) = forces.brakeGrip_RR;
-                    stateLog.driveTorqueTotal(step) = forces.driveTorqueTotal;
-                    stateLog.driveTorque_RL(step) = forces.driveTorque_RL;
-                    stateLog.driveTorque_RR(step) = forces.driveTorque_RR;
-                    stateLog.brakeTorque_FL(step) = forces.brakeTorque_FL;
-                    stateLog.brakeTorque_FR(step) = forces.brakeTorque_FR;
-                    stateLog.brakeTorque_RL(step) = forces.brakeTorque_RL;
-                    stateLog.brakeTorque_RR(step) = forces.brakeTorque_RR;
-                    stateLog.motorRPM(step)    = forces.motorRPM;
-                    stateLog.motorTorque(step) = forces.motorTorque;
-                    stateLog.motorTorqueRequested(step) = forces.motorTorqueRequested;
-                    stateLog.motorTorquePowerLimitNm(step) = forces.motorTorquePowerLimitNm;
-                    stateLog.motorTorquePowerLimitActive(step) = forces.motorTorquePowerLimitActive;
-                    stateLog.wheelTorque(step) = forces.wheelTorque;
-                    stateLog.packVoltageV(step) = forces.packVoltageV;
-                    stateLog.packCurrentA(step) = forces.packCurrentA;
-                    stateLog.packPowerW(step) = forces.packPowerW;
-                    stateLog.drivenWheelRPM(step) = forces.drivenWheelRPM;
-                    stateLog.rpmLimitActive(step) = forces.rpmLimitActive;
-                    stateLog.pitchAngle(step)  = newState.pitchAngle;
-                    stateLog.rollAngle(step)   = newState.rollAngle;
-                    stateLog.rollRate(step)    = newState.rollRate;
-                    stateLog.frontRollAngle(step) = newState.frontRollAngle;
-                    stateLog.rearRollAngle(step)  = newState.rearRollAngle;
-                    stateLog.frontRollRate(step)  = newState.frontRollRate;
-                    stateLog.rearRollRate(step)   = newState.rearRollRate;
-                    stateLog.twistAngle(step)     = newState.twistAngle;
-                    stateLog.twistRate(step)      = newState.twistRate;
-                    stateLog.rideHeight(step)  = newState.rideHeight;
-                    stateLog.aeroFz_front(step) = forces.aeroFz_front;
-                    stateLog.aeroFz_rear(step)  = forces.aeroFz_rear;
-                    stateLog = localLogCornerTelemetry( ...
-                        stateLog, step, vm, leanTelemetry);
+                    stateLogBuilder.logStep(step, currentState, ...
+                        newState, input, forces);
                 end
                 
                 currentState = newState;
@@ -610,10 +506,7 @@ classdef Simulator < handle
             
             simulationSteps = step;
 
-            fields = fieldnames(stateLog);
-            for i = 1:numel(fields)
-                stateLog.(fields{i}) = stateLog.(fields{i})(1:step);
-            end
+            stateLog = stateLogBuilder.finish();
 
             % Replay-bounded runs use their complete time-domain window.
             if obj.isFreeReferenceMode() || isfinite(obj.stopTime)
@@ -734,89 +627,8 @@ classdef Simulator < handle
         end
 
         function stateLog = addReplayReferenceChannels(~, stateLog, profile)
-            if isempty(stateLog.time)
-                return;
-            end
-
-            if isfield(stateLog, 'controlTime')
-                queryTime = stateLog.controlTime(:);
-            else
-                queryTime = stateLog.time(:);
-            end
-
-            channels = { ...
-                'replayThrottle','throttle'; 'replayBrake','brake'; ...
-                'replaySteer','steer'; 'replaySpeed','speed'; ...
-                'replayYawRate','yawRate'};
-            for i = 1:size(channels, 1)
-                stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                    profile.time, profile.(channels{i, 2}), queryTime);
-            end
-            if profile.hasBrakePressure()
-                channels = { ...
-                    'replayBrakePressureFrontBar','brakePressureFrontBar'; ...
-                    'replayBrakePressureRearBar','brakePressureRearBar'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
-            optionalChannels = { ...
-                profile.hasRegenTorque(),'replayRegenTorqueNm','regenTorqueNm'; ...
-                profile.hasMotorTorqueCommand(),'replayMotorTorqueCommandNm','motorTorqueCommandNm'; ...
-                profile.hasMotorTorqueDelivered(),'replayMotorTorqueDeliveredNm','motorTorqueDeliveredNm'; ...
-                profile.hasMotorRpm(),'replayMotorRpm','motorRpm'};
-            for i = 1:size(optionalChannels, 1)
-                if optionalChannels{i, 1}
-                    stateLog.(optionalChannels{i, 2}) = localInterpProfileChannel( ...
-                        profile.time, profile.(optionalChannels{i, 3}), queryTime);
-                end
-            end
-            if profile.hasPackPower()
-                channels = { ...
-                    'replayPackVoltageV','packVoltageV'; ...
-                    'replayPackCurrentA','packCurrentA'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-                stateLog.replayPackPowerW = ...
-                    stateLog.replayPackVoltageV .* stateLog.replayPackCurrentA;
-            end
-            if profile.hasWheelSpeeds()
-                corners = {'FL','FR','RL','RR'};
-                for i = 1:numel(corners)
-                    corner = corners{i};
-                    replayField = ['replayWheelSpeed' corner];
-                    simulatedField = ['tireSpeed_' corner];
-                    stateLog.(replayField) = localInterpProfileChannel( ...
-                        profile.time, profile.(['wheelSpeed' corner]), queryTime);
-                    if isfield(stateLog, simulatedField)
-                        stateLog.(['wheelSpeedError' corner]) = ...
-                            stateLog.(simulatedField) - stateLog.(replayField);
-                    end
-                end
-            end
-            if profile.hasLatAccel()
-                channels = { ...
-                    'replayLatAccelG','latAccelG'; ...
-                    'replayFrontLatAccelG','frontLatAccelG'; ...
-                    'replayRearLatAccelG','rearLatAccelG'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
-            if profile.hasLongAccel()
-                channels = { ...
-                    'replayLongAccelG','longAccelG'; ...
-                    'replayFrontLongAccelG','frontLongAccelG'; ...
-                    'replayRearLongAccelG','rearLongAccelG'};
-                for i = 1:size(channels, 1)
-                    stateLog.(channels{i, 1}) = localInterpProfileChannel( ...
-                        profile.time, profile.(channels{i, 2}), queryTime);
-                end
-            end
+            stateLog = lts.telemetry.StateLogBuilder.addReplayReferenceChannels( ...
+                stateLog, profile);
         end
 
         function restoreReplayPolicies(obj, driverModel, inputMethod, pedalPolicy, ...
@@ -873,6 +685,13 @@ classdef Simulator < handle
         end
 
         function [totalDriveTorque, totalCoastdownTorque] = computePowertrainTorques(obj, state, input, throttle)
+            % Resolve the active torque-control mode into driven-axle torque.
+            % Mode orchestration lives here; the torque-control math belongs
+            % to the powertrain component (see PowertrainComponent's optional
+            % resolveTorques contract), which also records the per-step
+            % motor/limit telemetry on powertrain.state for the stateLog
+            % (motorTorqueRequested, motorTorquePowerLimitNm, pack channels,
+            % rpmLimitActive, ...).
             vm = obj.vehicleManager;
             % Cache the normalized mode for the run.
             modeSource = string(obj.powertrainMode);
@@ -884,293 +703,51 @@ classdef Simulator < handle
             end
             mode = obj.cachedPowertrainMode;
 
-            switch mode
-                case "throttle"
-                    totalDriveTorque = vm.powertrain.computeDriveTorque(state.speed, throttle);
+            if isempty(obj.cachedPowertrainHasResolver)
+                obj.cachedPowertrainHasResolver = ...
+                    ismethod(vm.powertrain, 'resolveTorques');
+            end
+            if obj.cachedPowertrainHasResolver
+                [totalDriveTorque, totalCoastdownTorque] = ...
+                    vm.powertrain.resolveTorques( ...
+                    mode, input, state, throttle, ...
+                    obj.limitMotorTorqueByPackPower, ...
+                    obj.drivenTireWheelRadius());
+                return;
+            end
 
-                    % Off-throttle motoring/regen drag on the driven axle
-                    % (opt-in via the powertrain component; 0 when off). This
-                    % is signed driveline torque so ramp-plate LSDs can use
-                    % their decel ramps. Hydraulic brake torque is separate.
-                    totalCoastdownTorque = 0;
-                    if isempty(obj.cachedPowertrainHasCoastdown)
-                        obj.cachedPowertrainHasCoastdown = ...
-                            ismethod(vm.powertrain, 'computeCoastdownTorque');
-                    end
-                    if obj.cachedPowertrainHasCoastdown
-                        totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
-                            state.speed, throttle);
-                    end
-
-                case "motor_torque_command"
-                    motorTorqueCommandNm = lts.util.fieldOr(input, ...
-                        'motorTorqueCommandNm', NaN);
-                    if ~isfinite(motorTorqueCommandNm)
-                        error('lts_simulation_Simulator:MissingMotorTorqueCommand', ...
-                            ['PowertrainMode "motor_torque_command" requires a finite ' ...
-                            'motorTorqueCommandNm input from the replay profile.']);
-                    end
-
-                    motorTorqueRequestNm = obj.selectDirectMotorTorqueRequest( ...
-                        motorTorqueCommandNm, input);
-                    wheelTorque = obj.applyMotorTorqueCommand( ...
-                        motorTorqueRequestNm, throttle, input);
-                    totalDriveTorque = max(0, wheelTorque);
-                    totalCoastdownTorque = min(0, wheelTorque);
-
-                case "motor_torque_delivered"
-                    deliveredMotorTorqueNm = lts.util.fieldOr(input, ...
-                        'motorTorqueDeliveredNm', NaN);
-                    if ~isfinite(deliveredMotorTorqueNm)
-                        error('lts_simulation_Simulator:MissingMotorTorqueDelivered', ...
-                            ['PowertrainMode "motor_torque_delivered" requires a finite ' ...
-                            'motorTorqueDeliveredNm input from the replay profile.']);
-                    end
-                    wheelTorque = obj.applyDeliveredMotorTorque( ...
-                        deliveredMotorTorqueNm, throttle, input);
-                    totalDriveTorque = max(0, wheelTorque);
-                    totalCoastdownTorque = min(0, wheelTorque);
-
-                otherwise
-                    error('lts_simulation_Simulator:InvalidPowertrainMode', ...
-                        ['PowertrainMode must be "throttle", "motor_torque_command", ' ...
-                        'or "motor_torque_delivered".']);
+            % Legacy powertrain contract (throttle only): drive torque via
+            % the abstract interface plus the optional coastdown hook.
+            % Off-throttle motoring/regen drag on the driven axle is signed
+            % driveline torque so ramp-plate LSDs can use their decel ramps.
+            % Hydraulic brake torque is separate.
+            if mode ~= "throttle"
+                error('lts_simulation_Simulator:PowertrainResolverRequired', ...
+                    ['PowertrainMode "%s" requires a powertrain implementing ' ...
+                    'the resolveTorques contract.'], mode);
+            end
+            totalDriveTorque = vm.powertrain.computeDriveTorque( ...
+                state.speed, throttle);
+            totalCoastdownTorque = 0;
+            if isempty(obj.cachedPowertrainHasCoastdown)
+                obj.cachedPowertrainHasCoastdown = ...
+                    ismethod(vm.powertrain, 'computeCoastdownTorque');
+            end
+            if obj.cachedPowertrainHasCoastdown
+                totalCoastdownTorque = vm.powertrain.computeCoastdownTorque( ...
+                    state.speed, throttle);
             end
         end
 
-        function wheelTorque = applyDeliveredMotorTorque( ...
-                obj, deliveredMotorTorqueNm, throttle, input)
+        function radius = drivenTireWheelRadius(obj)
+            % Driven-tire rolling radius [m] as seen by the live tire model;
+            % [] when no tire model is wired, in which case the powertrain
+            % falls back to its own configured wheelRadius.
+            radius = [];
             vm = obj.vehicleManager;
-            ratio = vm.powertrain.getTotalGearRatio();
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ismethod(vm.powertrain, 'getDeliveredTorqueDrivetrainEfficiency')
-                efficiency = vm.powertrain.getDeliveredTorqueDrivetrainEfficiency();
+            if ~isempty(vm) && ~isempty(vm.tire) && isprop(vm.tire, 'RL')
+                radius = vm.tire.RL.wheelRadius;
             end
-            if deliveredMotorTorqueNm >= 0
-                wheelTorque = deliveredMotorTorqueNm * ratio * efficiency;
-            else
-                wheelTorque = deliveredMotorTorqueNm * ratio / max(efficiency, eps);
-            end
-
-            driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
-            requestedMotorTorqueNm = lts.util.fieldOr(input, ...
-                'motorTorqueCommandNm', deliveredMotorTorqueNm);
-            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
-            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
-            vm.powertrain.state.updateOutputs( ...
-                throttle, deliveredMotorTorqueNm, wheelTorque, driveForce, ...
-                efficiency, false);
-            vm.powertrain.state.requestedMotorTorque = requestedMotorTorqueNm;
-            vm.powertrain.state.motorTorquePowerLimitNm = NaN;
-            vm.powertrain.state.motorTorquePowerLimitActive = false;
-            vm.powertrain.state.packVoltageV = packVoltageV;
-            vm.powertrain.state.packCurrentA = packCurrentA;
-            vm.powertrain.state.packPowerW = packVoltageV * packCurrentA;
-        end
-
-        function wheelTorque = applyMotorTorqueCommand(obj, motorTorqueCommandNm, throttle, input)
-            if nargin < 4 || isempty(input)
-                input = struct();
-            end
-
-            vm = obj.vehicleManager;
-            ratio = vm.powertrain.getTotalGearRatio();
-            efficiency = obj.motoringDrivetrainEfficiency(input);
-            regenEfficiency = obj.regenDrivetrainEfficiency();
-            [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
-                packCurrentA, packPowerW, powerLimitActive] = ...
-                obj.limitMotorTorqueCommandByPackPower(motorTorqueCommandNm, input);
-            [appliedMotorTorqueNm, rpmLimitActive] = ...
-                obj.limitDirectMotorTorqueByRpm( ...
-                motorTorqueCommandNm, appliedMotorTorqueNm);
-            if appliedMotorTorqueNm >= 0
-                wheelTorque = appliedMotorTorqueNm * ratio * efficiency;
-                stateEfficiency = efficiency;
-            else
-                % Reverse the loss direction for regen: wheel braking power
-                % must exceed the mechanical/electrical power reaching the
-                % motor/pack, not shrink below it as motoring torque does.
-                wheelTorque = appliedMotorTorqueNm * ratio / max(regenEfficiency, eps);
-                stateEfficiency = regenEfficiency;
-            end
-
-            driveForce = 0;
-            if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
-                driveForce = wheelTorque / max(vm.tire.RL.wheelRadius, eps);
-            end
-
-            if ~isempty(vm.powertrain.state)
-                vm.powertrain.state.updateOutputs( ...
-                    throttle, appliedMotorTorqueNm, wheelTorque, driveForce, ...
-                    stateEfficiency, rpmLimitActive);
-                vm.powertrain.state.requestedMotorTorque = motorTorqueCommandNm;
-                vm.powertrain.state.motorTorquePowerLimitNm = powerLimitNm;
-                vm.powertrain.state.motorTorquePowerLimitActive = powerLimitActive;
-                vm.powertrain.state.packVoltageV = packVoltageV;
-                vm.powertrain.state.packCurrentA = packCurrentA;
-                vm.powertrain.state.packPowerW = packPowerW;
-            end
-        end
-
-        function efficiency = regenDrivetrainEfficiency(obj)
-            vm = obj.vehicleManager;
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ismethod(vm.powertrain, 'getRegenDrivetrainEfficiency')
-                efficiency = vm.powertrain.getRegenDrivetrainEfficiency();
-            elseif isprop(vm.powertrain, 'regenEfficiency') && ...
-                    isfinite(vm.powertrain.regenEfficiency)
-                efficiency = vm.powertrain.regenEfficiency;
-            end
-            efficiency = lts.util.saturate(efficiency);
-        end
-
-        function efficiency = motoringDrivetrainEfficiency(obj, input)
-            vm = obj.vehicleManager;
-            efficiency = vm.powertrain.getDrivetrainEfficiency();
-            if ~ismethod(vm.powertrain, 'getMotoringEfficiencyAtRPM')
-                efficiency = lts.util.saturate(efficiency);
-                return;
-            end
-            motorRPM = lts.util.fieldOr(input, 'motorRpm', NaN);
-            if ~isfinite(motorRPM) && ~isempty(vm.powertrain.state)
-                motorRPM = vm.powertrain.state.motorRPM;
-            end
-            efficiency = vm.powertrain.getMotoringEfficiencyAtRPM(motorRPM);
-        end
-
-        function motorTorqueRequestNm = selectDirectMotorTorqueRequest(~, motorTorqueCommandNm, input)
-            motorTorqueRequestNm = motorTorqueCommandNm;
-            if motorTorqueCommandNm < 0
-                return;
-            end
-
-            regenTorqueNm = lts.util.fieldOr(input, 'regenTorqueNm', NaN);
-            if ~isfinite(regenTorqueNm) || regenTorqueNm >= 0
-                return;
-            end
-
-            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
-            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
-            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
-                return;
-            end
-
-            % The throttle-regen channel is a candidate/request and can be
-            % nonzero during motoring. Let it override Calculated Cmd only
-            % when the logged pack power confirms actual charging.
-            if packVoltageV * packCurrentA < -100
-                motorTorqueRequestNm = regenTorqueNm;
-            end
-        end
-
-        function [appliedMotorTorqueNm, powerLimitNm, packVoltageV, ...
-                packCurrentA, packPowerW, powerLimitActive] = ...
-                limitMotorTorqueCommandByPackPower(obj, requestedMotorTorqueNm, input)
-            appliedMotorTorqueNm = requestedMotorTorqueNm;
-            powerLimitNm = NaN;
-            packVoltageV = lts.util.fieldOr(input, 'packVoltageV', NaN);
-            packCurrentA = lts.util.fieldOr(input, 'packCurrentA', NaN);
-            packPowerW = NaN;
-            powerLimitActive = false;
-
-            if ~isfinite(packVoltageV) || ~isfinite(packCurrentA) || packVoltageV <= 0
-                return;
-            end
-
-            packPowerW = packVoltageV * packCurrentA;
-            if ~obj.limitMotorTorqueByPackPower
-                return;
-            end
-            if ~isfinite(packPowerW) || requestedMotorTorqueNm == 0
-                return;
-            end
-
-            motorOmega = obj.motorAngularVelocityForPowerLimit(input);
-            if ~isfinite(motorOmega)
-                return;
-            end
-            motorOmega = max(abs(motorOmega), 1.0);
-
-            if requestedMotorTorqueNm > 0
-                powerLimitNm = max(0, packPowerW) / motorOmega;
-                appliedMotorTorqueNm = min(requestedMotorTorqueNm, powerLimitNm);
-            else
-                powerLimitNm = min(0, packPowerW) / motorOmega;
-                appliedMotorTorqueNm = max(requestedMotorTorqueNm, powerLimitNm);
-            end
-
-            toleranceNm = max(1e-9, 1e-6 * abs(requestedMotorTorqueNm));
-            powerLimitActive = abs(appliedMotorTorqueNm - requestedMotorTorqueNm) > toleranceNm;
-        end
-
-        function [appliedMotorTorqueNm, rpmLimitActive] = ...
-                limitDirectMotorTorqueByRpm(obj, requestedMotorTorqueNm, appliedMotorTorqueNm)
-            rpmLimitActive = false;
-            if requestedMotorTorqueNm <= 0
-                return;
-            end
-
-            vm = obj.vehicleManager;
-            if isempty(vm) || isempty(vm.powertrain) || isempty(vm.powertrain.state)
-                return;
-            end
-
-            motorRPM = vm.powertrain.state.motorRPM;
-            if ~isfinite(motorRPM)
-                return;
-            end
-
-            if ismethod(vm.powertrain, 'isRPMLimitActive')
-                rpmLimitActive = vm.powertrain.isRPMLimitActive(motorRPM);
-            elseif isprop(vm.powertrain, 'rpmLimitRPM')
-                limitRPM = vm.powertrain.rpmLimitRPM;
-                if isfinite(limitRPM) && limitRPM > 0
-                    releaseRPM = limitRPM;
-                    if vm.powertrain.state.rpmLimitActive && ...
-                            isprop(vm.powertrain, 'rpmLimitHysteresisRPM')
-                        releaseRPM = limitRPM - max(0, vm.powertrain.rpmLimitHysteresisRPM);
-                    end
-                    rpmLimitActive = motorRPM >= releaseRPM;
-                end
-            end
-
-            if rpmLimitActive
-                appliedMotorTorqueNm = min(appliedMotorTorqueNm, 0);
-            end
-        end
-
-        function motorOmega = motorAngularVelocityForPowerLimit(obj, input)
-            motorOmega = NaN;
-            vm = obj.vehicleManager;
-            loggedMotorRpm = lts.util.fieldOr(input, 'motorRpm', NaN);
-            if isfinite(loggedMotorRpm)
-                motorOmega = loggedMotorRpm * 2 * pi / 60;
-                return;
-            end
-
-            replaySpeed = lts.util.fieldOr(input, 'targetSpeed', NaN);
-            if isfinite(replaySpeed) && replaySpeed > 0 && ...
-                    ~isempty(vm) && ~isempty(vm.powertrain)
-                ratio = vm.powertrain.getTotalGearRatio();
-                wheelRadius = NaN;
-                if ~isempty(vm.tire) && isprop(vm.tire, 'RL')
-                    wheelRadius = vm.tire.RL.wheelRadius;
-                elseif isprop(vm.powertrain, 'wheelRadius')
-                    wheelRadius = vm.powertrain.wheelRadius;
-                end
-                if isfinite(ratio) && ratio > 0 && isfinite(wheelRadius) && wheelRadius > 0
-                    motorOmega = replaySpeed / wheelRadius * ratio;
-                    return;
-                end
-            end
-
-            if ~isempty(vm) && ~isempty(vm.powertrain) && ~isempty(vm.powertrain.state)
-                motorOmega = vm.powertrain.state.motorAngularVelocity;
-                if isfinite(motorOmega)
-                    return;
-                end
-            end
-
         end
 
         function mode = validatePowertrainMode(~, mode)
@@ -1276,7 +853,7 @@ classdef Simulator < handle
         end
 
         function stateLog = createLeanStateLog(~, maxSteps)
-            stateLog = localCreateStateLog(maxSteps, true);
+            stateLog = lts.telemetry.StateLogBuilder.createStateLog(maxSteps, true);
         end
 
         function [points, curvature, mu, heading] = repeatClosedTrack(~, ...
@@ -1452,7 +1029,6 @@ classdef Simulator < handle
                 obj.computeLocalSlipRatio(tireFR, longSpeedVec(2)); ...
                 obj.computeLocalSlipRatio(tireRL, longSpeedVec(3)); ...
                 obj.computeLocalSlipRatio(tireRR, longSpeedVec(4))];
-            surfaceMu = 1;
 
             if isempty(obj.cachedTireHasBatchUpdate)
                 obj.cachedTireHasBatchUpdate = ismethod(vm.tire, 'updateAllCorners');
@@ -1464,22 +1040,22 @@ classdef Simulator < handle
                     slipRatios(1), slipRatios(2), slipRatios(3), slipRatios(4), ...
                     tireContact.camberAngles(1), tireContact.camberAngles(2), ...
                     tireContact.camberAngles(3), tireContact.camberAngles(4), dt, longSpeedVec, ...
-                    surfaceMu, computePeakMu, relaxationMode);
+                    computePeakMu, relaxationMode);
             else
                 % Fallback for tire models without a batch update: evaluate
                 % each corner individually. Wheel omega is integrated in the
                 % main step() wheel-contact solve, not here.
                 vm.tire.updateCorner(tireFL, cornerLoads.FL, slipAngles(1), ...
-                    slipRatios(1), tireContact.camberAngles(1), surfaceMu, dt, ...
+                    slipRatios(1), tireContact.camberAngles(1), dt, ...
                     longSpeedVec(1), computePeakMu, relaxationMode);
                 vm.tire.updateCorner(tireFR, cornerLoads.FR, slipAngles(2), ...
-                    slipRatios(2), tireContact.camberAngles(2), surfaceMu, dt, ...
+                    slipRatios(2), tireContact.camberAngles(2), dt, ...
                     longSpeedVec(2), computePeakMu, relaxationMode);
                 vm.tire.updateCorner(tireRL, cornerLoads.RL, slipAngles(3), ...
-                    slipRatios(3), tireContact.camberAngles(3), surfaceMu, dt, ...
+                    slipRatios(3), tireContact.camberAngles(3), dt, ...
                     longSpeedVec(3), computePeakMu, relaxationMode);
                 vm.tire.updateCorner(tireRR, cornerLoads.RR, slipAngles(4), ...
-                    slipRatios(4), tireContact.camberAngles(4), surfaceMu, dt, ...
+                    slipRatios(4), tireContact.camberAngles(4), dt, ...
                     longSpeedVec(4), computePeakMu, relaxationMode);
             end
 
@@ -1529,10 +1105,21 @@ classdef Simulator < handle
         end
 
         function loads = getCurrentCornerLoads(obj, steer)
-            % Read chassis-driven tire loads from the suspension.
+            % Read chassis-driven tire loads from the suspension. With the
+            % attitude predictor enabled, the suspension is driven by the
+            % extrapolated end-of-step attitude so this step's loads are not
+            % generated by the previous step's chassis state.
             vm = obj.vehicleManager;
+            predictDt = 0;
+            if obj.useAttitudePredictor
+                % Mid-step horizon: forces evaluated at the interval midpoint
+                % are second-order accurate in dt, keeping lap-time results
+                % converged across timesteps (a full-step lead reintroduces
+                % an O(dt) bias).
+                predictDt = 0.5 * obj.dt;
+            end
             loads = vm.suspension.computeCornerLoadsFromChassis( ...
-                vm.chassis, steer, obj.dt);
+                vm.chassis, steer, obj.dt, predictDt);
         end
 
         function resetForSimulation(obj, preserveInitialComponentState)
@@ -1550,6 +1137,7 @@ classdef Simulator < handle
             obj.cachedRearArm = NaN;
             obj.cachedRollingResistanceCoeff = NaN;
             obj.cachedPowertrainHasCoastdown = [];
+            obj.cachedPowertrainHasResolver = [];
             obj.cachedMaxSteeringAngle = [];
             obj.cachedSteeringRampTime = [];
             obj.cachedPowertrainMode = [];
@@ -1836,118 +1424,3 @@ classdef Simulator < handle
     end
 end
 
-function stateLog = localCreateStateLog(n, lean)
-zeroFields = { ...
-    'time','s','controlS','x','y','yaw','vx','vy','bodySlipAngle', ...
-    'speed','speedKmh','controlTime','ax','ay','frontAxleAy','rearAxleAy', ...
-    'yawRate','yawAccel','refS','refHeading','refCurvature','lateralError', ...
-    'trackWidth','trackLimitMargin','throttle','brake','brakeRequested','steer', ...
-    'curvature','heading','F_downforce','F_drag','F_drive','F_brake', ...
-    'F_tire_long','F_tire_lat','yawMoment','rollResistance','F_brake_front', ...
-    'F_brake_rear','F_brake_FL','F_brake_FR','F_brake_RL','F_brake_RR', ...
-    'brakeGrip_FL','brakeGrip_FR','brakeGrip_RL','brakeGrip_RR', ...
-    'driveTorqueTotal','driveTorque_RL','driveTorque_RR','brakeTorque_FL', ...
-    'brakeTorque_FR','brakeTorque_RL','brakeTorque_RR','motorRPM','motorTorque', ...
-    'motorTorqueRequested','wheelTorque','drivenWheelRPM','pitchAngle','rollAngle', ...
-    'rollRate','frontRollAngle','rearRollAngle','frontRollRate','rearRollRate', ...
-    'twistAngle','twistRate','rideHeight','aeroFz_front','aeroFz_rear', ...
-    'tireSpeed_FL','tireSpeed_FR','tireSpeed_RL','tireSpeed_RR'};
-nanFields = { ...
-    'brakePressureFrontBar','brakePressureRearBar','targetSpeed','axRef', ...
-    'targetLateralError','lineCurvature','speedError','motorTorquePowerLimitNm', ...
-    'packVoltageV','packCurrentA','packPowerW'};
-logicalFields = { ...
-    'onTrack','brakePressureMode','motorTorquePowerLimitActive','rpmLimitActive'};
-
-stateLog = struct();
-for i = 1:numel(zeroFields)
-    stateLog.(zeroFields{i}) = zeros(n, 1);
-end
-for i = 1:numel(nanFields)
-    stateLog.(nanFields{i}) = NaN(n, 1);
-end
-for i = 1:numel(logicalFields)
-    stateLog.(logicalFields{i}) = false(n, 1);
-end
-
-if lean
-    return;
-end
-corners = {'FL','FR','RL','RR'};
-cornerFields = { ...
-    'Fz','suspensionForce','antiRollBarForce','suspensionDemand','tireDeflection', ...
-    'damperPos','damperVel','sprungPosition','unsprungPosition','sprungVelocity', ...
-    'unsprungVelocity','wheelTravel','camber','toe','wheelSteer','slipAngle', ...
-    'slipRatio','peakMu','tireUtilization','omega','tireFx','tireFy'};
-for i = 1:numel(cornerFields)
-    for j = 1:numel(corners)
-        stateLog.([cornerFields{i} '_' corners{j}]) = zeros(n, 1);
-    end
-end
-end
-
-function stateLog = localLogCornerTelemetry(stateLog, step, vm, lean)
-corners = {'FL','FR','RL','RR'};
-suspensionCorners = {'frontLeft','frontRight','rearLeft','rearRight'};
-suspensionFields = { ...
-    'Fz','tireNormalForce'; 'suspensionForce','suspensionForce'; ...
-    'antiRollBarForce','antiRollBarForce'; 'suspensionDemand','demandedLoad'; ...
-    'tireDeflection','tireDeflection'; 'damperPos','damperPosition'; ...
-    'damperVel','damperVelocity'; 'sprungPosition','sprungPosition'; ...
-    'unsprungPosition','unsprungPosition'; 'sprungVelocity','sprungVelocity'; ...
-    'unsprungVelocity','unsprungVelocity'; 'wheelTravel','wheelTravel'; ...
-    'camber','camberAngle'; 'toe','toeAngle'; 'wheelSteer','steerAngle'};
-tireFields = { ...
-    'slipAngle','slipAngle'; 'slipRatio','slipRatio'; 'peakMu','peakMu'; ...
-    'omega','angularVelocity'; 'tireFx','Fx'; 'tireFy','Fy'};
-
-for j = 1:numel(corners)
-    corner = corners{j};
-    tire = vm.tire.(corner);
-    stateLog.(['tireSpeed_' corner])(step) = ...
-        abs(tire.angularVelocity * tire.wheelRadius);
-    if lean
-        continue;
-    end
-
-    suspension = vm.suspension.(suspensionCorners{j}).state;
-    for i = 1:size(suspensionFields, 1)
-        stateLog.([suspensionFields{i, 1} '_' corner])(step) = ...
-            suspension.(suspensionFields{i, 2});
-    end
-    for i = 1:size(tireFields, 1)
-        stateLog.([tireFields{i, 1} '_' corner])(step) = ...
-            tire.(tireFields{i, 2});
-    end
-    capacity = max(tire.peakMu, 0) * max(tire.normalForce, 0);
-    utilization = 0;
-    if capacity > eps
-        utilization = hypot(tire.Fx, tire.Fy) / capacity;
-        if ~isfinite(utilization)
-            utilization = 0;
-        end
-    end
-    stateLog.(['tireUtilization_' corner])(step) = utilization;
-end
-end
-
-function values = localInterpProfileChannel(axis, channel, query)
-axis = double(axis(:));
-channel = double(channel(:));
-query = double(query(:));
-
-keep = isfinite(axis) & isfinite(channel);
-axis = axis(keep);
-channel = channel(keep);
-
-if isempty(axis)
-    values = NaN(size(query));
-elseif isscalar(axis)
-    values = repmat(channel(1), size(query));
-else
-    [axis, uniqueIdx] = unique(axis, 'stable');
-    channel = channel(uniqueIdx);
-    query = max(axis(1), min(axis(end), query));
-    values = interp1(axis, channel, query, 'linear');
-end
-end
