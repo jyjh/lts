@@ -75,15 +75,17 @@ classdef EMRAX228Powertrain < lts.components.Powertrain.PowertrainComponent
             if nargin < 1 || isempty(matFilePath)
                 matFilePath = 'EMRAX228LC Single_3.36.mat';
             end
-            % Resolve relative names against the repository's
-            % data/powertrain/ folder (legacy class-folder fallback kept).
+            % Resolve relative names against this package folder's
+            % data/powertrain/ maps, then the package folder itself. The
+            % package folder is the lts-powertrain repository root (and the
+            % monorepo mount point), so the same candidates work both
+            % standalone and mounted.
             if ~startsWith(matFilePath, '/') && ~startsWith(matFilePath, '\') ...
                     && ~contains(matFilePath, ':') && ~exist(matFilePath, 'file')
-                root = lts.util.repoRoot(mfilename('fullpath'));
+                pkgDir = fileparts(mfilename('fullpath'));
                 candidates = { ...
-                    fullfile(root, 'data', 'powertrain', matFilePath); ...
-                    fullfile(fileparts(mfilename('fullpath')), matFilePath); ...
-                    fullfile(root, matFilePath)};
+                    fullfile(pkgDir, 'data', 'powertrain', matFilePath); ...
+                    fullfile(pkgDir, matFilePath)};
                 for i = 1:numel(candidates)
                     if exist(candidates{i}, 'file')
                         matFilePath = candidates{i};

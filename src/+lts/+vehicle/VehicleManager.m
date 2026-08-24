@@ -6,10 +6,12 @@ classdef VehicleManager
     % Simulation is handled by the lts.simulation.Simulator class, driver decisions by lts.driver.DriverModel.
     
     properties (Constant)
-        % Gravitational acceleration [m/s^2]. Defined once as the single
-        % source of truth for all physics (weight, load transfer, g-display);
-        % display scripts still tolerate the legacy 9.81 literal.
-        g = 9.80665
+        % Gravitational acceleration [m/s^2]. Still the single source of
+        % truth for all physics (weight, load transfer, g-display), but
+        % defined once in the shared kernel so component repositories read
+        % the same constant without depending on this class. Display
+        % scripts still tolerate the legacy 9.81 literal.
+        g = lts.util.PhysicalConstants.g
     end
 
     properties

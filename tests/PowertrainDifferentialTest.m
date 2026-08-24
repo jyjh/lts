@@ -650,7 +650,9 @@ diff = lts.components.Powertrain.DrexlerRampPlateDifferential( ...
 end
 
 function path = powertrainMapPath(fileName)
-testDir = fileparts(mfilename('fullpath'));
-repoRoot = fileparts(testDir);
-path = fullfile(repoRoot, 'data', 'powertrain', fileName);
+% Resolve against the Powertrain package folder, where the EMRAX maps
+% live (data/powertrain inside the package, carried by the lts-powertrain
+% repository once split; same layout when mounted in the monorepo).
+classFile = which('lts.components.Powertrain.EMRAX228Powertrain');
+path = fullfile(fileparts(char(classFile)), 'data', 'powertrain', fileName);
 end
