@@ -105,21 +105,13 @@ fi
 
 echo
 echo "== 1/3 Cascade component repositories (fast-forward staging -> main) =="
+# Component .gitmodules are branch-agnostic (no branch = lines), so the
+# fast-forward leaves both branches identical — no normalization needed.
 for c in $COMPONENTS; do
     repo=$(component_path "${c#lts-}")
     echo "-- $c"
     run git -C "$repo" checkout -q main
     run git -C "$repo" merge --ff-only staging
-    # After the fast-forward, main's tip carries staging's .gitmodules
-    # (kit tracked from staging). Restore main's own targeting.
-    set_gitmodules_branch "$repo" kit main
-    commit_if_changed "chore(release): main tracks lts-kit main"
-    # Bring the normalization commit back into staging, then restore
-    # staging's own targeting. Keeps future fast-forwards possible.
-    run git -C "$repo" checkout -q staging
-    run git -C "$repo" merge --ff-only main
-    set_gitmodules_branch "$repo" kit staging
-    commit_if_changed "chore(release): staging keeps tracking lts-kit staging"
 done
 
 echo

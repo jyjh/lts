@@ -79,9 +79,10 @@ The script does, in order:
    each `main` is an ancestor of its `staging` (so the merges below are
    safe fast-forwards). Aborts without touching anything otherwise.
 2. **Components** — for `lts-kit` and each department repository:
-   fast-forward `main` to the `staging` tip, and restore that branch's
-   own `.gitmodules` targeting afterwards. *This is the moment a
+   fast-forward `main` to the `staging` tip. *This is the moment a
    department's work officially lands on its `main` — never before.*
+   (Component repositories' `.gitmodules` are branch-agnostic, so the
+   fast-forward leaves both branches identical — nothing to fix up.)
 3. **Main repository** — merge `staging` into `main` (any submodule
    pointer conflicts resolve to the staging-proven versions), then
    restore `main`'s `.gitmodules` targeting (`branch = main`).

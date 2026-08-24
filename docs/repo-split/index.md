@@ -305,14 +305,16 @@ CHANGELOG per component repo as each term's "seal".
   `staging` → `main` themselves. A release is one operation,
   `scripts/release.sh` from the main repository: it fast-forwards every
   component's `main` to its `staging` tip, merges the main repository's
-  `staging` into `main`, then restores each branch's own `.gitmodules`
-  targeting on every repository (so a merge can never leave `main`
-  tracking component `staging` or vice versa), and reconciles `staging`
-  so the next release is again a fast-forward. Because component `main`
-  branches only advance through the cascade, the pinned commits that
-  main's `staging` CI proved are, by construction, the commits that land
-  on the components' `main` branches. Enforcement:
-  `scripts/check_submodule_policy.sh` runs in CI on every push to
-  `main`/`staging` and on every PR (`.gitmodules` targeting must match
-  the branch; pinned commits must exist on the matching component
-  branches).
+  `staging` into `main`, then restores each main-repository branch's own
+  `.gitmodules` targeting (so a merge can never leave `main` tracking
+  component `staging` or vice versa), and reconciles `staging` so the
+  next release is again a fast-forward. Component repositories'
+  `.gitmodules` carry no `branch` lines — they are identical on both
+  branches, so their cascade step is a pure fast-forward with no
+  normalization commits. Because component `main` branches only advance
+  through the cascade, the pinned commits that main's `staging` CI
+  proved are, by construction, the commits that land on the components'
+  `main` branches. Enforcement: `scripts/check_submodule_policy.sh` runs
+  in CI on every push to `main`/`staging` and on every PR (`.gitmodules`
+  targeting must match the branch; pinned commits must exist on the
+  matching component branches).
