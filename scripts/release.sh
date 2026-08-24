@@ -61,6 +61,20 @@ if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
     PUSH_IDENTITY="gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
 fi
 
+# Refuse to run with a placeholder identity: the cascade creates commits
+# (the merge plus two retargets). A shell without user.name/user.email
+# configured once produced "your name <you@example.com>" release commits,
+# which took a history rewrite to fix. Check before anything is touched.
+id_name="$(git -C "$MAIN_ROOT" config user.name || true)"
+id_email="$(git -C "$MAIN_ROOT" config user.email || true)"
+case "${id_name:-unset}:${id_email:-unset}" in
+    *your?name*|*example.com*|unset:*)
+        echo "ABORT: git identity here is '${id_name:-unset} <${id_email:-unset}>'." >&2
+        echo "  Set user.name and user.email (git config --global ...) in the" >&2
+        echo "  shell you release from, then re-run." >&2
+        exit 1 ;;
+esac
+
 # Resolve every repository up front and abort before touching anything
 # if one is missing — a resolution failure inside the preflight loop
 # would otherwise die in a subshell and leave the checks silently
