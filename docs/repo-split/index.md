@@ -6,7 +6,8 @@ permalink: /repo-split/
 
 ## Repository Split Plan
 
-**Status:** preparation phase — not yet executing the split.
+**Status:** split executed locally on 2026-08-24 (see [decision log](#decision-log));
+pending: push of the six repositories and transfer to the organization.
 **Owner:** simulation lead (rotate per the ownership table below).
 **Last updated:** 2026-08-24.
 
@@ -71,11 +72,15 @@ Other facts that shape the plan:
 | `org/lts-powertrain` | `+lts/+components/+Powertrain` + EMRAX `.mat` maps | `src/+lts/+components/+Powertrain` |
 | `org/lts-chassis` | `+lts/+components/+Chassis` | `src/+lts/+components/+Chassis` |
 
-Each component repository keeps the same package-relative layout
-(`+lts/+components/+Aero/...` at repo root) and mounts `lts-kit` as its own
-submodule at `+lts/+util`. Because MATLAB resolves packages from the parent
-folder of `+lts`, mounting at today's exact paths means **zero source-file
-changes in main**: `addpath('src')` keeps working.
+Each component repository contains its package files **at the repository
+root** (a submodule's working tree is its root, so the mounted content is
+exactly the old package folder). Each mounts `lts-kit` as a submodule at
+`kit/` and ships `run_tests.m`, which assembles a temporary `+lts` package
+sandbox in `build/` (gitignored) — the repository's classes plus kit's
+`+util` — so the package runs standalone without installing anything into
+a parent repository. Because MATLAB resolves packages from the parent of
+`+lts`, mounting at today's exact paths means **zero source-file changes
+in main**: `addpath('src')` keeps working.
 
 `+Tire` stays in main for now: it changes rarely, is entangled with
 correlation work, and its data files can't be committed anyway. The same
@@ -127,12 +132,17 @@ be explicit and tested:
       with structural capability checks (`isprop`/`ismethod`). The two
       packages no longer reference each other by name (2026-08-24, full
       280-test suite green).
-- [ ] Add per-component `validateConfig(cfg)` + schema docs (contract item 2).
-- [ ] Add per-component telemetry-channel conformance tests (contract item 3).
-- [ ] Resolve EMRAX `.mat` map loading relative to the class folder
-      (`mfilename('fullpath')`) so the Powertrain repo is self-contained.
-- [ ] Tag `pre-split` and push — the archaeology anchor for verifying the
-      split moved files byte-identically.
+- [x] Gravity moved to the shared kernel (`lts.util.PhysicalConstants`);
+      `VehicleManager.g` delegates, `SimpleChassis` reads it directly
+      (2026-08-24).
+- [x] EMRAX `.mat` maps moved into the `+Powertrain` package folder and
+      resolved relative to it, so the powertrain repository is
+      self-contained (2026-08-24).
+- [ ] Per-component `validateConfig(cfg)` + schema docs (contract item 2).
+- [ ] Per-component telemetry-channel conformance tests (contract item 3);
+      the current smoke tests pin constructor/return shapes only.
+- [x] Tag `pre-split`-equivalent anchor: commit `4db2aef` is the last
+      monorepo commit before the submodule rewiring.
 
 #### Phase 1 — organization setup
 
@@ -144,7 +154,12 @@ be explicit and tested:
 
 #### Phase 2 — extract histories
 
-Per component (shown for aero):
+**Executed 2026-08-24** with `git filter-repo`; all 40 extracted files
+verified byte-identical to the monorepo by blob hash. Each repository
+carries its package's full history and a harness commit (tests, CI,
+README, CONTRIBUTING, LICENSE, `lts-kit` submodule at `kit/`,
+`run_tests.m` sandbox runner). The reference procedure, kept for future
+extractions (e.g. Tire):
 
 ```bash
 git clone https://github.com/org/lts lts-aero-tmp
@@ -158,11 +173,16 @@ git push -u origin main
 Then add, as ordinary commits on top: `tests/` (moved from main),
 `run_tests.m`, `.github/workflows/ci.yml`, `README.md`, `CONTRIBUTING.md`
 (from the org `.github` repo), `LICENSE` (MIT, same as main), and the
-`lts-kit` submodule mounted at `+lts/+util`.
+`lts-kit` submodule mounted at `kit/`.
 
 #### Phase 3 — rewire main
 
-For each extracted package: `git rm -r` the folder, then
+**Executed 2026-08-24.** The five packages were `git rm`'d and re-added as
+submodules with clean names (`kit`, `aero`, `suspension`, `powertrain`,
+`chassis`), relative URLs (`../lts-aero` — org-relative once transferred),
+and `branch = main` entries. Both full suites (MATLAB 280, pytest 30) pass
+against the mounted submodules. For each extracted package: `git rm -r` the
+folder, then
 
 ```bash
 git submodule add https://github.com/org/lts-aero.git src/+lts/+components/+Aero
@@ -261,3 +281,22 @@ CHANGELOG per component repo as each term's "seal".
   single monorepo with CODEOWNERS-protected department folders (would give
   focus without submodule mechanics, but not per-repo permissions,
   ownership, or independent versioning under the org).
+- **2026-08-24 — ADR: Split executed locally.** Five repositories
+  (`lts-kit`, `lts-aero`, `lts-suspension`, `lts-powertrain`,
+  `lts-chassis`) extracted with `git filter-repo` from commit `4db2aef`
+  and mounted in main at their original paths; histories preserved,
+  40 files blob-hash-verified identical. Component repositories carry a
+  standalone harness: `run_tests.m` builds a `+lts` sandbox in `build/`
+  (repo root = package content; kit nested at `kit/`). All five standalone
+  suites and both main suites green. Pending: push + org transfer
+  (relative `../lts-*` URLs already resolve org-relative).
+- **2026-08-24 — ADR: main/staging dual-branch model with fork-only
+  development.** Every repository (main and components) has exactly two
+  long-lived branches: `staging` (all PRs from forks land here; submodule
+  pointers track component `staging` branches via per-branch `.gitmodules`
+  `branch` entries) and `main` (release-only; pointers track component
+  `main`/tags; merged from `staging` by maintainers). No direct pushes;
+  all work from forks. Previous stale branches (`codex`, `matlab-ci`,
+  `reorientation`, `temp`, `devin/*`) were deleted after merge-status
+  review; their tips were `a88e498`, `5b114d6`, `a93160c`, `90c113f`,
+  `142ac29`, `b764e61`, `03bef3a`, `ee560ba` respectively.

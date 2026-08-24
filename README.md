@@ -198,13 +198,34 @@ discard the exported corridor and force a uniform width back on.
 For the force equations and per-step data flow, see the
 [Physics Flow](https://jyjh.github.io/lts/physics-flow/) page.
 
-## Submodules and Python tooling
+## Submodules, component repositories, and Python tooling
 
-If `external/MotecLogGenerator` is missing after cloning, initialize it:
+The department component packages live in their own sibling repositories
+and are mounted here at their original paths, so `addpath('src')` is
+unchanged:
+
+| Submodule | Mounted at | Contents |
+|---|---|---|
+| `lts-kit` | `src/+lts/+util` | shared kernel (`clamp`, `PhysicalConstants`, ...) |
+| `lts-aero` | `src/+lts/+components/+Aero` | aero package |
+| `lts-suspension` | `src/+lts/+components/+Suspension` | suspension package |
+| `lts-powertrain` | `src/+lts/+components/+Powertrain` | powertrain package + EMRAX maps |
+| `lts-chassis` | `src/+lts/+components/+Chassis` | chassis package |
+| `external/MotecLogGenerator` | `external/` | `.ld` export (Python) |
+| `external/LTSTelemetryVisualizer` | `external/` | telemetry viewer (private, not needed by tests) |
+
+Clone with submodules:
 
 ```bash
-git submodule update --init --recursive
+git clone --recurse-submodules <repository URL>
 ```
+
+Branch model (this repository and every component repository): `staging`
+is where PRs from forks land, and its submodule pointers track the
+components' `staging` branches; `main` is stable/release-only and tracks
+the components' `main` branches — staging pulls from staging, main pulls
+from main. See [CONTRIBUTING.md](CONTRIBUTING.md) for the fork workflow
+and the maintainer pointer-bump procedure.
 
 Python tooling (`.ld` conversion, vehicle generator, correlation scripts) uses
 the dependencies pinned in [`requirements.txt`](requirements.txt):

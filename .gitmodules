@@ -6,3 +6,23 @@
 	path = external/LTSTelemetryVisualizer
 	url = https://github.com/jyjh/LTSTelemetryVisualizer.git
 	branch = main
+[submodule "kit"]
+	path = src/+lts/+util
+	url = ../lts-kit
+	branch = main
+[submodule "aero"]
+	path = src/+lts/+components/+Aero
+	url = ../lts-aero
+	branch = main
+[submodule "suspension"]
+	path = src/+lts/+components/+Suspension
+	url = ../lts-suspension
+	branch = main
+[submodule "powertrain"]
+	path = src/+lts/+components/+Powertrain
+	url = ../lts-powertrain
+	branch = main
+[submodule "chassis"]
+	path = src/+lts/+components/+Chassis
+	url = ../lts-chassis
+	branch = main

@@ -28,17 +28,31 @@ jobs:
   matlab-tests:
     runs-on: ubuntu-latest
     steps:
-      # No submodules needed: the MATLAB suite does not import external/.
-      # mfeval is vendored at third-party/mfeval (see that folder's README).
-      # The TTC .tir tire data files are untracked, so tire-dependent tests
-      # skip via tests/tireDataAvailable.m
-      # (see src/+lts/+components/+Tire/README.md).
+      # The lts component packages (util, Aero, Suspension, Powertrain,
+      # Chassis) live in sibling repositories mounted at their original
+      # monorepo paths. Their URLs are relative (../lts-aero), so they
+      # resolve against this repository's remote within the organization
+      # and clone with the default GITHUB_TOKEN when public.
+      # external/LTSTelemetryVisualizer is private and not needed by any
+      # test, so init explicitly rather than --recursive.
       - uses: actions/checkout@v4
+      - name: Initialize test submodules
+        run: |
+          git submodule update --init \
+            src/+lts/+util \
+            src/+lts/+components/+Aero \
+            src/+lts/+components/+Suspension \
+            src/+lts/+components/+Powertrain \
+            src/+lts/+components/+Chassis
       - name: Set up MATLAB
         uses: matlab-actions/setup-matlab@v3
         with:
           release: R2026a
       - name: Run MATLAB tests
+        # mfeval is vendored at third-party/mfeval (see that folder's README).
+        # The TTC .tir tire data files are untracked, so tire-dependent tests
+        # skip via tests/tireDataAvailable.m
+        # (see src/+lts/+components/+Tire/README.md).
         # run-tests' source-folder string is forwarded to MATLAB verbatim,
         # where ';' only separates paths on Windows — on Linux runners
         # "src;third-party/mfeval" is a single nonexistent folder and the
