@@ -2,13 +2,41 @@
 
 Code-generation and analysis tooling for the FSAE lap-time simulator.
 
-Shared MATLAB helpers live in the `+wsc` package (Pacejka force grids and
+## Maintenance scripts
+
+Two shell scripts maintain the multi-repository layout itself — see the
+[Repositories & Sync](https://jyjh.github.io/lts/repos/) page for the model
+they enforce:
+
+- **`release.sh`** — the release cascade. Fast-forwards every component
+  repository's `main` to its `staging` tip, merges this repository's
+  `staging` into `main`, restores each branch's `.gitmodules` targeting,
+  reconciles `staging`, and pushes everything (components first, this
+  repository last). `--dry-run` prints the plan without changing anything;
+  preflight aborts on dirty trees, unsynced branches, or a component whose
+  `main` is not an ancestor of its `staging`. Requires the integration
+  lead's ruleset bypass on `main`/`staging`.
+- **`check_submodule_policy.sh` `<main|staging>`** — verifies the submodule
+  policy for the given branch: `.gitmodules` tracks the matching component
+  branch; every pinned component commit exists on that component's matching
+  branch (strictly `main` on `main` runs, either on `staging` runs); and
+  each component's nested `kit/` pin satisfies the same containment against
+  `lts-kit`'s branches. CI runs this on every push to `main`/`staging` and
+  on every PR.
+
+## MATLAB utility scripts
 peak-force envelopes, the bicycle skidpad solver, mass sweeps, Kneedle
 elbows, coupled-CG reporting, option validation, figure styling and export);
 they are shared by the `weight_savings_*` and `tire_sensitivity` scripts and
 auto-addpath'd by them via `wsc.addScriptPaths()`.
 
 ## MATLAB utility scripts
+
+Shared MATLAB helpers live in the `+wsc` package (Pacejka force grids and
+peak-force envelopes, the bicycle skidpad solver, mass sweeps, Kneedle
+elbows, coupled-CG reporting, option validation, figure styling and export);
+they are shared by the `weight_savings_*` and `tire_sensitivity` scripts and
+auto-addpath'd by them via `wsc.addScriptPaths()`.
 
 Standalone diagnostic scripts. Run them by name from MATLAB — each auto-addpaths
 `src/` and writes a PNG to `exports/` (created if missing). Set `configName` at

@@ -10,11 +10,14 @@
 #      the pin must be on the component's `main` branch strictly; on
 #      `staging` runs it may be on `main` or `staging` (an unchanged
 #      component keeps its last-released pin).
+#   3. Each component repository mounts lts-kit at `kit/`; that nested
+#      pin must satisfy the same containment rule against lts-kit's
+#      branches (strictly `main` on `main` runs, either on `staging` runs).
 #
 # Usage:  check_submodule_policy.sh <main|staging>
 # Exit 0 = policy holds; exit 1 = violations (printed).
 #
-# Network note: the containment check fetches each submodule's main/staging
+# Network note: the containment checks fetch each submodule's main/staging
 # branches. Without network or remotes (e.g. a purely local checkout before
 # the organization transfer), the containment check degrades to a warning
 # and only the .gitmodules targeting is enforced.
@@ -29,6 +32,7 @@ fi
 submodule_names="kit aero suspension powertrain chassis"
 fail=0
 containment_skipped=0
+kit_fetch_ok=0
 
 for name in $submodule_names; do
     path=$(git config -f .gitmodules --get "submodule.$name.path" 2>/dev/null) || {
@@ -59,13 +63,14 @@ for name in $submodule_names; do
         }
     fi
     # protocol.file.allow=always: no-op for https remotes; required while
-    # submodules resolve from local sibling directories.
+    # submodules may resolve from local sibling directories.
     if ! git -C "$path" -c protocol.file.allow=always fetch --quiet origin main staging >/dev/null 2>&1 \
             && ! git -C "$path" -c protocol.file.allow=always fetch --quiet origin >/dev/null 2>&1; then
         echo "WARN: cannot fetch '$name' remote branches; skipping containment check"
         containment_skipped=1
         continue
     fi
+    [ "$name" = "kit" ] && kit_fetch_ok=1
 
     if git -C "$path" branch -r --contains "$pinned" 2>/dev/null | grep -q "origin/main"; then
         on_main=yes
@@ -90,6 +95,50 @@ for name in $submodule_names; do
         fi
     fi
 done
+
+# --- Check 3: nested kit pins ------------------------------------------
+# Each component repository mounts lts-kit at kit/. Containment is
+# queried in this checkout's kit working copy, whose origin main/staging
+# the loop above fetched; the component working copies only need to be
+# at their pinned commits (the loop above ensured that) to read their
+# recorded kit gitlink with ls-tree.
+kit_path=$(git config -f .gitmodules --get "submodule.kit.path" 2>/dev/null)
+if [ -n "$kit_path" ] && [ "$kit_fetch_ok" -eq 1 ] && [ -e "$kit_path/.git" ]; then
+    for name in $submodule_names; do
+        [ "$name" = "kit" ] && continue
+        path=$(git config -f .gitmodules --get "submodule.$name.path" 2>/dev/null)
+        nested=$(git -C "$path" ls-tree HEAD -- kit | awk '{print $3}')
+        if [ -z "$nested" ]; then
+            echo "FAIL: [$name] records no nested kit pin at kit/"
+            fail=1
+            continue
+        fi
+        if ! git -C "$kit_path" cat-file -e "$nested^{commit}" 2>/dev/null; then
+            echo "FAIL: [$name] nested kit pin $nested is on neither 'main' nor 'staging' of lts-kit"
+            fail=1
+            continue
+        fi
+        on_main=no
+        on_staging=no
+        if git -C "$kit_path" branch -r --contains "$nested" 2>/dev/null | grep -q "origin/main"; then
+            on_main=yes
+        fi
+        if git -C "$kit_path" branch -r --contains "$nested" 2>/dev/null | grep -q "origin/staging"; then
+            on_staging=yes
+        fi
+        if [ "$expected" = "main" ] && [ "$on_main" != "yes" ]; then
+            echo "FAIL: [$name] nested kit pin $nested is not on lts-kit's 'main' branch"
+            fail=1
+        fi
+        if [ "$expected" = "staging" ] && [ "$on_main" != "yes" ] && [ "$on_staging" != "yes" ]; then
+            echo "FAIL: [$name] nested kit pin $nested is on neither 'main' nor 'staging' of lts-kit"
+            fail=1
+        fi
+    done
+else
+    echo "NOTE: nested kit pins not checked (kit working copy or its remote branches unavailable)."
+    containment_skipped=1
+fi
 
 if [ "$containment_skipped" -eq 1 ]; then
     echo "NOTE: containment checks were skipped for some submodules (no network/remotes)."
