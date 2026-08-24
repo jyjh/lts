@@ -4,6 +4,10 @@
 # MATLAB sources: normalize line endings (the index uses LF)
 *.m text eol=lf
 
+# Shell scripts must stay LF in the working tree too — bash cannot run
+# files with CRLF line endings ("$'\r': command not found")
+*.sh text eol=lf
+
 # MATLAB data assets are binary; avoid any diff/merge text handling
 *.mat binary
 *.tir text eol=lf
