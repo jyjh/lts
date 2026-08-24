@@ -19,6 +19,7 @@ shared library. Each department works **only** in its own repository.
 | `lts-chassis` | Chassis package (`src/+lts/+components/+Chassis`) | Chassis department |
 | `lts-kit` | Shared helpers used by everything (`clamp`, the gravity constant, safe `.mat` loading, ...) | Integration lead only — request changes via an issue |
 | `external/MotecLogGenerator` | Third-party MoTeC `.ld` export tool | Consumed as-is, not developed here |
+| `external/LTSTelemetryVisualizer` | Private team telemetry visualizer (wrapped by `scripts/visualize_correlation.m`) | Team members only — private repository, not initialized by CI or `scripts/setup.m` |
 
 ## How the main repository stays in sync (plain language)
 
@@ -110,10 +111,11 @@ precisely the tested combination.
 
 **Guard rail:** CI runs `scripts/check_submodule_policy.sh` on every push
 to `main`/`staging` and on every PR. It fails the build if
-`.gitmodules` tracks the wrong branch for the branch being built, or if
-a pinned component commit does not exist on the matching component
-branch — so a merge that would corrupt the targeting can never land
-silently. Run it yourself any time with:
+`.gitmodules` tracks the wrong branch for the branch being built, if a
+pinned component commit does not exist on the matching component
+branch, or if a component's nested `kit/` pin does not exist on
+`lts-kit`'s matching branch — so a merge that would corrupt the
+targeting can never land silently. Run it yourself any time with:
 
 ```
 bash scripts/check_submodule_policy.sh main      # or: staging
@@ -155,6 +157,21 @@ Once a department's change is merged into their `staging`:
 
 Releases (making a proven `staging` the new `main` everywhere) are *not*
 done by hand — use the [release cascade](#releases-the-cascade) above.
+
+### When the shared kit changes
+
+`lts-kit` is pinned twice: by this repository (`src/+lts/+util`) and by
+each component repository (its `kit/` submodule). When kit advances,
+bump both layers, innermost first:
+
+1. In each component repository that needs the new kit version, open a
+   PR into its `staging` running `git submodule update --remote kit` and
+   committing the pointer.
+2. Then run the ordinary bump checklist above for those components —
+   the main-repository bump picks up the component change and its new
+   kit pin together. The CI guard checks the nested pin's containment,
+   so a kit pin pointing at a commit that never reached `lts-kit`'s
+   matching branch fails the build.
 
 ### What is not automatic (yet)
 
