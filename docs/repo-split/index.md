@@ -198,8 +198,9 @@ git submodule add https://github.com/org/lts-kit.git      src/+lts/+util
   suspension, `PowertrainDifferentialTest` → powertrain). Everything that
   references `Simulator`, correlation, or governance stays in main.
 - Add a one-command bootstrap (`scripts/setup.m`) that initializes
-  submodules and prints the `addpath` lines, so nobody needs to know
-  submodule commands.
+      submodules and prints the `addpath` lines, so nobody needs to know
+      submodule commands (added 2026-08-24; skips the private
+      telemetry visualizer so anyone can bootstrap).
 
 #### Phase 4 — transfer and links
 
