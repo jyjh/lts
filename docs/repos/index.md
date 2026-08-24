@@ -57,7 +57,7 @@ two long-lived branches:
 | Purpose | All new work lands here | Stable, release-only |
 | Pull Requests from forks target | `staging` | never directly |
 | How it advances | PRs from forks + component bumps | **only the release cascade** (below) |
-| Component versions pinned in this branch of `lts` | the components' `staging` tips | the components' `main` heads after the cascade |
+| Component versions pinned in this branch of `lts` | what the latest proven bump pinned — the components' `staging` tips after a bump PR, otherwise still the last-released `main` pins | the components' `main` heads after the cascade |
 
 In short: **staging pulls from staging, main pulls from main.** The
 component repositories never merge `staging` → `main` on their own —
@@ -73,6 +73,15 @@ integration lead:
 bash scripts/release.sh            # from the main repository, staging green
 ```
 
+The cascade needs a working clone of every component repository to
+operate on. By default it uses **this checkout's own submodule working
+copies** (`src/+lts/+util`, …) — so `git submodule update --init` is the
+only preparation. To run it from a checkout without initialized
+submodules, set `LTS_COMPONENTS_ROOT` to a directory holding sibling
+clones (`lts-kit`, `lts-aero`, …) and those are used instead. In either
+case every repository must have a clean working tree, and any local
+`main`/`staging` branches must be in sync with origin.
+
 The script does, in order:
 
 1. **Preflight** — verifies every repository has a clean tree and that
@@ -81,7 +90,8 @@ The script does, in order:
 2. **Components** — for `lts-kit` and each department repository:
    fast-forward `main` to the `staging` tip. *This is the moment a
    department's work officially lands on its `main` — never before.*
-   (Component repositories' `.gitmodules` are branch-agnostic, so the
+   (Component repositories' `.gitmodules` are branch-agnostic on both
+   branches — no `branch =` lines, no per-branch flip — so the
    fast-forward leaves both branches identical — nothing to fix up.)
 3. **Main repository** — merge `staging` into `main` (any submodule
    pointer conflicts resolve to the staging-proven versions), then
