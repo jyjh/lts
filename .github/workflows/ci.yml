@@ -2,10 +2,30 @@ name: CI
 
 on:
   push:
-    branches: [main]
+    branches: [main, staging]
   pull_request:
 
 jobs:
+  # Enforce the submodule policy: on main, .gitmodules tracks each
+  # lts-* submodule's main branch and the pinned commits must exist on
+  # the components' main branches; on staging, it tracks staging and the
+  # pins must exist on the components' main or staging branches. Runs on
+  # PRs against the base branch's expectation, so a merge that would
+  # leave the wrong targeting behind fails here before it lands.
+  submodule-policy:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Determine expected tracking branch
+        run: |
+          if [ "${{ github.event_name }}" = "pull_request" ]; then
+            echo "EXPECTED=${{ github.base_ref }}" >> "$GITHUB_ENV"
+          else
+            echo "EXPECTED=${{ github.ref_name }}" >> "$GITHUB_ENV"
+          fi
+      - name: Check submodule targeting policy
+        run: bash scripts/check_submodule_policy.sh "$EXPECTED"
+
   python-tests:
     runs-on: ubuntu-latest
     steps:

@@ -84,6 +84,18 @@ Tire `.tir` data files are not committed for licensing reasons; tests that
 need them skip automatically (see
 `src/+lts/+components/+Tire/README.md`).
 
+## How a change reaches `main` (releases)
+
+You only ever interact with `staging`. When the team decides to make a
+release, the integration lead runs one script (`scripts/release.sh`) in
+the main repository that promotes the proven `staging` state to `main`
+everywhere at once — including each department repository's `main`. This
+is the only way anything reaches a `main` branch, which is why `main` is
+always a combination that passed the full test suite. You never need to
+do this yourself; see
+[Repositories & Sync](https://jyjh.github.io/lts/repos/) if you are
+curious how it works.
+
 ## Rules of thumb
 
 - SI units everywhere (m, kg, N, s, rad); state units where numbers are

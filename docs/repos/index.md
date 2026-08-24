@@ -56,10 +56,57 @@ two long-lived branches:
 |---|---|---|
 | Purpose | All new work lands here | Stable, release-only |
 | Pull Requests from forks target | `staging` | never directly |
-| Who merges `staging` → `main` | — | maintainers, at release time |
-| Component versions pinned in this branch of `lts` | the components' `staging` tips | the components' `main` tags |
+| How it advances | PRs from forks + component bumps | **only the release cascade** (below) |
+| Component versions pinned in this branch of `lts` | the components' `staging` tips | the components' `main` heads after the cascade |
 
-In short: **staging pulls from staging, main pulls from main.**
+In short: **staging pulls from staging, main pulls from main.** The
+component repositories never merge `staging` → `main` on their own —
+their `main` branches advance only as part of a release of the main
+repository, when the whole combination has been proven together.
+
+### Releases: the cascade
+
+A release is one operation driven from the main repository, run by the
+integration lead:
+
+```
+bash scripts/release.sh            # from the main repository, staging green
+```
+
+The script does, in order:
+
+1. **Preflight** — verifies every repository has a clean tree and that
+   each `main` is an ancestor of its `staging` (so the merges below are
+   safe fast-forwards). Aborts without touching anything otherwise.
+2. **Components** — for `lts-kit` and each department repository:
+   fast-forward `main` to the `staging` tip, and restore that branch's
+   own `.gitmodules` targeting afterwards. *This is the moment a
+   department's work officially lands on its `main` — never before.*
+3. **Main repository** — merge `staging` into `main` (any submodule
+   pointer conflicts resolve to the staging-proven versions), then
+   restore `main`'s `.gitmodules` targeting (`branch = main`).
+4. **Reconcile** — bring the release commits back into `staging` and
+   restore `staging`'s targeting (`branch = staging`), so the *next*
+   release is again a clean fast-forward.
+5. **Push + report** — prints every branch's before/after commit and
+   pushes where a remote exists.
+
+Why this is safe: because component `main` branches only ever advance
+through this cascade, the exact commits that the main repository's
+`staging` branch pinned and tested become, by construction, commits on
+the components' `main` branches at step 2 — the released combination is
+precisely the tested combination.
+
+**Guard rail:** CI runs `scripts/check_submodule_policy.sh` on every push
+to `main`/`staging` and on every PR. It fails the build if
+`.gitmodules` tracks the wrong branch for the branch being built, or if
+a pinned component commit does not exist on the matching component
+branch — so a merge that would corrupt the targeting can never land
+silently. Run it yourself any time with:
+
+```
+bash scripts/check_submodule_policy.sh main      # or: staging
+```
 
 ### If the component folders look empty after cloning
 
@@ -94,15 +141,17 @@ Once a department's change is merged into their `staging`:
 4. CI must be green. If the **golden lap time** changed, that is expected
    to be the *subject of the PR discussion*, not an obstacle — say why in
    the PR description.
-5. At release time, the integration lead merges this repository's
-   `staging` into `main` and tags.
+
+Releases (making a proven `staging` the new `main` everywhere) are *not*
+done by hand — use the [release cascade](#releases-the-cascade) above.
 
 ### What is not automatic (yet)
 
 - No bot opens "new component version available" PRs yet (Renovate is
   planned). Until then, maintainers run the checklist above.
 - GitHub does **not** re-run the main tests when a component repository
-  changes. The bump Pull Request in step 2–4 is what tests the combination.
+  changes. The bump Pull Request is what tests the combination, and the
+  release cascade is what promotes it.
 
 The engineering record of *why* the repositories were split, the contracts
 between them, and the decision log live on the
