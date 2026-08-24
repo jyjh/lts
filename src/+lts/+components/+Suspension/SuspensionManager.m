@@ -402,9 +402,11 @@ classdef SuspensionManager < lts.components.Suspension.SuspensionComponent
             % chassis the axle carrying more roll angle physically takes a
             % larger share of the elastic transfer. Redistribute by each
             % axle's stiffness*roll-angle product. Disabled by default.
+            % Structural method probes (no isa on ChassisComponent) keep the
+            % Suspension package usable without the Chassis package.
             if obj.coupleChassisRollToLoadTransfer && ~isempty(obj.chassis) && ...
-                    isa(obj.chassis, 'lts.components.Chassis.ChassisComponent') && ...
-                    ismethod(obj.chassis, 'getFrontRollAngle')
+                    ismethod(obj.chassis, 'getFrontRollAngle') && ...
+                    ismethod(obj.chassis, 'getRearRollAngle')
                 phiF = obj.chassis.getFrontRollAngle();
                 phiR = obj.chassis.getRearRollAngle();
                 % Axle elastic force ~ K_roll * |phi|. Compare magnitudes.

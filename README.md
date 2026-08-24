@@ -230,6 +230,7 @@ Full documentation is available at [jyjh.github.io/lts](https://jyjh.github.io/l
 | [Correlation Replay](https://jyjh.github.io/lts/correlation/) | Channel maps, brake/powertrain modes, tuning overlays |
 | [Governed Prediction](https://jyjh.github.io/lts/governed-prediction/) | Parameter roles, calibration, certification gate |
 | [Department Workflow](https://jyjh.github.io/lts/workflow/) | Subsystem-data assembly diagram |
+| [Repository Split Plan](https://jyjh.github.io/lts/repo-split/) | Target repo map, contracts, phases, decision log |
 
 Guides that live at the repo root: [setup.md](setup.md) (initial car model) and
 [workflow.md](workflow.md) (car data → design decision).

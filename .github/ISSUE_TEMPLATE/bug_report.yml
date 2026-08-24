@@ -1,0 +1,74 @@
+name: Bug report
+description: Something in the simulation does not work as expected
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for taking the time to report. Fill in what you can —
+        "not sure" is an acceptable answer anywhere.
+  - type: textarea
+    id: what-happened
+    attributes:
+      label: What happened?
+      description: Also tell us what you expected to happen instead.
+      placeholder: |
+        Ran lts.app.run_simulation('Track', 'skidpad') and got an error about
+        tire data. I expected the run to complete and write a CSV to exports/.
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: How do we reproduce it?
+      description: The exact MATLAB commands or steps, from a fresh startup.
+      placeholder: |
+        addpath('src')
+        result = lts.app.run_simulation('Track', 'autocross');
+    validations:
+      required: true
+  - type: textarea
+    id: error
+    attributes:
+      label: Full error message or wrong output
+      description: Copy the complete red text (or describe the wrong numbers/plots).
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Which area is affected?
+      options:
+        - Aero
+        - Suspension
+        - Powertrain
+        - Chassis
+        - Tire
+        - Track
+        - Simulator / physics
+        - Telemetry / export (MoTeC)
+        - Correlation / governance
+        - Tooling / CI
+        - Documentation
+        - Not sure
+      default: 12
+    validations:
+      required: true
+  - type: dropdown
+    id: matlab-release
+    attributes:
+      label: MATLAB release
+      options:
+        - R2026a
+        - R2025x
+        - Earlier than R2025
+        - Not sure
+      default: 0
+  - type: checkboxes
+    id: reproducible
+    attributes:
+      label: Does it also happen on the current main branch?
+      options:
+        - label: Yes, I checked (or I cannot run main)
+          required: true

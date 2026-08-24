@@ -1,0 +1,54 @@
+name: Model or feature change
+description: Request a physics, parameter, or tooling change (e.g. new component, data update)
+labels: [enhancement]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Use this for anything that changes what the simulation does or
+        consumes — new models, parameter updates from real data, tooling.
+  - type: dropdown
+    id: subsystem
+    attributes:
+      label: Which area?
+      options:
+        - Aero
+        - Suspension
+        - Powertrain
+        - Chassis
+        - Tire
+        - Track
+        - Simulator / physics
+        - Telemetry / export (MoTeC)
+        - Correlation / governance
+        - Tooling / CI
+        - Not sure
+      default: 11
+    validations:
+      required: true
+  - type: textarea
+    id: what-change
+    attributes:
+      label: What should change, and why?
+      description: One paragraph. What can't you do today, or what is predicted wrong?
+    validations:
+      required: true
+  - type: textarea
+    id: data
+    attributes:
+      label: Source data or evidence
+      description: |
+        Where do the numbers come from (dynamometer run, spec sheet, wind
+        tunnel, on-car logs)? If there are no data yet, say so — that's fine,
+        it just changes the conversation. Do not attach TTC tire data files;
+        they cannot be committed.
+  - type: textarea
+    id: acceptance
+    attributes:
+      label: How do we know it's right?
+      description: |
+        What test or check should pass once this is done? If it affects lap
+        time, say which direction and roughly how much you expect.
+      placeholder: |
+        Skidpad lap time should drop by ~0.1 s with the new spring rates;
+        GoldenLapTimeTest baseline will need a reviewed update.

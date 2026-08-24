@@ -1,0 +1,23 @@
+name: Documentation issue
+description: A guide, README, or docs page is wrong, unclear, or missing
+labels: [documentation]
+body:
+  - type: input
+    id: location
+    attributes:
+      label: Which file or page?
+      description: e.g. README.md, setup.md, or the docs-site page URL
+    validations:
+      required: true
+  - type: textarea
+    id: problem
+    attributes:
+      label: What is wrong or missing?
+      description: What did you expect to find but didn't, or where did you get stuck?
+    validations:
+      required: true
+  - type: textarea
+    id: suggestion
+    attributes:
+      label: Suggested fix (optional)
+      description: Even a rough "add an example of X here" helps.

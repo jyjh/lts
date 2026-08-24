@@ -18,5 +18,6 @@ header_pages:
   - correlation/index.md
   - governed-prediction/index.md
   - workflow/index.md
+  - repo-split/index.md
   - about.md
 
