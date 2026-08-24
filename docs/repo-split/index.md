@@ -297,9 +297,16 @@ CHANGELOG per component repo as each term's "seal".
   `branch` entries) and `main` (release-only; pointers track component
   `main`/tags; merged from `staging` by maintainers). No direct pushes;
   all work from forks. Previous stale branches (`codex`, `matlab-ci`,
-  `reorientation`, `temp`, `devin/*`) were deleted after merge-status
-  review; their tips were `a88e498`, `5b114d6`, `a93160c`, `90c113f`,
-  `142ac29`, `b764e61`, `03bef3a`, `ee560ba` respectively.
+  `reorientation`, `devin/*`) were deleted after merge-status review;
+  their tips were `a88e498`, `5b114d6`, `a93160c`, `142ac29`, `b764e61`,
+  `03bef3a`, `ee560ba` respectively. `temp` was deleted separately on
+  2026-08-24 at its actual tip `f86ff39` (8 unmerged commits pushed
+  2026-08-23: the `+Track` subpackage move, `WheelContactSolver`
+  extraction, `Track.fromName` dispatch, shim removal). Its work was
+  reviewed and intentionally not landed — post-split it no longer applied
+  cleanly (component-file edits now live in the component repositories);
+  the commits remain recoverable from the local reflog until it expires.
+  The tip recorded here previously (`90c113f`) was stale.
 - **2026-08-24 — ADR: release cascade — component `main` branches advance
   only from the main repository.** Component repositories never merge
   `staging` → `main` themselves. A release is one operation,
