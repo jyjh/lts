@@ -183,4 +183,7 @@ bump both layers, innermost first:
 
 The engineering record of *why* the repositories were split, the contracts
 between them, and the decision log live on the
-[Repository Split Plan](../repo-split/) page.
+[Repository Split Plan](../repo-split/) page. The concrete per-component
+contract — cfg schemas, telemetry field names, and the process for
+changing any of them — lives on the
+[Component Contracts](../contracts/) page.

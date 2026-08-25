@@ -138,9 +138,14 @@ be explicit and tested:
 - [x] EMRAX `.mat` maps moved into the `+Powertrain` package folder and
       resolved relative to it, so the powertrain repository is
       self-contained (2026-08-24).
-- [ ] Per-component `validateConfig(cfg)` + schema docs (contract item 2).
-- [ ] Per-component telemetry-channel conformance tests (contract item 3);
-      the current smoke tests pin constructor/return shapes only.
+- [x] Per-component `validateConfig(cfg)` + schema docs (contract item 2)
+      — implemented 2026-08-25; schemas live on the
+      [Component Contracts](../contracts/) page, validators are package
+      functions called by `VehicleManager.fromConfig`.
+- [x] Per-component telemetry-channel conformance tests (contract item 3)
+      — implemented 2026-08-25; producer-side pins in each component's
+      `tests/ConformanceTest.m`, consumer-side pin in the main
+      repository's `tests/TelemetryChannelConformanceTest.m`.
 - [x] Tag `pre-split`-equivalent anchor: commit `4db2aef` is the last
       monorepo commit before the submodule rewiring.
 
@@ -234,7 +239,9 @@ other.
 
 - Component CI (public repo, free MATLAB runner, pinned R2026a):
   `checkout` with submodules → `setup-matlab` → `addpath(pwd)` → run the
-  component's unit tests + contract conformance tests.
+  component's unit tests + contract conformance tests (see the
+  [Component Contracts](../contracts/) page for what is pinned and how
+  to change it).
 - Main CI: today's two jobs (Python + MATLAB) plus recursive submodule init
   (PAT-substituted URL config for private submodules) and the
   `GoldenLapTimeTest` as the headline integration gate — a component bump
