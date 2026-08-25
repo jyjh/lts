@@ -1,0 +1,24 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": ["config:recommended"],
+  "description": "Submodule pin bumps for the lts component repositories (see docs/repos: maintainer checklist).",
+  "git-submodules": {
+    "enabled": true
+  },
+  "packageRules": [
+    {
+      "description": "Component bumps are integration-lead merges; the bump PR itself is the test gate (golden lap time).",
+      "matchFileNames": [".gitmodules"],
+      "matchManagers": ["git-submodules"],
+      "automerge": false,
+      "labels": ["component-bump"],
+      "commitMessagePrefix": "chore(deps)",
+      "prBodyNotes": ["If the golden lap time changed, that is the subject of this PR's discussion — say why. CI must stay green either way."]
+    },
+    {
+      "description": "Ignore third-party externals; only the lts-* family is managed here.",
+      "matchFileNames": ["external/**"],
+      "enabled": false
+    }
+  ]
+}
