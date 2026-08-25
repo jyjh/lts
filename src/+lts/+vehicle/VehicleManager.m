@@ -106,6 +106,15 @@ classdef VehicleManager
             % rather than surfacing deep in simulation as NaN/divide-by-zero.
             config = lts.vehicle.VehicleConfig.validate(config);
 
+            % Contract item 2 of the repository split: each component
+            % repository owns and validates its cfg sub-struct schema
+            % (lts.components.<Pkg>.validateConfig). Typed errors name
+            % the offending field; see the Contracts documentation page.
+            lts.components.Aero.validateConfig(config.aero);
+            lts.components.Suspension.validateConfig(config.suspension);
+            lts.components.Chassis.validateConfig(config.chassis);
+            lts.components.Powertrain.validateConfig(config.powertrain);
+
             if verbose
                 fprintf('=== Building vehicle from config ===\n\n');
             end
