@@ -6,6 +6,11 @@ permalink: /workflow/
 
 ## Department Workflow
 
+Each step below lives in a department's own repository — see
+[Repositories & Sync](../repos/) for who works where and
+[Component Contracts](../contracts/) for the interfaces between them;
+this main repository assembles the pinned combination.
+
 The following diagram shows how subsystem data is assembled into a simulation and reviewed through telemetry:
 
 > Maintainer note: The diagram below is generated from [`workflow.mmd`](workflow.mmd). Edit that file, then run `node docs/sync_diagram.js` to regenerate the SVG.

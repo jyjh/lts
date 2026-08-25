@@ -1,0 +1,30 @@
+# CODEOWNERS — main (integration) repository
+#
+# Process-freeze policy (repo-split Phase 5): every PR needs 1 approval
+# and green CI; branch protection enforces it on main and staging.
+#
+# Integration lead owns the repository wiring: submodule pins, the
+# release cascade, and the submodule-policy guard. These files must
+# never change without integration-lead review.
+/.gitmodules                    @jyjh
+/scripts/release.sh             @jyjh
+/scripts/check_submodule_policy.sh @jyjh
+/.github/workflows/ci.yml       @jyjh
+/CODEOWNERS                     @jyjh
+
+# The shared kernel changes only with integration-lead approval
+# (see docs/repos: "When the shared kit changes").
+/src/+lts/+util                 @jyjh
+
+# Contract enforcement (docs/contracts) is integration-owned; contract
+# changes follow the two-PR process described there.
+/src/+lts/+vehicle/VehicleManager.m @jyjh
+/src/+lts/+telemetry/           @jyjh
+/tests/TelemetryChannelConformanceTest.m @jyjh
+/docs/contracts/                @jyjh
+
+# Department ownership: each component's *content* lives in its own
+# repository; this checkout only records the pinned commit, which the
+# /.gitmodules rule above already covers. Replace the fallback below
+# with department teams once the team structure exists.
+*                               @jyjh

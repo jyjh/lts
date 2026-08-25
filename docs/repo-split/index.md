@@ -6,10 +6,11 @@ permalink: /repo-split/
 
 ## Repository Split Plan
 
-**Status:** split executed locally on 2026-08-24 (see [decision log](#decision-log));
-pending: push of the six repositories and transfer to the organization.
+**Status:** split complete — all six repositories pushed and CI-enforced.
+Organization transfer **skipped by decision 2026-08-25** (see
+[decision log](#decision-log)); the family stays under `jyjh/*`.
 **Owner:** simulation lead (rotate per the ownership table below).
-**Last updated:** 2026-08-24.
+**Last updated:** 2026-08-25.
 
 This page is the master plan for moving the department component models
 (Aero, Suspension, Powertrain, Chassis) out of this monorepo into their own
@@ -88,21 +89,19 @@ recipe applies later if the tire group wants ownership.
 
 ### Decisions
 
-Closed decisions are recorded in the [decision log](#decision-log). Still
-open — close these before Phase 1:
+Closed decisions are recorded in the [decision log](#decision-log). The
+three originally open decisions are now settled (2026-08-24/25):
 
-1. **Public vs private organization repos.** Free MATLAB on GitHub Actions
-   runners requires *public* repositories; our CI already relies on it.
-   Private repos need a license server or self-hosted runners. Recommended:
-   component repos public (model code only, no team data), main repo and
-   telemetry private if needed, with a fine-grained PAT (`contents:read`)
-   secret for submodule init in CI.
-2. **`lts-kit` change policy.** Proposed: integration lead approves all kit
-   changes; semver tags; treated like a published library. If kit churn is
-   high, the package boundaries are wrong — revisit the split before growing
-   the kit.
-3. **Organization name and team structure** (`aero`, `suspension`,
-   `powertrain`, `chassis`, `integration` teams).
+1. **Visibility** — component repositories and the main repository are
+   public (free MATLAB on GitHub-hosted runners);
+   `external/LTSTelemetryVisualizer` stays private.
+2. **`lts-kit` change policy** — integration lead approves all kit
+   changes (CODEOWNERS route); semver tags come with releases. If kit
+   churn is high, the package boundaries are wrong — revisit the split
+   before growing the kit.
+3. **Organization** — transfer **skipped** (2026-08-25 decision, see
+   the log); the family stays under `jyjh/*`. Department teams were
+   never created; CODEOWNERS uses the maintainer handle as fallback.
 
 ### The cross-repo contract
 
@@ -209,27 +208,38 @@ git submodule add https://github.com/org/lts-kit.git      src/+lts/+util
 
 #### Phase 4 — transfer and links
 
-- Transfer `jyjh/lts` to the org (repo URLs redirect; **GitHub Pages URLs do
-  not** — update every `jyjh.github.io/lts/...` link in README and docs).
-- Update `.gitmodules` URLs and README prose references.
+**Skipped by decision 2026-08-25** (see the decision log). The
+repository family stays under `jyjh/*`; relative submodule URLs and all
+`jyjh.github.io/lts/...` links keep working unchanged. If a transfer is
+ever revisited: repo URLs redirect automatically, but **GitHub Pages
+URLs do not** — update every `jyjh.github.io/lts/...` link in README
+and docs, and the `.gitmodules` base.
 
 #### Phase 5 — process freeze
 
-- Branch protection on every repo: CI green + 1 approval, no direct pushes to
-  `main`, squash-merge, auto-delete branches.
-- CODEOWNERS per department; `.gitmodules` changes require integration-lead
-  review.
-- Enable Renovate in main with `git-submodules` enabled: component repos tag
-  semver releases, Renovate opens "update lts-aero to v1.3.0" PRs, main's CI
-  validates the bump, integration lead merges. Nobody hand-edits SHA
-  pointers.
+**Applied 2026-08-25.** Branch protection on every repository (main and
+staging): pull requests required (no direct pushes), 1 approving review,
+required CI checks (the repository's own jobs), linear history,
+squash-merge only, auto-delete of merged branches. `enforce_admins` is
+off while the team is a single maintainer — flip it on when department
+teams exist (it is the "nobody merges their own PR" switch).
+CODEOWNERS in the main repository routes `.gitmodules`, the release
+cascade, and contract enforcement to the integration lead.
+Renovate configuration (`renovate.json`, git-submodules enabled) is in
+the main repository; installing the Renovate GitHub App is the one
+remaining manual step.
 
 #### Phase 6 — documentation and handover
 
-- Update the [Department Workflow](../workflow/) page to the new repo map.
-- Publish each repo's schema doc; link from the docs site.
-- First ADRs already recorded (below); record the split itself as an ADR.
-- Record the inaugural handover walkthrough.
+- [x] Update the [Department Workflow](../workflow/) page to the new repo map
+      (2026-08-25).
+- [x] Publish each repo's schema doc; link from the docs site — the
+      [Component Contracts](../contracts/) page (2026-08-25).
+- [x] First ADRs already recorded (below); record the split itself as an ADR
+      — covered by the 2026-08-24 *Plan adopted* and *Split executed*
+      entries, plus the 2026-08-25 entries below.
+- [ ] Record the inaugural handover walkthrough (human activity; first
+      rotation of the ownership table).
 
 ### CI design
 
@@ -333,3 +343,31 @@ CHANGELOG per component repo as each term's "seal".
   in CI on every push to `main`/`staging` and on every PR (`.gitmodules`
   targeting must match the branch; pinned commits must exist on the
   matching component branches).
+- **2026-08-25 — ADR: contract enforcement is live (Phase 0 closed).**
+  Every component repository ships `validateConfig` plus a
+  `ConformanceTest` pinning its cfg schema, interface, and telemetry
+  producer fields; the main repository calls all four validators in
+  `VehicleManager.fromConfig` and pins the consumer side
+  (`TelemetryChannelConformanceTest`, channel allocation + stateLog
+  mapping). Schemas and the contract-change process (integration-lead
+  approval, paired component+main PRs) live on the
+  [Component Contracts](../contracts/) page. Verified: all component
+  suites standalone, full main MATLAB suite (golden lap time
+  unchanged), pytest, and a deliberate mapping mutation failing CI.
+- **2026-08-25 — Decision: organization transfer skipped.** The
+  repository family stays under `jyjh/*`. Relative submodule URLs
+  already resolve there and GitHub Pages links stay valid, so the
+  transfer's only benefit (per-team permissions under an org) is not
+  worth the Pages-link breakage for now. Phase 4 records what to do if
+  this is revisited.
+- **2026-08-25 — ADR: process freeze applied (Phase 5).** Branch
+  protection on `main` and `staging` of all six repositories: PRs
+  required, 1 approving review, the repository's own CI jobs as
+  required checks, linear history, squash-only merges, auto-delete.
+  `enforce_admins` stays off while there is a single maintainer —
+  enable it when department teams exist. CODEOWNERS routes the
+  repository wiring (`.gitmodules`, release cascade, contract
+  enforcement) to the integration lead. Renovate config
+  (`git-submodules` enabled, no automerge — the bump PR is the test
+  gate) is committed; installing the Renovate app is the remaining
+  manual step.

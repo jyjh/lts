@@ -175,8 +175,11 @@ bump both layers, innermost first:
 
 ### What is not automatic (yet)
 
-- No bot opens "new component version available" PRs yet (Renovate is
-  planned). Until then, maintainers run the checklist above.
+- Renovate's configuration is in place (`renovate.json` in this
+  repository, `git-submodules` enabled, no automerge — the bump PR is
+  the test gate), but the Renovate GitHub App still needs to be
+  installed and granted access to `jyjh/lts`. Until then, maintainers
+  run the checklist above by hand.
 - GitHub does **not** re-run the main tests when a component repository
   changes. The bump Pull Request is what tests the combination, and the
   release cascade is what promotes it.
