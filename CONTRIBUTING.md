@@ -27,6 +27,15 @@ turns every git step into a button).
 Every department repository has the same process as below; the only
 difference is the test command (see *Running the tests*).
 
+**One thing to know first:** each department repository has a *contract*
+with this one — the config fields it accepts and the telemetry field
+names the simulation logs (spelled out on the
+[Component Contracts](https://jyjh.github.io/lts/contracts/) page).
+Renaming any of them breaks CI in two repositories. If your change
+touches one of those names, talk to the integration lead before coding;
+that page's *Changing the contract* section describes the two-PR
+procedure.
+
 ## Your first change, step by step
 
 1. **Fork** (once per repository). On the repository's GitHub page, click

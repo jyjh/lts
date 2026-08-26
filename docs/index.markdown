@@ -124,6 +124,7 @@ src/+lts/+telemetry/GraphPlotter.m           Simulation dashboards
 | [Correlation Replay](correlation/) | Channel maps, brake/powertrain modes, tuning overlays |
 | [Governed Prediction](governed-prediction/) | Parameter roles, calibration, certification gate |
 | [Repository Split Plan](repo-split/) | Why the repositories were split; contracts; decision log |
+| [Component Contracts](contracts/) | Per-component cfg schemas, telemetry field pins, contract-change process |
 
 Contributing (no git experience needed):
 [`CONTRIBUTING.md`](https://github.com/jyjh/lts/blob/main/CONTRIBUTING.md).

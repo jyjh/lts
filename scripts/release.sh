@@ -49,6 +49,32 @@ done
 MAIN_ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SUBMODULES="kit aero suspension powertrain chassis"
 
+# Authenticate every origin fetch/push as the GitHub CLI user when gh is
+# available: the branch rulesets' bypass list names a USER, but git's
+# default credential helper (e.g. Git Credential Manager on Windows) may
+# hold a different account, and pushes under any other identity are
+# rejected. Falls back to git's own credentials when gh is absent.
+GIT_AUTH=()
+PUSH_IDENTITY="git default credentials (gh not available)"
+if command -v gh >/dev/null 2>&1 && gh auth status >/dev/null 2>&1; then
+    GIT_AUTH=(-c credential.helper= -c "credential.helper=!gh auth git-credential")
+    PUSH_IDENTITY="gh auth: $(gh api user --jq .login 2>/dev/null || echo unknown)"
+fi
+
+# Refuse to run with a placeholder identity: the cascade creates commits
+# (the merge plus two retargets). A shell without user.name/user.email
+# configured once produced "your name <you@example.com>" release commits,
+# which took a history rewrite to fix. Check before anything is touched.
+id_name="$(git -C "$MAIN_ROOT" config user.name || true)"
+id_email="$(git -C "$MAIN_ROOT" config user.email || true)"
+case "${id_name:-unset}:${id_email:-unset}" in
+    *your?name*|*example.com*|unset:*)
+        echo "ABORT: git identity here is '${id_name:-unset} <${id_email:-unset}>'." >&2
+        echo "  Set user.name and user.email (git config --global ...) in the" >&2
+        echo "  shell you release from, then re-run." >&2
+        exit 1 ;;
+esac
+
 # Resolve every repository up front and abort before touching anything
 # if one is missing — a resolution failure inside the preflight loop
 # would otherwise die in a subshell and leave the checks silently
@@ -110,7 +136,7 @@ for i in "${!REPO_DIRS[@]}"; do
     has_origin=0
     if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
         has_origin=1
-        git -C "$repo" fetch --quiet origin || {
+        git ${GIT_AUTH[@]+"${GIT_AUTH[@]}"} -C "$repo" fetch --quiet origin || {
             echo "ABORT: cannot fetch '$repo_name' from origin." >&2
             exit 1; }
     fi
@@ -159,7 +185,7 @@ for i in "${!REPO_DIRS[@]}"; do
         "$(git -C "$repo" rev-parse --short "$main_ref")" \
         "$(git -C "$repo" rev-parse --short "$staging_ref")"
 done
-echo "  preflight OK"
+echo "  preflight OK (pushing as: $PUSH_IDENTITY)"
 
 if [ "$ASSUME_YES" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
     read -r -p "Run the release cascade now? [y/N] " answer
@@ -278,7 +304,7 @@ else
         repo_name="${REPO_NAMES[$i]}"
         if git -C "$repo" remote get-url origin >/dev/null 2>&1; then
             echo "  pushing $repo_name"
-            git -C "$repo" push origin main staging
+            git ${GIT_AUTH[@]+"${GIT_AUTH[@]}"} -C "$repo" push origin main staging
         else
             echo "  $repo_name has no origin remote — push skipped (pre-transfer local setup)"
         fi
