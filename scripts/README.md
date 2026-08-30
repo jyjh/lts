@@ -123,7 +123,11 @@ investigate_lateral_g( ...
 - **`validate_racing_line.m`** — geometry validator for waypoint racing
   lines (curvature continuity, station spacing, width envelope).
 - **`visualize_correlation.m`** — wrapper that renders a correlation run in
-  the LTSTelemetryVisualizer submodule.
+  the LTSTelemetryVisualizer submodule: a Plotly correlation report plus a
+  standalone animated **3D replay** (`<output>_3d.html`) with
+  chase/cockpit/orbit/top cameras, playback controls, and live telemetry.
+  For the 3D replay alone, call the package directly with
+  `ltsviz.render3D('SimCsv', ...)` (see the submodule README).
 
 ## extract_motec_lap.py
 

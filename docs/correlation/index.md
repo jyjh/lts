@@ -60,6 +60,29 @@ specific logger or car if the channels use different names, signs, units, or
 calibration. The normalized replay CSV and extraction manifest are written
 beside the simulated output under `exports/correlation_*`.
 
+### Visualizing a correlation run
+
+The `external/LTSTelemetryVisualizer` submodule turns a correlation run
+into a standalone animated 3D replay — simulation and aligned real cars on
+the reference track with chase/cockpit/orbit/top cameras, playback and
+scrubbing, live pedal/steer telemetry, and click-to-seek strip charts. The
+quickest entry point is:
+
+```matlab
+addpath('external/LTSTelemetryVisualizer')
+result = ltsviz.render3D( ...
+    'SimCsv', 'exports/correlation_run.csv', ...
+    'RealMoTeCFile', 'data/lap5_raw.ld', ...
+    'TrackFile', 'tracks/endurance_track_grid_25ft_from_matlab_smoothed.mat');
+web(result.htmlFile)
+```
+
+`scripts/visualize_correlation.m` wraps the fuller
+`ltsviz.visualizeCorrelation` flow, which additionally writes the Plotly
+correlation report, the aligned CSV, and the summary JSON beside the 3D
+replay (`<output>_3d.html`). See the submodule README for viewer controls
+and deep links (`?t=..&cam=..`).
+
 ### Brake modes
 
 If the log has no direct brake pedal channel, the default map derives
