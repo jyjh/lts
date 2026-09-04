@@ -874,7 +874,15 @@ classdef DriverInputPlanner
             % the vehicles run on dry rubber with no friction variability.
             tireAccel = max(peakMu, 0) * totalNormalLoad / vm.totalMass;
 
-            brakeForce = max(0, vm.brakeForceCoefficient) * totalNormalLoad;
+            % Braking capability is the bias-aware tire grip limit (same
+            % capacity the dynamic sim's brake policy applies), not a fixed
+            % fraction of load: planned braking distances must reference the
+            % same physical ceiling the driver can actually reach.
+            W = vm.totalMass * vm.g;
+            frontNormalLoad = max(W * vm.staticFrontWeight + aeroForces.Fz_front, 0);
+            rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
+            brakeForce = lts.simulation.BrakeForcePolicy.gripLimitedCapacity( ...
+                vm, frontNormalLoad, rearNormalLoad);
             rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
             brakeAccel = (brakeForce + F_drag + rollingResistance) / vm.totalMass;
 
@@ -906,9 +914,9 @@ classdef DriverInputPlanner
             if ~isempty(vm.powertrain)
                 F_drive_full = max(0, vm.powertrain.computeMaxDriveForce(tempState.speed));
             end
-            W = vm.totalMass * vm.g;
-            rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
-            rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
+            % Drive traction is longitudinal too: use the longitudinal peak,
+            % not the lateral one.
+            rearMu = max(vm.tire.getPeakLongitudinalFriction(rearNormalLoad / 2), 0);
             F_traction_rear = driveUsage * rearMu * rearNormalLoad;
             F_drive_full = min(F_drive_full, F_traction_rear);
 

@@ -26,7 +26,12 @@ function cfg = R25()
     cfg.airDensity                   = 1.225;      % [kg/m^3] (ISA standard; CSV aero r131 was evaluated at rho=1.162)
     cfg.staticFrontWeight            = 0.5095;     %  [CSV r11: 50.95% front] [0-1]
     cfg.brakeBiasFront               = 0.6;        %  TODO derivable: CSV r46: line pressures F 14.524/R 20.836 bar, r44 pistons F4/R2 => front clamp-fraction ~ 0.582 (rough; ignores piston bore 25 vs 25.4 mm). Verify against bias bar. [0-1]
-    cfg.brakeForceCoefficient        = 0.7;        %  TODO derivable: CSV r46 is a 'Force @ 1g Deceleration' table; the system is sized for ~1g but brakeForceCoefficient is tyre-limited capacity. baseline 0.70 left as-is.
+    % Braking is grip-limited (BrakeForcePolicy), not a configured force
+    % fraction. CSV r46 is the "Force @ 1g Deceleration" table (1g needs
+    % only 14.5/20.8 bar): it calibrates force-per-bar for the pressure-mode
+    % replay path, and the pedal box is sized so full effort reaches tire
+    % grip, so the commanded-force ceiling is the bias-weighted tire grip
+    % limit rather than a fixed fraction of load.
     brakePressureFrontAt1gBar = 14.524;            %  [CSV r46: front line pressure at 1g deceleration] [bar]
     brakePressureRearAt1gBar = 20.836;             %  [CSV r46: rear line pressure at 1g deceleration] [bar]
     cfg.brakePressure = struct( ...

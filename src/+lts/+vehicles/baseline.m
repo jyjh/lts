@@ -30,7 +30,8 @@ function cfg = baseline()
     cfg.airDensity           = 1.225;    % Air density [kg/m^3]
     cfg.staticFrontWeight    = 0.50;     % Static front weight distribution [0-1]
     cfg.brakeBiasFront       = 0.60;     % Brake force fraction to front axle [0-1]
-    cfg.brakeForceCoefficient = 0.70;    % Brake force capacity as fraction of normal load (no ABS)
+    % Braking is grip-limited (BrakeForcePolicy), not a configured force
+    % fraction: capacity tracks the bias-weighted tire grip limit.
     cfg.maxSpeed             = 80;       % Soft speed limiter [m/s] (~288 km/h)
     cfg.unsprungMass         = 9;       % Per-corner unsprung mass [kg]
 

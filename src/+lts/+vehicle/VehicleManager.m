@@ -36,7 +36,6 @@ classdef VehicleManager
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
-        brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
         brakePressureFrontForcePerBar = NaN % Front axle brake force per line pressure [N/bar]
         brakePressureRearForcePerBar = NaN  % Rear axle brake force per line pressure [N/bar]
         
@@ -224,7 +223,6 @@ classdef VehicleManager
             vehicle.airDensity           = config.airDensity;
             vehicle.staticFrontWeight    = config.staticFrontWeight;
             vehicle.brakeBiasFront       = config.brakeBiasFront;
-            vehicle.brakeForceCoefficient = config.brakeForceCoefficient;
             vehicle.brakePressureFrontForcePerBar = ...
                 lts.util.fieldOr(config.brakePressure, 'frontForcePerBar', NaN);
             vehicle.brakePressureRearForcePerBar = ...

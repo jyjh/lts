@@ -836,19 +836,15 @@ classdef DriverModel < handle
 
             frontNormalLoad = max(W * vm.staticFrontWeight + aeroForces.Fz_front, 0);
             rearNormalLoad = max(W * (1 - vm.staticFrontWeight) + aeroForces.Fz_rear, 0);
-            frontMu = max(vm.tire.getPeakFriction(frontNormalLoad / 2), 0);
-            rearMu = max(vm.tire.getPeakFriction(rearNormalLoad / 2), 0);
-            brakeBiasFront = lts.util.saturate(vm.brakeBiasFront);
-            brakeBiasRear = 1 - brakeBiasFront;
-            brakeGripLimit = inf;
-            if brakeBiasFront > eps
-                brakeGripLimit = min(brakeGripLimit, frontMu * frontNormalLoad / brakeBiasFront);
-            end
-            if brakeBiasRear > eps
-                brakeGripLimit = min(brakeGripLimit, rearMu * rearNormalLoad / brakeBiasRear);
-            end
+            % Fore-aft capability comes from the longitudinal peak friction;
+            % the lateral peak governs cornering only.
+            rearMu = max(vm.tire.getPeakLongitudinalFriction(rearNormalLoad / 2), 0);
 
-            maxBrakeForce = min(vm.brakeForceCoefficient * totalNormalLoad, brakeGripLimit);
+            % Brake ceiling is the bias-aware tire grip limit, shared with
+            % lts.simulation.BrakeForcePolicy so commanded, planned, and
+            % telemetry braking reference the same physical capacity.
+            maxBrakeForce = lts.simulation.BrakeForcePolicy.gripLimitedCapacity( ...
+                vm, frontNormalLoad, rearNormalLoad);
             rollingResistance = obj.getRollingResistanceCoeff() * totalNormalLoad;
             brakeLimitedAccel = ...
                 (maxBrakeForce + F_drag + rollingResistance) / vm.totalMass;

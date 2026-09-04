@@ -601,15 +601,6 @@ def extract(rows, driver_mass):
                 f"F4/R2 => front clamp-fraction ~ {est:.3f} (rough; ignores "
                 f"piston bore 25 vs 25.4 mm). Verify against bias bar.")
 
-    # brakeForceCoefficient -- "@1g Deceleration" row implies the car is sized
-    # for ~1g, but the config field is a tyre-limited capacity fraction.
-    if find_row_text(rows, "1g deceleration"):
-        s.add_todo(
-            "brakeForceCoefficient", 0.70,
-            "CSV r46 is a 'Force @ 1g Deceleration' table; the system is sized "
-            "for ~1g but brakeForceCoefficient is tyre-limited capacity. "
-            "baseline 0.70 left as-is.")
-
     # ARB stiffness & chassis rollStiffness from roll rate (r22).
     r22 = find_row(rows, "roll rate")
     if r22:
@@ -843,8 +834,8 @@ def build_matlab(name, s):
          src_comment(s, "staticFrontWeight", "0.50") + " [0-1]")
     line("cfg.brakeBiasFront", 0.60,
          src_comment(s, "brakeBiasFront", "0.60") + " [0-1]")
-    line("cfg.brakeForceCoefficient", 0.70,
-         src_comment(s, "brakeForceCoefficient", "0.70"))
+    # Braking is grip-limited (BrakeForcePolicy); no brake force fraction
+    # field exists anymore. The @1g table calibrates pressure mode below.
     brake_pressure_front = getattr(s, "brake_pressure_front_at_1g_bar", None)
     brake_pressure_rear = getattr(s, "brake_pressure_rear_at_1g_bar", None)
     if brake_pressure_front is not None and brake_pressure_rear is not None:

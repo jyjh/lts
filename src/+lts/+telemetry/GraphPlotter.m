@@ -768,12 +768,25 @@ classdef GraphPlotter
             if isfield(stateLog, 'F_brake')
                 F_brake_plot = stateLog.F_brake;
             else
+                % Legacy log without F_brake: reconstruct it from the logged
+                % effective brake command scaled by the grip-limited capacity
+                % the same way BrakeForcePolicy does (static split of the
+                % logged downforce; the per-corner loads are not in the log).
                 W = vehicle.totalMass * 9.81;
                 F_brake_plot = zeros(numel(time), 1);
                 brakeIdx = stateLog.brake > 0.01;
-                if any(brakeIdx)
-                    maxBrakeForce = vehicle.brakeForceCoefficient * ...
-                        (W + stateLog.F_downforce(brakeIdx));
+                hasGripCapacity = isprop(vehicle, 'tire') && ~isempty(vehicle.tire) && ...
+                    ismethod(vehicle.tire, 'getPeakLongitudinalFriction');
+                if any(brakeIdx) && hasGripCapacity
+                    idx = find(brakeIdx);
+                    maxBrakeForce = zeros(numel(idx), 1);
+                    for k = 1:numel(idx)
+                        df = max(stateLog.F_downforce(idx(k)), 0);
+                        maxBrakeForce(k) = lts.simulation.BrakeForcePolicy. ...
+                            gripLimitedCapacity(vehicle, ...
+                            W * vehicle.staticFrontWeight + 0.5 * df, ...
+                            W * (1 - vehicle.staticFrontWeight) + 0.5 * df);
+                    end
                     F_brake_plot(brakeIdx) = -stateLog.brake(brakeIdx) .* maxBrakeForce;
                 end
             end

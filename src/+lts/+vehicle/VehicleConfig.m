@@ -33,7 +33,10 @@ classdef VehicleConfig
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight    = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront       = 0.60 % Brake force fraction to front axle [0-1]
-        brakeForceCoefficient = 0.70 % Brake force capacity as a fraction of total normal load (no ABS)
+        % Braking is grip-limited, not a configured force fraction: the
+        % commanded-force ceiling is the bias-weighted tire grip limit from
+        % the current axle loads (lts.simulation.BrakeForcePolicy), because
+        % a race brake system is sized to reach lockup. No ABS.
         brakePressure        % Pressure-based brake calibration [N/bar] for correlation replay
         maxSpeed      = 80       % Soft speed limiter [m/s] (~288 km/h)
         unsprungMass  = 25       % Per-corner unsprung mass [kg]
@@ -170,7 +173,8 @@ classdef VehicleConfig
                 'rearSteerRatio',     0.0));
 
             % --- Brakes ---
-            %   Ratio mode uses brakeBiasFront + brakeForceCoefficient.
+            %   Ratio mode uses brakeBiasFront; the commanded-force ceiling
+            %   is the bias-weighted tire grip limit (BrakeForcePolicy).
             %   Correlation pressure mode uses front/rear line pressures:
             %     frontForcePerBar / rearForcePerBar [N/bar] are total axle
             %     longitudinal brake force magnitudes before tire slip limits.
@@ -345,8 +349,7 @@ classdef VehicleConfig
             end
             % Distribution/bias fractions must be physical probabilities.
             fractions = struct('staticFrontWeight', 'front weight distribution', ...
-                'brakeBiasFront', 'brake bias', ...
-                'brakeForceCoefficient', 'brake force coefficient');
+                'brakeBiasFront', 'brake bias');
             fNames = fieldnames(fractions);
             for i = 1:numel(fNames)
                 f = fNames{i};

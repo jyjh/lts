@@ -256,7 +256,6 @@ vehicle.cgHeight = 0.3;
 vehicle.yawInertia = 130;
 vehicle.staticFrontWeight = 0.5;
 vehicle.brakeBiasFront = 0.6;
-vehicle.brakeForceCoefficient = 0.7;
 vehicle.maxSpeed = 80;
 simulator = lts.simulation.Simulator(vehicle, [], 0.001);
 simulator.wheelSolveIterations = 3;
