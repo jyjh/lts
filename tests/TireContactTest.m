@@ -467,6 +467,53 @@ verifyEqual(testCase, cfg.tire.normalLoadRelaxationLength, ...
     cfg.tire.relaxationLength, 'AbsTol', 1e-12);
 end
 
+function testDeepSlideLateralForceDevelopsPostPeakFalloff(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+
+% Beyond the MF peak (~0.10-0.15 rad) the force must keep falling: the
+% former 0.3 rad clamp froze the force at its 17-deg level and overstated
+% grip in deep slides/spins. The evaluation clamp now sits at
+% PacejkaTire.ALPHA_EVAL_LIMIT, so angles beyond it evaluate identically.
+f03 = abs(tire.computeLateralForce(1000, 0.3, 1));
+f06 = abs(tire.computeLateralForce(1000, 0.6, 1));
+f07 = abs(tire.computeLateralForce(1000, 0.7, 1));
+verifyLessThan(testCase, f06, f03);
+verifyEqual(testCase, f07, f06, 'AbsTol', 0);
+end
+
+function testLateralPeakScanWindowContainsTheTruePeak(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+
+% At low load the peak slip angle drifts outward; the scan window must
+% still contain it. If the curve were still rising at the window edge,
+% the edge value would equal the reported peak (clipped window).
+lowLoad = 400;
+peakForce = tire.getPeakFriction(lowLoad) * lowLoad;
+edgeForce = abs(tire.computeLateralForce(lowLoad, 0.35, 1));
+verifyLessThan(testCase, edgeForce, peakForce);
+end
+
+function testLongitudinalPeakFrictionScansTheLongitudinalCurve(testCase)
+    assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present: see src/+lts/+components/+Tire/README.md');
+tire = createPacejkaTire();
+
+peakLong = tire.getPeakLongitudinalFriction(1000);
+peakLat = tire.getPeakFriction(1000);
+verifyGreaterThan(testCase, peakLong, 0);
+% Both axes report race-tire-scale peaks as distinct cached quantities.
+verifyGreaterThan(testCase, peakLat, 0);
+verifyNotEqual(testCase, tire.getPeakLongitudinalFriction(1200), ...
+    tire.getPeakFriction(1200));
+% The kappa-scan window contains the true peak: still rising nowhere at
+% the +/-0.4 edges.
+edgeBrake = abs(tire.computeLongitudinalForce(1000, -0.4, 1));
+edgeDrive = abs(tire.computeLongitudinalForce(1000, 0.4, 1));
+verifyLessThan(testCase, edgeBrake, peakLong * 1000);
+verifyLessThan(testCase, edgeDrive, peakLong * 1000);
+end
+
 function tire = createPacejkaTire()
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 end
