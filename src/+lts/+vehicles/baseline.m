@@ -42,8 +42,11 @@ function cfg = baseline()
     %  kept at CG height so drag adds no artificial pitch moment.
     %  ====================================================================
 
-    % Single whole-car resultant. Values preserve the previous three-element
-    % total ClA/CdA and downforce-weighted center of pressure.
+    % Single whole-car resultant (the default aero model). Values preserve
+    % the previous three-element total ClA/CdA and downforce-weighted
+    % center of pressure. An optional cfg.aero.components device split
+    % (frontWing / rearWing / floor / body) enables pitch and ride-height
+    % aero response; see R25 and lts.components.Aero.buildFromConfig.
     cfg.aero = struct( ...
         'xPosition', -0.084146, ...      % Center of pressure, 44.6% front aero load
         'zPosition', cfg.cgHeight, ...   % Drag resultant at CG height

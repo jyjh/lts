@@ -119,16 +119,26 @@ classdef VehicleManager
             end
 
             %% ---- Aero ----
+            % The Aero component repository owns the cfg.aero schema and
+            % builds the model: a WholeCarAero resultant by default, or the
+            % pitch/height-responsive device split when
+            % cfg.aero.components is present (which must reproduce the
+            % whole-car ClA/CdA/CoP at the nominal attitude).
             aeroCfg = config.aero;
-            aero = lts.components.Aero.WholeCarAero( ...
-                aeroCfg.xPosition, aeroCfg.zPosition, aeroCfg.ClA, aeroCfg.CdA, ...
-                lts.util.fieldOr(aeroCfg, 'pitchSensitivityClA', 0));
+            aero = lts.components.Aero.buildFromConfig(aeroCfg);
             if verbose
-                fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                    aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+                if isa(aero, 'lts.components.Aero.AeroManager')
+                    names = cellfun(@(c) char(c.getName()), ...
+                        aero.components, 'UniformOutput', false);
+                    fprintf('Aero: component split (%s)\n', ...
+                        strjoin(names, ', '));
+                else
+                    fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
+                        aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+                end
                 fprintf('  Front aero balance at zero pitch: %.1f%%\n', ...
                     100 * (config.wheelbase * config.staticFrontWeight + ...
-                    aero.xPosition) / config.wheelbase);
+                    aeroCfg.xPosition) / config.wheelbase);
                 fprintf('\n');
             end
 

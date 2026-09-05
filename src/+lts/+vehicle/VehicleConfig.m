@@ -44,7 +44,13 @@ classdef VehicleConfig
         % ----------------------------------------------------------------
         % Sub-systems (nested structs, initialized in the constructor)
         % ----------------------------------------------------------------
-        aero          % Whole-car aero map (downforce/drag + center of pressure)
+        % aero: whole-car map (downforce/drag + center of pressure), or an
+        % optional cfg.aero.components device split (frontWing / rearWing /
+        % floor / body) that adds pitch + ride-height response; the split
+        % must reproduce the whole-car ClA/CdA/CoP at the nominal attitude
+        % (lts.components.Aero.buildFromConfig enforces it). See the Aero
+        % row of the Contracts page.
+        aero
 
         suspension    % Springs, damping, ARBs, bump stops, kinematic geometry
         chassis       % Sprung-mass heave/pitch/roll platform stiffness & damping
