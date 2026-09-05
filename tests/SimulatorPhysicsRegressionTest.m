@@ -20,7 +20,6 @@ vehicle.cgHeight = 0.3;
 vehicle.yawInertia = 130;
 vehicle.staticFrontWeight = 0.5;
 vehicle.brakeBiasFront = 0.6;
-vehicle.brakeForceCoefficient = 0.7;
 vehicle.maxSpeed = 80;
 
 speed = 10;
@@ -63,7 +62,6 @@ vehicle.cgHeight = 0.3;
 vehicle.yawInertia = 130;
 vehicle.staticFrontWeight = 0.5;
 vehicle.brakeBiasFront = 0.6;
-vehicle.brakeForceCoefficient = 0.7;
 vehicle.brakePressureFrontForcePerBar = 100;
 vehicle.brakePressureRearForcePerBar = 60;
 vehicle.maxSpeed = 80;
@@ -843,6 +841,34 @@ verifyTrue(testCase, contains(header, 'Peak MU FL (ratio)'));
 verifyTrue(testCase, contains(header, 'Tire Utilization FL (%)'));
 end
 
+function testReverseSlipAngleMirrorsOntoOppositeHemisphere(testCase)
+% Slip angle must keep the rolling-direction sense: a backward-rolling
+% wheel lands on the opposite hemisphere of the slip-angle circle, so the
+% force direction flips for the same lateral speed (the slip ratio path
+% was already reverse-correct). Standstill stays exactly at zero slip.
+simulator = lts.simulation.Simulator(lts.vehicle.VehicleManager([], [], [], [], []), [], 0.001);
+kin = bareCornerKinematics();
+
+stateFwd = lts.simulation.VehicleState('speed', 5, 'vx', 5, 'vy', 0.5);
+contactFwd = simulator.computePlanarTireContactData(stateFwd, kin);
+stateRev = lts.simulation.VehicleState('speed', 5, 'vx', -5, 'vy', 0.5);
+contactRev = simulator.computePlanarTireContactData(stateRev, kin);
+stateStill = lts.simulation.VehicleState('speed', 0, 'vx', 0, 'vy', 0);
+contactStill = simulator.computePlanarTireContactData(stateStill, kin);
+
+verifyEqual(testCase, contactFwd.slipAngles(1), atan2(-0.5, 5), 'AbsTol', 1e-12);
+verifyEqual(testCase, contactRev.slipAngles(1), atan2(-0.5, -5), 'AbsTol', 1e-12);
+verifyEqual(testCase, contactStill.slipAngles(1), 0, 'AbsTol', 1e-12);
+end
+
+function kin = bareCornerKinematics()
+base = struct('steerAngle', 0, 'toeAngle', 0, 'camberAngle', 0);
+kin.FL = base; kin.FL.xPosition = 0.764; kin.FL.yPosition = 0.605;
+kin.FR = base; kin.FR.xPosition = 0.764; kin.FR.yPosition = -0.605;
+kin.RL = base; kin.RL.xPosition = -0.764; kin.RL.yPosition = 0.605;
+kin.RR = base; kin.RR.xPosition = -0.764; kin.RR.yPosition = -0.605;
+end
+
 function [vehicle, tire, powertrain] = directTorqueVehicle()
 tire = lts.components.Tire.PacejkaTire('43105_18x7.5_10_R25B_7.tir');
 tire.relaxationLength = 0;
@@ -859,7 +885,6 @@ vehicle.cgHeight = 0.3;
 vehicle.yawInertia = 130;
 vehicle.staticFrontWeight = 0.5;
 vehicle.brakeBiasFront = 0.6;
-vehicle.brakeForceCoefficient = 0.7;
 vehicle.maxSpeed = 80;
 end
 

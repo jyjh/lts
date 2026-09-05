@@ -205,12 +205,16 @@ At or above the RPM limit, positive drive torque is cut. Optional coastdown and 
 
 ### 6. Convert Brakes To Wheel Torque
 
-Ratio brake mode computes:
+Ratio brake mode computes the commanded-force capacity from the tire grip
+limit (a race brake system is sized to reach lockup, so grip — not a fixed
+fraction of load — is the ceiling; each axle's longitudinal peak friction
+sets it under the current brake bias):
 
 ```text
-F_brake_capacity = brakeForceCoefficient * totalNormalLoad
+F_brake_capacity = min( mu_x_peak(front axle) * frontLoad / brakeBiasFront,
+                        mu_x_peak(rear axle)  * rearLoad  / (1 - brakeBiasFront) )
 F_brake_front = brakeCommand * F_brake_capacity * brakeBiasFront
-F_brake_rear = brakeCommand * F_brake_capacity * (1 - brakeBiasFront)
+F_brake_rear  = brakeCommand * F_brake_capacity * (1 - brakeBiasFront)
 ```
 
 Pressure brake mode, used for correlation, converts front/rear line pressure:
