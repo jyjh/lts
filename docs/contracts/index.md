@@ -47,6 +47,24 @@ the main repository calls every validator in
 | `CdA` | m² | ≥ 0 | 1.60 |
 | `pitchSensitivityClA` | 1/rad | finite (optional) | 0 |
 
+Optional device split — `cfg.aero.components` (all four substructs
+required together; `VehicleManager.fromConfig` then builds an
+`AeroManager` via `lts.components.Aero.buildFromConfig` instead of the
+`WholeCarAero` resultant, adding pitch + ride-height response):
+
+| Substruct | Fields |
+|---|---|
+| `frontWing` | `xPosition`, `zPosition`, `ClA`, `CdA`, `pitchSensitivityClA`, `heightSensitivity` [1/cm, ≥ 0] |
+| `rearWing` | same fields as `frontWing` |
+| `floor` | like `frontWing` but `stallHeight` [m, > 0] and `heightExponent` [(0, 2]] instead of `heightSensitivity` |
+| `body` | `xPosition`, `zPosition`, `ClA`, `CdA` only (pitch/height-insensitive residual) |
+
+The split must reproduce the whole-car datum exactly at the nominal
+attitude: `sum(ClA) == ClA`, `sum(CdA) == CdA`, and the device
+downforce center of pressure must equal `xPosition`
+(`lts_aero_buildFromConfig:ComponentMismatch` otherwise). Car files
+derive the `body` residual from the chosen device shares.
+
 ### Chassis (`cfg.chassis`)
 
 | Field | Unit | Valid range | Default |

@@ -126,7 +126,10 @@ track = lts.components.WaypointTrack.loadMat( ...
     'endurance_track_grid_25ft_from_matlab_smoothed.mat'));
 [profile, ~, ~] = createPlannedProfile(track);
 
-verifyGreaterThan(testCase, min(profile.axRef), -15);
+% Braking references are grip-limited now (BrakeForcePolicy), so a
+% loaded braking zone plans at ~2 g with downforce + drag; the floor is
+% a sanity bound above that, not the old 0.7g-cap-era -15.
+verifyGreaterThan(testCase, min(profile.axRef), -25);
 verifyLessThan(testCase, max(profile.axRef), 15);
 verifyTrue(testCase, isfield(profile, 'targetLateralError'));
 verifyTrue(testCase, isfield(profile, 'lineCurvature'));

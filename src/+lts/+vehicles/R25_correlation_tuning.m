@@ -17,6 +17,13 @@ function cfg = R25_correlation_tuning(cfg)
     % Effective correlation drag includes the measured whole-car aero plus
     % speed-dependent rotating/drivetrain losses not represented separately.
     % The physical R25 aero definition remains unchanged in lts.vehicles.R25.
+    % The correlation model replays against the WHOLE-CAR resultant: drop
+    % R25's estimated pitch/height device split so the tuned whole-car
+    % coefficients (aero.CdA/ClA/xPosition in the parameter space) sweep
+    % the resultant directly instead of tripping the split consistency
+    % contract, and so estimate-based device response stays out of a fit
+    % against measured data.
+    cfg.aero = rmfield(cfg.aero, 'components');
     % With the unitless BAMOCAR Iq signal converted using 0.5 Arms/count and
     % the EMRAX MV torque constant, the earlier whole-lap Iq fit is valid:
     % straight, low-lateral-acceleration drive samples identify a 0.18 m^2

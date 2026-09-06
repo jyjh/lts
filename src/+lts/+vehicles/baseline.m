@@ -30,7 +30,8 @@ function cfg = baseline()
     cfg.airDensity           = 1.225;    % Air density [kg/m^3]
     cfg.staticFrontWeight    = 0.50;     % Static front weight distribution [0-1]
     cfg.brakeBiasFront       = 0.60;     % Brake force fraction to front axle [0-1]
-    cfg.brakeForceCoefficient = 0.70;    % Brake force capacity as fraction of normal load (no ABS)
+    % Braking is grip-limited (BrakeForcePolicy), not a configured force
+    % fraction: capacity tracks the bias-weighted tire grip limit.
     cfg.maxSpeed             = 80;       % Soft speed limiter [m/s] (~288 km/h)
     cfg.unsprungMass         = 9;       % Per-corner unsprung mass [kg]
 
@@ -41,8 +42,11 @@ function cfg = baseline()
     %  kept at CG height so drag adds no artificial pitch moment.
     %  ====================================================================
 
-    % Single whole-car resultant. Values preserve the previous three-element
-    % total ClA/CdA and downforce-weighted center of pressure.
+    % Single whole-car resultant (the default aero model). Values preserve
+    % the previous three-element total ClA/CdA and downforce-weighted
+    % center of pressure. An optional cfg.aero.components device split
+    % (frontWing / rearWing / floor / body) enables pitch and ride-height
+    % aero response; see R25 and lts.components.Aero.buildFromConfig.
     cfg.aero = struct( ...
         'xPosition', -0.084146, ...      % Center of pressure, 44.6% front aero load
         'zPosition', cfg.cgHeight, ...   % Drag resultant at CG height

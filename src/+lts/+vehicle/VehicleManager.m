@@ -36,7 +36,6 @@ classdef VehicleManager
         airDensity    = 1.225    % Air density [kg/m^3]
         staticFrontWeight = 0.50 % Static front weight distribution [0-1]
         brakeBiasFront = 0.60    % Fraction of brake force commanded to front axle [0-1]
-        brakeForceCoefficient = 0.70 % Hydraulic brake force capacity as fraction of normal load
         brakePressureFrontForcePerBar = NaN % Front axle brake force per line pressure [N/bar]
         brakePressureRearForcePerBar = NaN  % Rear axle brake force per line pressure [N/bar]
         
@@ -120,16 +119,26 @@ classdef VehicleManager
             end
 
             %% ---- Aero ----
+            % The Aero component repository owns the cfg.aero schema and
+            % builds the model: a WholeCarAero resultant by default, or the
+            % pitch/height-responsive device split when
+            % cfg.aero.components is present (which must reproduce the
+            % whole-car ClA/CdA/CoP at the nominal attitude).
             aeroCfg = config.aero;
-            aero = lts.components.Aero.WholeCarAero( ...
-                aeroCfg.xPosition, aeroCfg.zPosition, aeroCfg.ClA, aeroCfg.CdA, ...
-                lts.util.fieldOr(aeroCfg, 'pitchSensitivityClA', 0));
+            aero = lts.components.Aero.buildFromConfig(aeroCfg);
             if verbose
-                fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
-                    aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+                if isa(aero, 'lts.components.Aero.AeroManager')
+                    names = cellfun(@(c) char(c.getName()), ...
+                        aero.components, 'UniformOutput', false);
+                    fprintf('Aero: component split (%s)\n', ...
+                        strjoin(names, ', '));
+                else
+                    fprintf('Aero: WholeCarAero | x=%.2f m, z=%.2f m, ClA=%.2f, CdA=%.2f\n', ...
+                        aero.xPosition, aero.zPosition, aero.ClA, aero.CdA);
+                end
                 fprintf('  Front aero balance at zero pitch: %.1f%%\n', ...
                     100 * (config.wheelbase * config.staticFrontWeight + ...
-                    aero.xPosition) / config.wheelbase);
+                    aeroCfg.xPosition) / config.wheelbase);
                 fprintf('\n');
             end
 
@@ -224,7 +233,6 @@ classdef VehicleManager
             vehicle.airDensity           = config.airDensity;
             vehicle.staticFrontWeight    = config.staticFrontWeight;
             vehicle.brakeBiasFront       = config.brakeBiasFront;
-            vehicle.brakeForceCoefficient = config.brakeForceCoefficient;
             vehicle.brakePressureFrontForcePerBar = ...
                 lts.util.fieldOr(config.brakePressure, 'frontForcePerBar', NaN);
             vehicle.brakePressureRearForcePerBar = ...

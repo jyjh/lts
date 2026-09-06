@@ -118,9 +118,11 @@ classdef Simulator < handle
             T_drive_RL = diffOut.TL;
             T_drive_RR = diffOut.TR;
 
-            totalNormalLoad = W + F_downforce;
+            % Current quasi-static axle loads set the grip-limited brake
+            % capacity (aero + transfer included via the suspension path).
             brakeForces = lts.simulation.BrakeForcePolicy.compute( ...
-                input, totalNormalLoad, vm, obj.brakeMode);
+                input, cornerLoads.FL + cornerLoads.FR, ...
+                cornerLoads.RL + cornerLoads.RR, vm, obj.brakeMode);
             brakeCommand = brakeForces.requestedCommand;
             effectiveBrakeCommand = brakeForces.effectiveCommand;
             F_brake_front_cmd = brakeForces.frontForce;
@@ -1321,7 +1323,17 @@ classdef Simulator < handle
             latSpeeds = -vxCorner .* sinWh + vyCorner .* cosWh;
 
             contact.kin = kin;
-            contact.slipAngles = atan2(-latSpeeds, max(abs(longSpeeds), 0.1));
+            % Slip angle is the corner velocity angle relative to the wheel's
+            % rolling direction, so the regularized denominator keeps the
+            % sign of the longitudinal speed: a backward-rolling wheel
+            % (negative longSpeed) lands on the opposite slip hemisphere and
+            % its force direction flips the way a reversing contact patch
+            % does. The former abs() floor returned forward-rolling force
+            % directions while the car moved backward. The magnitude floor
+            % only regularizes standstill, and the slip ratio path was
+            % already reverse-correct (signed road speed).
+            longRef = sign(longSpeeds) .* max(abs(longSpeeds), 0.1);
+            contact.slipAngles = atan2(-latSpeeds, longRef);
             contact.longSpeeds = longSpeeds;
             contact.cosWheelHeading = cosWh;
             contact.sinWheelHeading = sinWh;
