@@ -215,6 +215,42 @@ it is supported by direct measurement. The overlay uses an effective
 correlation `CdA` that includes unmodeled rotating/drivetrain losses and does
 not modify the physical aero definition in `lts.vehicles.R25`.
 
+## Segmented correlation replay
+
+Whole-lap free-space replay is open-loop: any small model error compounds
+until the replayed controls no longer correspond to the simulated car's state,
+so path and heading retention over a full lap is unattainable regardless of
+tuning. `lts.app.run_correlation_segments` scores the lap in chunks instead:
+
+- The replay is cut into fixed-duration segments
+  (`SegmentLengthS`, default 5 s; `SegmentStrideS` defaults to the length).
+- Every segment rebuilds the vehicle from config and warm-starts it from the
+  measured channels at the segment boundary through the same state
+  initializer `run_correlation` uses, so drift cannot cross a boundary.
+- Scoring skips the first `SettleWindowS` (default 0.5 s) of each segment so
+  boundary-fit transients are not scored as physics error.
+- Each segment is scored for speed, yaw-rate, and (when logged) lateral
+  acceleration RMSE, bias, and per-segment yaw drift; pooled metrics are
+  sample-weighted across all segments.
+
+```matlab
+addpath('src')
+lts.app.run_correlation_segments( ...
+    'ReplayCsv', 'exports/correlation_lap5_raw_R25_corrTune_..._replay.csv', ...
+    'VehicleConfig', @lts.vehicles.R25, ...
+    'TuningFile', 'R25_correlation_tuning', ...
+    'PowertrainMode', 'motor_torque_command', ...
+    'SegmentLengthS', 5, 'SettleWindowS', 0.5)
+```
+
+The runner inherits the profile preprocessing of `run_correlation` (steering
+calibration, pack-power advance, torque-command delay, delivered-regen
+repair) and the same tuning-overlay fields. It runs in lean telemetry by
+default, exports nothing, and accepts `SegmentRange` (1-based indices) so a
+lap can be sharded across parallel MATLAB processes and merged afterwards.
+Profile preparation and segment semantics are covered by
+`tests/CorrelationSegmentsTest.m`.
+
 ## Legacy ML-assisted tuning
 
 `lts.app.tune_correlation` is retained only to reproduce historical diagnostic
