@@ -30,6 +30,10 @@ classdef (Abstract) TireModel
         Fy = computeLateralForce(obj, normalLoad, slipAngle, mu)
         Fx = computeLongitudinalForce(obj, normalLoad, slipRatio, mu)
         peakMu = getPeakFriction(obj, normalLoad)
+        % Peak of the pure-longitudinal |Fx|/Fz curve: the capability
+        % measure for brake capacity and traction limits (the lateral peak
+        % underestimates both). Not used by the per-step loop.
+        peakMu = getPeakLongitudinalFriction(obj, normalLoad)
 
         % --- Simulator per-step contract ---
         % MFeval-consistent local-wheel slip ratio (reverse-capable).

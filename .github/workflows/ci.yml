@@ -6,6 +6,21 @@ on:
   pull_request:
 
 jobs:
+  # main is updated exclusively by scripts/release.sh (staging -> main
+  # propagation, pushed directly by the ruleset bypass actor). A pull
+  # request targeting main is therefore always a mistake: work lands on
+  # staging first.
+  pr-target:
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    steps:
+      - name: Reject PRs targeting main
+        run: |
+          if [ "${{ github.base_ref }}" = "main" ]; then
+            echo "::error::PRs must target 'staging'. main is updated only by scripts/release.sh."
+            exit 1
+          fi
+
   # Enforce the submodule policy: on main, .gitmodules tracks each
   # lts-* submodule's main branch and the pinned commits must exist on
   # the components' main branches; on staging, it tracks staging and the

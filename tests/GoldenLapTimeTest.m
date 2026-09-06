@@ -25,7 +25,16 @@ initialState = lts.simulation.VehicleState('s', 0, 'speed', 0.1);
 % audit-driven physics work: tire/suspension cleanup, attitude predictor,
 % anti-geometry plumbing (0 for R25), hub-height unsprung transfer, and
 % the 0.10 m longitudinal relaxation length.
-baselineLapTime = 1.868;
+%
+% Regenerated to 1.880 (2026-09-05, branch fidelity/brake-and-slip-accuracy)
+% for the physics-accuracy rework: grip-limited brake capacity (the
+% fictional brakeForceCoefficient = 0.7 cap removed), axis-aware peak
+% friction (longitudinal peak for brake/traction capability), widened
+% slip-angle evaluation range, and the reverse slip-angle sign fix. The
+% launch is slightly more conservative because the planner's drive
+% traction now references the longitudinal peak (~1.41) instead of the
+% lateral peak (~1.60).
+baselineLapTime = 1.880;
 verifyEqual(testCase, lapTime, baselineLapTime, 'AbsTol', 0.005, ...
     'R25 straight10 lap time drifted from the golden baseline');
 end

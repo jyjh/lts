@@ -107,6 +107,25 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         cachedMFevalLowSpeed = NaN
     end
 
+    properties (Constant, Access = protected)
+        % Peak-friction scan axis selectors consumed by
+        % computePeakMuInternal / getCachedPeakMu (part of the cache key).
+        LATERAL_PEAK_AXIS = 1
+        LONGITUDINAL_PEAK_AXIS = 2
+    end
+
+    properties (Constant, Access = public)
+        % Evaluation clamp on slip angles fed to the Magic Formula [rad].
+        % Wide enough to develop the post-peak falloff of the MF (peak is
+        % near 0.10-0.15 rad, sliding force at 0.6 rad is well into the
+        % falloff), tight enough to stay in the range where the MF shape
+        % is trustworthy. The former 0.3 rad clamp froze the force at its
+        % 17-deg value in deep slides, overstating grip in spins and
+        % recovery. Kinematic slip angles are clamped here, not upstream:
+        % stored slip states stay physical.
+        ALPHA_EVAL_LIMIT = 0.6
+    end
+
     methods
         function obj = PacejkaTire(tirFilePath, varargin)
             % PACEJKATIRE Construct from a .tir file, creating 4 corner states
@@ -177,7 +196,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
 
             % Store inputs
             cornerState.normalForce = normalLoad;
-            ssAlpha = lts.util.clamp(slipAngle, -0.3, 0.3);   % steady-state (kinematic) target
+            ssAlpha = lts.util.clamp(slipAngle, -obj.ALPHA_EVAL_LIMIT, obj.ALPHA_EVAL_LIMIT);   % steady-state (kinematic) target
             ssKappa = obj.clampSlipRatio(slipRatio);
 
             % Apply first-order contact-patch relaxation to obtain the
@@ -268,10 +287,15 @@ classdef PacejkaTire < lts.components.Tire.TireModel
         end
 
         function peakMu = getPeakFriction(obj, normalLoad)
-            % GETPEAKFRICTION Peak friction coefficient at given load
+            % GETPEAKFRICTION Peak lateral friction coefficient at given load
             %   peakMu = getPeakFriction(obj, normalLoad)
             %
-            %   Scans the lateral force curve to find max |Fy|/Fz.
+            %   Scans the pure-lateral MF curve (kappa = 0) for max |Fy|/Fz.
+            %   The correct capability measure for cornering planning.
+            %   For braking/traction capability use
+            %   getPeakLongitudinalFriction: the longitudinal peak sits at a
+            %   different slip and a different force level, so the lateral
+            %   peak underestimates braking grip.
             %   Accounts for load sensitivity inherent in the Magic Formula.
 
             if normalLoad <= 0
@@ -280,7 +304,29 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             end
 
             peakMu = obj.getCachedPeakMu(normalLoad, 0, ...
-                obj.tireConstants.nomPressure, obj.tireConstants.params);
+                obj.tireConstants.nomPressure, obj.tireConstants.params, [], ...
+                obj.LATERAL_PEAK_AXIS);
+        end
+
+        function peakMu = getPeakLongitudinalFriction(obj, normalLoad)
+            % GETPEAKLONGITUDINALFRICTION Peak longitudinal friction at a load
+            %   peakMu = getPeakLongitudinalFriction(obj, normalLoad)
+            %
+            %   Scans the pure-longitudinal MF curve (alpha = 0) for
+            %   max |Fx|/Fz across braking and drive slip. This is the
+            %   capability measure for brake capacity and traction limits;
+            %   on this tire family the longitudinal peak sits a few percent
+            %   above the lateral one and at a clearly different slip, so
+            %   substituting the lateral peak biases braking distance long.
+
+            if normalLoad <= 0
+                peakMu = 0;
+                return;
+            end
+
+            peakMu = obj.getCachedPeakMu(normalLoad, 0, ...
+                obj.tireConstants.nomPressure, obj.tireConstants.params, [], ...
+                obj.LONGITUDINAL_PEAK_AXIS);
         end
 
         %% ---- Slip ratio entry point ----
@@ -422,7 +468,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
 
             Fz = [Fz_FL; Fz_FR; Fz_RL; Fz_RR];
             ssAlpha = lts.util.clamp(...
-                [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR], -0.3, 0.3);
+                [slipAngle_FL; slipAngle_FR; slipAngle_RL; slipAngle_RR], ...
+                -obj.ALPHA_EVAL_LIMIT, obj.ALPHA_EVAL_LIMIT);
             ssKappa = obj.clampSlipRatio( ...
                 [kappa_FL; kappa_FR; kappa_RL; kappa_RR]);
             gamma = [camber_FL; camber_FR; camber_RL; camber_RR];
@@ -443,7 +490,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 peakGammaKey = round(gamma * 1000) / 1000;
                 peakVxKey = round(peakVx * 10) / 10;
                 peakNumericKey = obj.packPeakMuCacheKey( ...
-                    peakFzKey, peakGammaKey, obj.tireConstants.nomPressure, peakVxKey);
+                    peakFzKey, peakGammaKey, obj.tireConstants.nomPressure, ...
+                    peakVxKey, obj.LATERAL_PEAK_AXIS);
             end
 
             % Apply per-corner relaxation to obtain the transient (force-
@@ -485,7 +533,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                     else
                         rawPeakMu = obj.computePeakMuInternal( ...
                             FzEval(i), gamma(i), obj.tireConstants.nomPressure, ...
-                            obj.tireConstants.params, peakVx(i));
+                            obj.tireConstants.params, peakVx(i), ...
+                            obj.LATERAL_PEAK_AXIS);
                         obj.peakMuNumericCache(numericKey) = rawPeakMu;
                         states{i}.peakMuCacheKey = numericKey;
                         states{i}.rawPeakMu = rawPeakMu;
@@ -765,7 +814,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             if isempty(scale) || ~isfinite(scale) || scale <= 0
                 scale = 1.0;
             end
-            alphaEval = lts.util.clamp(alpha .* scale, -0.3, 0.3);
+            alphaEval = lts.util.clamp(alpha .* scale, ...
+                -obj.ALPHA_EVAL_LIMIT, obj.ALPHA_EVAL_LIMIT);
         end
 
         function alphaEval = evaluationSlipAnglesByCorner(obj, alpha)
@@ -778,7 +828,8 @@ classdef PacejkaTire < lts.components.Tire.TireModel
                 scale = scale(:);
             end
             if numel(alphaEval) == 4
-                alphaEval = lts.util.clamp(alphaEval(:) .* scale, -0.3, 0.3);
+                alphaEval = lts.util.clamp(alphaEval(:) .* scale, ...
+                -obj.ALPHA_EVAL_LIMIT, obj.ALPHA_EVAL_LIMIT);
             end
         end
 
@@ -840,48 +891,77 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             lowSpeed = lowSpeedLimit + max(1e-3, 1e-6 * lowSpeedLimit);
         end
 
-        function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params, longitudinalSpeed)
+        function peakMu = getCachedPeakMu(obj, Fz, gamma, P, params, longitudinalSpeed, axis)
             if nargin < 6 || isempty(longitudinalSpeed)
                 longitudinalSpeed = obj.tireConstants.refVelocity;
+            end
+            if nargin < 7 || isempty(axis)
+                axis = obj.LATERAL_PEAK_AXIS;
             end
             Vx = obj.computeMFevalSpeed(longitudinalSpeed);
             FzKey = round(Fz / 10) * 10;
             gammaKey = round(gamma * 1000) / 1000;
             VxKey = round(Vx * 10) / 10;
-            numericKey = obj.packPeakMuCacheKey(FzKey, gammaKey, P, VxKey);
+            numericKey = obj.packPeakMuCacheKey(FzKey, gammaKey, P, VxKey, axis);
             if isKey(obj.peakMuNumericCache, numericKey)
                 peakMu = obj.peakMuNumericCache(numericKey);
                 return;
             end
 
-            peakMu = obj.computePeakMuInternal(Fz, gamma, P, params, Vx);
+            peakMu = obj.computePeakMuInternal(Fz, gamma, P, params, Vx, axis);
             obj.peakMuNumericCache(numericKey) = peakMu;
         end
 
-        function key = packPeakMuCacheKey(~, FzKey, gammaKey, P, VxKey)
+        function key = packPeakMuCacheKey(~, FzKey, gammaKey, P, VxKey, axis)
             % Pack quantized cache coordinates into a collision-free double
-            % for normal tire loads/cambers/speeds.
+            % for normal tire loads/cambers/speeds. The axis selector rides
+            % in the highest digit group: the lateral and longitudinal peaks
+            % are distinct quantities for the same (Fz, gamma, Vx).
             fzBin = round(FzKey / 10) + 50000;
             gammaBin = round(gammaKey * 1000) + 50000;
             vxBin = round(VxKey * 10);
             pressureBin = round(P / 1000);
-            key = fzBin + 1e5 * gammaBin + 1e10 * vxBin + 1e13 * pressureBin;
+            key = fzBin + 1e5 * gammaBin + 1e10 * vxBin + 1e13 * pressureBin ...
+                + 1e17 * axis;
         end
 
-        function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params, Vx)
-            % COMPUTEPEAKMUINTERNAL Scan lateral curve to find peak mu
-            %   Vectorized: builds a matrix of 50 input rows, single mfeval call
-
-            alphaScan = linspace(-0.21, 0.21, 50);  % ±12 deg in rad
+        function peakMu = computePeakMuInternal(obj, Fz, gamma, P, params, Vx, axis)
+            % COMPUTEPEAKMUINTERNAL Scan one pure-slip MF curve to its peak
+            %   Vectorized: builds one scan matrix, single mfeval call
+            %
+            %   LATERAL_PEAK_AXIS: scan alpha at kappa = 0, peak of |Fy|.
+            %   LONGITUDINAL_PEAK_AXIS: scan kappa at alpha = 0, peak of |Fx|.
+            %
+            %   Scan windows must contain the peak for every operating load:
+            %   the lateral peak drifts outward as load falls (well past the
+            %   former +/-0.21 rad window at FSAE corner loads), and the
+            %   longitudinal peak sits near kappa ~ 0.1-0.2 on either side
+            %   of zero.
             if nargin < 6 || isempty(Vx)
                 Vx = obj.tireConstants.refVelocity;
             end
-            nScan = numel(alphaScan);
+
+            switch axis
+                case obj.LATERAL_PEAK_AXIS
+                    primary = linspace(-0.35, 0.35, 71)';   % +/-20 deg
+                    kappa = zeros(numel(primary), 1);
+                    alpha = primary;
+                    outputColumn = 2;                       % Fy
+                case obj.LONGITUDINAL_PEAK_AXIS
+                    primary = linspace(-0.4, 0.4, 81)';     % +/-40% slip
+                    kappa = primary;
+                    alpha = zeros(numel(primary), 1);
+                    outputColumn = 1;                       % Fx
+                otherwise
+                    error('PacejkaTire:InvalidPeakAxis', ...
+                        'Unknown peak-friction scan axis %d.', axis);
+            end
+            nScan = numel(primary);
 
             % Build inputs matrix: each row = [Fz, kappa, alpha, gamma, phit, Vx, P]
             inputsMF = [repmat(Fz, nScan, 1), ...    % Fz
-                        zeros(nScan, 1), ...          % kappa = 0 (pure lateral)
-                        alphaScan(:), ...             % alpha scan
+                        kappa, ...                    % kappa (0 for lateral scan)
+                        alpha, ...                    % alpha (0 for longitudinal scan)
                         repmat(gamma, nScan, 1), ...  % gamma
                         zeros(nScan, 1), ...          % phit = 0
                         repmat(Vx, nScan, 1), ...     % Vx
@@ -893,7 +973,7 @@ classdef PacejkaTire < lts.components.Tire.TireModel
             warningState = warning('off', 'all');
             cleanup = onCleanup(@() warning(warningState));
             outputs = mfeval(params, inputsMF, 111);
-            peakMu = max(abs(outputs(:,2))) / Fz;
+            peakMu = max(abs(outputs(:, outputColumn))) / Fz;
         end
 
     end

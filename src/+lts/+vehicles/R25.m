@@ -22,11 +22,29 @@ function cfg = R25()
     cfg.wheelbase                    = 1.528;      %  [CSV r8: 1528 mm] [m]
     cfg.trackWidth                   = 1.21;       %  [CSV r8: Front Track 1210 mm] [m]
     cfg.cgHeight                     = 0.256;        %  [CSV r9: 256 (unit column says 'mm' but value is clearly metres; kept as 256 m per baseline/R26)] [m]
-    cfg.yawInertia                   = 130;        %  [not in spec sheet -- baseline default 130] [kg*m^2]
     cfg.airDensity                   = 1.225;      % [kg/m^3] (ISA standard; CSV aero r131 was evaluated at rho=1.162)
     cfg.staticFrontWeight            = 0.5095;     %  [CSV r11: 50.95% front] [0-1]
+    % Yaw inertia: not in the spec sheet; the 130 kg*m^2 baseline default
+    % was an unmeasured placeholder sitting outside the 83-120 geometry
+    % band from the 2026-08-30 audit. Derived estimate: corner masses at
+    % the wheel positions + sprung remainder at a radius of gyration of
+    % 0.50 m (~0.33 x wheelbase; battery/driver near the CG, motor aft).
+    % Replace with a swing-test measurement when one exists.
+    cornerMassKg = 13 * 0.45359237 + 9.3;   % wheel assembly (tire block) + unsprung corner
+    frontArmM = cfg.wheelbase * (1 - cfg.staticFrontWeight);
+    rearArmM = cfg.wheelbase * cfg.staticFrontWeight;
+    halfTrackM = cfg.trackWidth / 2;
+    sprungMassKg = cfg.totalMass - 4 * cornerMassKg;
+    cfg.yawInertia = 2 * cornerMassKg * (frontArmM^2 + halfTrackM^2) ...
+        + 2 * cornerMassKg * (rearArmM^2 + halfTrackM^2) ...
+        + sprungMassKg * 0.50^2;
     cfg.brakeBiasFront               = 0.6;        %  TODO derivable: CSV r46: line pressures F 14.524/R 20.836 bar, r44 pistons F4/R2 => front clamp-fraction ~ 0.582 (rough; ignores piston bore 25 vs 25.4 mm). Verify against bias bar. [0-1]
-    cfg.brakeForceCoefficient        = 0.7;        %  TODO derivable: CSV r46 is a 'Force @ 1g Deceleration' table; the system is sized for ~1g but brakeForceCoefficient is tyre-limited capacity. baseline 0.70 left as-is.
+    % Braking is grip-limited (BrakeForcePolicy), not a configured force
+    % fraction. CSV r46 is the "Force @ 1g Deceleration" table (1g needs
+    % only 14.5/20.8 bar): it calibrates force-per-bar for the pressure-mode
+    % replay path, and the pedal box is sized so full effort reaches tire
+    % grip, so the commanded-force ceiling is the bias-weighted tire grip
+    % limit rather than a fixed fraction of load.
     brakePressureFrontAt1gBar = 14.524;            %  [CSV r46: front line pressure at 1g deceleration] [bar]
     brakePressureRearAt1gBar = 20.836;             %  [CSV r46: rear line pressure at 1g deceleration] [bar]
     cfg.brakePressure = struct( ...
@@ -37,22 +55,63 @@ function cfg = R25()
 
     %% ====================================================================
     %  AERODYNAMICS
-    %  Whole-car aero is represented by one resultant at the center of
-    %  pressure. xPosition > 0 is forward of CG, < 0 is behind. zPosition is
+    %  Whole-car aero is anchored to the measured map (one resultant at
+    %  the center of pressure); an optional device split adds pitch and
+    %  ride-height response. xPosition > 0 is forward of CG. zPosition is
     %  kept at CG height so drag adds no artificial pitch moment.
     %  ====================================================================
-    % NOTE: the spec sheet (r131-132) gives WHOLE-CAR aero, measured at
-    % 80 kph. CSV whole-car totals:
-    %   Downforce 1389.9 N  Drag 518.8 N  %Front 47.73
-    %   Cl x RefArea(1.094 m^2) => ClA ~ 4.84  CdA ~ 1.81
-    %   (downforce independently implies ClA ~ 4.84 -- ~-0% above Cl*Area; CSV is internally inconsistent)
-    % xPosition = wheelbase * (%Front - staticFrontWeight).
+    % NOTE: the spec sheet gives whole-car aero measured at 80 kph
+    % (rho = 1.162) plus the DEVICE LIST only - no per-device data:
+    %   Devices (r125): Front Wing, Body Wings, Side Diffusers, Rear Wing,
+    %   Rear Diffuser
+    %   Totals (r126): Downforce 1389.9 N, Drag 518.8 N, %Front 47.73
+    %   ClA = DF / (0.5*rho*V^2) ~ 4.84; CdA ~ 1.81
+    %   xPosition = wheelbase * (%Front - staticFrontWeight).
+    % The component split wires the FrontWing / RearWing / UnderbodyFloor
+    % models so chassis pitch and ride height modulate downforce (the
+    % whole-car resultant is blind to attitude). Device shares, positions,
+    % and sensitivities are documented ESTIMATES (typical FSAE split /
+    % sensitivity magnitudes); only the totals are measured. The body
+    % residual below is the pitch/height-INSENSITIVE remainder, computed
+    % so the split reproduces the measured ClA/CdA/CoP exactly at the
+    % nominal attitude - lts.components.Aero.buildFromConfig enforces that
+    % consistency at build time, so the aero map cannot drift.
+    aeroClA = 4.84;                  %  [CSV r132: Cl * RefArea]
+    aeroCdA = 1.81;                  %  [CSV r132: Cd * RefArea]
+    aeroCoPX = -0.049202;            %  [CSV r131: 47.73% front CoP]
+    fwClA = 1.36; fwCdA = 0.15; fwX = 1.00;   % est. 28% of DF, ahead of axle
+    rwClA = 1.70; rwCdA = 0.60; rwX = -1.05;  % est. 35% of DF, biggest drag
+    flClA = 1.07; flCdA = 0.20; flX = -0.15;  % est. 22% of DF, diffusers
+    bodyClA = aeroClA - fwClA - rwClA - flClA;
+    bodyCdA = aeroCdA - fwCdA - rwCdA - flCdA;
+    bodyX = (aeroClA * aeroCoPX ...
+        - (fwClA * fwX + rwClA * rwX + flClA * flX)) / bodyClA;
     cfg.aero = struct( ...
-        'xPosition', -0.049202, ...      % [CSV r131: 47.73% front CoP]
+        'xPosition', aeroCoPX, ...       % [CSV r131: 47.73% front CoP]
         'zPosition', cfg.cgHeight, ...   % Kept at CG height
-        'ClA', 4.84, ...                 % [CSV r132: Cl * RefArea]
-        'CdA', 1.81, ...                 % [CSV r132: Cd * RefArea]
-        'pitchSensitivityClA', 0.0);     % [not in spec sheet]
+        'ClA', aeroClA, ...              % [CSV r132: Cl * RefArea]
+        'CdA', aeroCdA, ...              % [CSV r132: Cd * RefArea]
+        'components', struct( ...
+            'frontWing', struct( ...
+                'xPosition', fwX, 'zPosition', 0.05, ...
+                'ClA', fwClA, 'CdA', fwCdA, ...
+                'pitchSensitivityClA', -1.0, ...   % nose-up unloads the wing
+                'heightSensitivity', 0.08), ...    % frac. ClA per cm (est.)
+            'rearWing', struct( ...
+                'xPosition', rwX, 'zPosition', 0.80, ...
+                'ClA', rwClA, 'CdA', rwCdA, ...
+                'pitchSensitivityClA', 0.6, ...    % nose-up trims rear AoA up
+                'heightSensitivity', 0.02), ...    % 0.8 m off the ground
+            'floor', struct( ...
+                'xPosition', flX, 'zPosition', 0.045, ...
+                'ClA', flClA, 'CdA', flCdA, ...
+                'pitchSensitivityClA', -0.5, ...   % nose-up unseals the floor
+                'stallHeight', 0.012, ...
+                'heightExponent', 0.6), ...
+            'body', struct( ...
+                'xPosition', bodyX, 'zPosition', cfg.cgHeight, ...
+                'ClA', bodyClA, ...
+                'CdA', bodyCdA)));
 
     %% ====================================================================
     %  SUSPENSION
@@ -82,7 +141,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                            %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.034977, ...                     %   [CSV r33: 34.977 mm]
         'rollCenterLateral', 0.013469, ...                    %   [CSV r34: 13.469 mm lateral at 1g]
-        'antiDiveFraction', 0, ...                            %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.3); 0 = spring-only pitch path
+        'antiDiveFraction', 0, ...                            %   [CSV r30: Anti dive 0% - explicit spec declaration, not a placeholder; 0 = spring-only pitch path
         'casterAngle',      4 * pi / 180, ...                 %   [CSV r35: 4 deg]
         'mechanicalTrail',  0.0143, ...                       %   [CSV r35: 14.3 mm] [m]
         'scrubRadius',      0.02093, ...                      %   [CSV r35: 20.93 mm] [m]
@@ -95,7 +154,7 @@ function cfg = R25()
         'motionRatioCurve', [1 1 1], ...                             %   [CSV r26: 1:1 linear motion ratio]
         'rollCenterHeight', 0.050496, ...                     %   [CSV r33: 50.496 mm]
         'rollCenterLateral', 0.024413, ...                    %   [CSV r34: 24.413 mm lateral at 1g]
-        'antiSquatFraction', 0, ...                           %   TODO derivable: needs suspension hardpoints (typical FSAE 0.1-0.4); 0 = spring-only pitch path
+        'antiSquatFraction', 0, ...                           %   [CSV r30: Anti squat 0% - explicit spec declaration, not a placeholder; 0 = spring-only pitch path
         'casterAngle',      0, ...
         'mechanicalTrail',  0, ...
         'scrubRadius',      0, ...
