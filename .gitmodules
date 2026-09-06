@@ -11,20 +11,20 @@
 [submodule "kit"]
 	path = src/+lts/+util
 	url = ../lts-kit
-	branch = staging
+	branch = main
 [submodule "aero"]
 	path = src/+lts/+components/+Aero
 	url = ../lts-aero
-	branch = staging
+	branch = main
 [submodule "suspension"]
 	path = src/+lts/+components/+Suspension
 	url = ../lts-suspension
-	branch = staging
+	branch = main
 [submodule "powertrain"]
 	path = src/+lts/+components/+Powertrain
 	url = ../lts-powertrain
-	branch = staging
+	branch = main
 [submodule "chassis"]
 	path = src/+lts/+components/+Chassis
 	url = ../lts-chassis
-	branch = staging
+	branch = main
