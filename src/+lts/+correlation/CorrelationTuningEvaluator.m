@@ -137,8 +137,10 @@ classdef CorrelationTuningEvaluator
             end
 
             finiteScore = isfinite(detail.score);
-            if any(finiteScore)
-                score = mean(detail.score(finiteScore));
+            % Every candidate must answer the same windows; omitting failed
+            % windows would reward models that fail on difficult maneuvers.
+            if ~isempty(finiteScore) && all(finiteScore)
+                score = mean(detail.score);
             else
                 score = Inf;
             end

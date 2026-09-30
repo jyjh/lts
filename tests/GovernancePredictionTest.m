@@ -325,25 +325,106 @@ verifyEqual(testCase, repeat.lapTime, result.baseline.lapTime, ...
 end
 
 function testParallelOptimizerMatchesSerialResult(testCase)
-% A3 regression: the opt-in Parallel grid (full UsageSchedule x
-% LineOffsetFractions, no early-exit) must select the same winner lap time
-% as the default serial path. Each candidate is an independent sim, so the
-% result is order-independent.
+assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present.');
+% With one usage tier both modes search the same candidate set. Multiple
+% tiers intentionally differ because serial search exits at a feasible tier.
 governed = localGoverned(testCase);
 track = lts.components.TestTrack('straight10');
 serial = lts.prediction.HierarchicalOptimizer.optimize( ...
-    governed.config, track, 'Dt', 0.01, ...
-    'LineOffsetFractions', [0.45 0.65], 'UsageSchedule', [0.98 0.88]);
+    governed.config, track, 'Dt', 0.002, ...
+    'LineOffsetFractions', [0.45 0.65], 'UsageSchedule', 0.75);
 parallel = lts.prediction.HierarchicalOptimizer.optimize( ...
-    governed.config, track, 'Dt', 0.01, ...
-    'LineOffsetFractions', [0.45 0.65], 'UsageSchedule', [0.98 0.88], ...
+    governed.config, track, 'Dt', 0.002, ...
+    'LineOffsetFractions', [0.45 0.65], 'UsageSchedule', 0.75, ...
     'Parallel', true);
+verifyTrue(testCase, serial.feasible);
+verifyTrue(testCase, parallel.feasible);
 verifyEqual(testCase, parallel.lapTime, serial.lapTime, 'AbsTol', 1e-9);
-verifyEqual(testCase, parallel.feasible, serial.feasible);
-% Parallel evaluates the full grid (2x2=4); serial early-exits at the first
-% feasible tier, so it explores fewer. Confirm parallel at least covers it.
-verifyGreaterThanOrEqual(testCase, numel(parallel.candidates), ...
-    numel(serial.candidates));
+verifyEqual(testCase, numel(parallel.candidates), numel(serial.candidates));
+end
+
+function testParallelOptimizerCoversEachCandidateExactlyOnce(testCase)
+% An invalid mass makes each solve fail before loading licensed tire data;
+% the returned candidates still expose the actual grid sent to the workers.
+config = lts.vehicles.R25();
+config.totalMass = 0;
+track = lts.components.TestTrack('straight10');
+schedules = {[0.98 0.88], [0.45 0.65]; ...
+    [0.98 0.93 0.88], [0.45 0.65 0.80]; ...
+    [0.98 0.88], [0.45 0.65 0.80]};
+for i = 1:size(schedules, 1)
+    usages = schedules{i, 1};
+    offsets = schedules{i, 2};
+    result = lts.prediction.HierarchicalOptimizer.optimize( ...
+        config, track, 'UsageSchedule', usages, ...
+        'LineOffsetFractions', offsets, 'Parallel', true);
+    expected = [];
+    for usage = usages
+        for offset = offsets
+            expected(end + 1, :) = [usage, offset]; %#ok<AGROW>
+        end
+    end
+    actual = [[result.candidates.usage].', ...
+        [result.candidates.lineOffsetFraction].'];
+    verifyEqual(testCase, actual, expected);
+    verifyEqual(testCase, size(unique(actual, 'rows'), 1), size(expected, 1));
+end
+end
+
+function testCertifiedStudyRejectsFailedBaseline(testCase)
+governed = localGoverned(testCase);
+governed.certification = "transport-validated";
+governed.artifact.certification = "transport-validated";
+governed.config.tire.tirFile = '__missing_audit_test_tire__.tir';
+change = lts.prediction.DesignChange.load(fullfile( ...
+    testCase.TestData.root, 'config', 'design_changes', ...
+    'example_ballast_removal.json'));
+verifyError(testCase, @() lts.prediction.DesignStudy.run( ...
+    governed, change, lts.components.TestTrack('straight10'), ...
+    'OptimizerOptions', struct('LineOffsetFractions', 0.65, 'UsageSchedule', 0.75)), ...
+    'lts_prediction_DesignStudy:InfeasiblePrediction');
+end
+
+function testStudyRejectsFailedVariant(testCase)
+assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present.');
+governed = localGoverned(testCase);
+change = struct('schema', "lts.prediction.design-change.v1", ...
+    'id', "invalid_mass", 'source', "synthetic", 'provenance', "failure test", ...
+    'operations', struct('type', "parameter", 'path', "totalMass", 'value', 0));
+verifyError(testCase, @() lts.prediction.DesignStudy.run( ...
+    governed, change, lts.components.TestTrack('straight10'), ...
+    'AllowProvisional', true, 'OptimizerOptions', struct('Dt', 0.002, ...
+    'LineOffsetFractions', 0.65, 'UsageSchedule', 0.75)), ...
+    'lts_prediction_DesignStudy:InfeasiblePrediction');
+end
+
+function testStudyDoesNotDropInfeasibleUncertaintySamples(testCase)
+assumeTrue(testCase, tireDataAvailable(), 'TTC tire data not present.');
+governed = localGoverned(testCase);
+% Synthetic uncertainty includes impossible inertias so a sample can fail
+% even though the nominal vehicle and the drag variant are feasible.
+idx = find(string({governed.manifest.parameters.name}) == "yaw_inertia");
+governed.manifest.parameters(idx).calibrationDomain.lower = -130;
+governed.manifest.parameters(idx).uncertainty.standardDeviation = 1000;
+for seed = 0:100
+    sampled = lts.prediction.PairedUncertainty.sampleArtifacts(governed, 1, seed);
+    yaw = sampled.parameters(string({sampled.parameters.name}) == "yaw_inertia").value;
+    if yaw <= 0
+        break;
+    end
+end
+assertLessThanOrEqual(testCase, yaw, 0);
+% Use a parameter operation so the failed sample reaches the optimizer;
+% applyMass would reject its negative inertia before the study's solve gate.
+change = struct('schema', "lts.prediction.design-change.v1", ...
+    'id', "sample_failure", 'source', "synthetic", 'provenance', "failure test", ...
+    'operations', struct('type', "parameter", 'path', "aero.CdA", 'value', 1.8));
+verifyError(testCase, @() lts.prediction.DesignStudy.run( ...
+    governed, change, lts.components.TestTrack('straight10'), ...
+    'AllowProvisional', true, 'SampleCount', 1, 'Seed', seed, ...
+    'OptimizerOptions', struct('Dt', 0.002, ...
+    'LineOffsetFractions', 0.65, 'UsageSchedule', 0.75)), ...
+    'lts_prediction_DesignStudy:InfeasiblePrediction');
 end
 
 function testCleanR25AndLegacyOverlayAreSeparated(testCase)

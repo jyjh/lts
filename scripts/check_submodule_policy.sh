@@ -15,12 +15,11 @@
 #      branches (strictly `main` on `main` runs, either on `staging` runs).
 #
 # Usage:  check_submodule_policy.sh <main|staging>
-# Exit 0 = policy holds; exit 1 = violations (printed).
+# Exit 0 = policy verified; exit 1 = violations or incomplete verification.
 #
 # Network note: the containment checks fetch each submodule's main/staging
-# branches. Without network or remotes (e.g. a purely local checkout before
-# the organization transfer), the containment check degrades to a warning
-# and only the .gitmodules targeting is enforced.
+# branches. Network/remotes are required: an unavailable containment check
+# must fail the same way in local runs and CI, never report a verified policy.
 set -uo pipefail
 
 expected="${1:-}"
@@ -141,7 +140,8 @@ else
 fi
 
 if [ "$containment_skipped" -eq 1 ]; then
-    echo "NOTE: containment checks were skipped for some submodules (no network/remotes)."
+    echo "FAIL: submodule policy could not be verified; containment checks were skipped."
+    fail=1
 fi
 if [ "$fail" -eq 0 ]; then
     echo "OK: submodule policy holds for branch '$expected'."

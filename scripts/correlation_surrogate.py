@@ -83,6 +83,14 @@ def read_history(
     finite_rows = []
     for row in rows:
         try:
+            # Historical checkpoints may contain finite means computed from
+            # only the successful windows. Do not teach the surrogate that
+            # failing difficult windows improves a candidate.
+            if "completed_windows" in row or "total_windows" in row:
+                completed = float(row["completed_windows"])
+                total = float(row["total_windows"])
+                if not math.isfinite(total) or total <= 0 or completed != total:
+                    continue
             score = float(row["score"])
             values = [float(row[name]) for name in names]
         except (KeyError, TypeError, ValueError):
@@ -109,6 +117,14 @@ def _tree_predictions(model: ExtraTreesRegressor, values: np.ndarray) -> tuple[n
     return mean, np.sqrt(variance)
 
 
+def next_candidate_id(history_path: Path) -> int:
+    # Failed candidates still own their IDs; filtering their training scores
+    # must not cause a resumed run to reuse an ID already in its checkpoint.
+    with history_path.open("r", encoding="utf-8-sig", newline="") as handle:
+        ids = [int(float(row["candidate_id"])) for row in csv.DictReader(handle)]
+    return max(ids) + 1
+
+
 def propose_candidates(
     space: dict[str, Any],
     history_path: Path,
@@ -116,7 +132,7 @@ def propose_candidates(
     seed: int,
     pool_size: int = 100_000,
 ) -> tuple[np.ndarray, dict[str, Any]]:
-    ids, scores, physical = read_history(history_path, space)
+    _, scores, physical = read_history(history_path, space)
     x = encode(space, physical)
     model = ExtraTreesRegressor(
         n_estimators=384,
@@ -171,7 +187,7 @@ def propose_candidates(
             param["name"]: float(value)
             for param, value in zip(space["parameters"], model.feature_importances_)
         },
-        "nextCandidateId": int(np.max(ids) + 1),
+        "nextCandidateId": next_candidate_id(history_path),
     }
     return decode(space, np.asarray(selected)), metadata
 
