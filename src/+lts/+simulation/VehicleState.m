@@ -46,6 +46,13 @@ classdef VehicleState
         onTrack = true
     end
 
+    properties (Access = private, Transient)
+        cachedChassisClass = ''
+        cachedChassisHasRollRate = false
+        cachedChassisHasAxleRoll = false
+        cachedChassisHasTwist = false
+    end
+
     methods
         function obj = VehicleState(varargin)
             specifiedYaw = false;
@@ -135,23 +142,32 @@ classdef VehicleState
             end
 
             chassis = vm.chassis;
+            chassisClass = class(chassis);
+            if ~strcmp(chassisClass, obj.cachedChassisClass)
+                % Cache interface discovery, never attitude values or bound
+                % methods: reused states must read a replacement chassis live.
+                obj.cachedChassisHasRollRate = ismethod(chassis, 'getRollRate');
+                obj.cachedChassisHasAxleRoll = ismethod(chassis, 'getFrontRollAngle');
+                obj.cachedChassisHasTwist = ismethod(chassis, 'getTwistAngle');
+                obj.cachedChassisClass = chassisClass;
+            end
             obj.pitchAngle = chassis.getPitchAngle();
             obj.rollAngle = chassis.getRollAngle();
             obj.rideHeight = -chassis.getHeave();
 
-            if ismethod(chassis, 'getRollRate')
+            if obj.cachedChassisHasRollRate
                 obj.rollRate = chassis.getRollRate();
                 obj.frontRollRate = chassis.getFrontRollRate();
                 obj.rearRollRate = chassis.getRearRollRate();
             end
-            if ismethod(chassis, 'getFrontRollAngle')
+            if obj.cachedChassisHasAxleRoll
                 obj.frontRollAngle = chassis.getFrontRollAngle();
                 obj.rearRollAngle = chassis.getRearRollAngle();
             else
                 obj.frontRollAngle = obj.rollAngle;
                 obj.rearRollAngle = obj.rollAngle;
             end
-            if ismethod(chassis, 'getTwistAngle')
+            if obj.cachedChassisHasTwist
                 obj.twistAngle = chassis.getTwistAngle();
                 obj.twistRate = chassis.getTwistRate();
             else
