@@ -132,6 +132,11 @@ initialFile = fullfile(checkpointDir, 'initial_candidates.csv');
 metadataFile = fullfile(checkpointDir, 'surrogate_metadata.json');
 if exist(historyFile, 'file') && logical(opts.Resume)
     history = readtable(historyFile, 'VariableNamingRule', 'preserve');
+    % Older checkpoints averaged only successful windows. Preserve those
+    % rows for diagnostics, but never train or rank on their partial scores.
+    incomplete = history.total_windows <= 0 | ...
+        history.completed_windows ~= history.total_windows;
+    history.score(incomplete) = Inf;
 else
     history = table();
 end
@@ -185,7 +190,8 @@ while height(history) < opts.MaxCandidates && toc(started) < opts.MaxHours * 360
         height(history), opts.MaxCandidates, min(history.score));
 end
 
-finite = isfinite(history.score);
+finite = isfinite(history.score) & history.total_windows > 0 & ...
+    history.completed_windows == history.total_windows;
 ranked = sortrows(history(finite, :), 'score', 'ascend');
 if isempty(ranked)
     error('tune_correlation:NoFiniteCandidates', ...
@@ -206,6 +212,10 @@ validation = [finalists(:, [{'candidate_id'}, parameterNames, {'score'}]), ...
 writetable(validation, validationFile);
 writetable(validationDetail, validationDetailFile);
 validation = sortrows(validation, 'validation_score', 'ascend');
+if isempty(validation) || ~isfinite(validation.validation_score(1))
+    error('tune_correlation:NoFiniteValidationCandidates', ...
+        'No candidate completed all held-out validation windows.');
+end
 winner = validation(1, :);
 winnerValues = table2array(winner(1, parameterNames));
 

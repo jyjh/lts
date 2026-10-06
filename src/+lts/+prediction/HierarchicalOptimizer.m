@@ -179,7 +179,7 @@ classdef HierarchicalOptimizer
             % index to appear directly in the parfor body, not a nested loop).
             % Ordering is usage-major: all offsets for usage 1, then usage 2,
             % ... matching the serial path's nested for-loop.
-            usageList = repmat(usages, nO, 1);            % [u1..u1, u2..u2, ...]
+            usageList = repelem(usages, nO);              % [u1..u1, u2..u2, ...]
             offsetList = repmat(offsets, nU, 1);           % [o1..o_nO, o1..o_nO, ...]
             parfor k = 1:nC
                 candidates(k) = lts.prediction.HierarchicalOptimizer.runCandidate( ...

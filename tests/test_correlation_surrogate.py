@@ -76,3 +76,24 @@ def test_cli_writes_candidate_csv():
         assert rows[0]["candidate_id"] == "1"
     finally:
         output.unlink(missing_ok=True)
+
+
+def test_history_excludes_partial_and_empty_candidate_scores(tmp_path):
+    space = surrogate.load_space(SPACE)
+    names = [param["name"] for param in space["parameters"]]
+    values = surrogate.baseline(space)
+    history = tmp_path / "history.csv"
+    with history.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["candidate_id", *names, "score", "completed_windows", "total_windows"])
+        writer.writerow([1, *values, 0.01, 1, 2])
+        writer.writerow([2, *values, 0.02, 0, 0])
+        writer.writerow([3, *values, 0.2, 2, 2])
+        writer.writerow([4, *values, 0.3, 2, 2])
+        writer.writerow([5, *values, 0.001, "nan", 2])
+    ids, scores, _ = surrogate.read_history(history, space)
+    assert ids.tolist() == [3, 4]
+    assert scores.tolist() == [0.2, 0.3]
+    _, metadata = surrogate.propose_candidates(space, history, 1, seed=10, pool_size=32)
+    assert metadata["trainingRows"] == 2
+    assert metadata["nextCandidateId"] == 6

@@ -262,6 +262,20 @@ verifyTrue(testCase, all(isfinite(detail.score)), ...
     'Both windows must produce finite scores under the shared vehicle.');
 verifyTrue(testCase, all(~contains(detail.status, "error")), ...
     'No window may report an error status.');
+
+% A window outside the replay fails while the first still succeeds. Its
+% candidate must rank behind the fully completed candidate, not on the
+% surviving window alone.
+windows.horizon_s(2) = 0.3;
+[partial, partialDetail] = lts.correlation.CorrelationTuningEvaluator.evaluateCandidate( ...
+    2, values, registry, cfg, profile, track, windows, ...
+    'Dt', 0.001, 'ExcludeInitialS', 0.05, 'Split', "train");
+verifyEqual(testCase, partial.completed_windows, 1);
+verifyTrue(testCase, isfinite(partialDetail.score(1)));
+verifyEqual(testCase, partialDetail.status(2), ...
+    "lts_correlation_CorrelationReplayProfile:WindowOutsideProfile");
+verifyEqual(testCase, partial.score, Inf);
+verifyGreaterThan(testCase, partial.score, summary.score);
 end
 
 function profile = localProfile(time)

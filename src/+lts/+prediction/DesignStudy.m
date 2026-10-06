@@ -77,6 +77,13 @@ classdef DesignStudy
                 args(end + 1:end + 2) = {names{i}, options.(names{i})}; %#ok<AGROW>
             end
             result = lts.prediction.HierarchicalOptimizer.optimize(config, track, args{:});
+            % Apply the same gate to nominal, sampled, and attribution runs:
+            % a failed solve must never become a certified delta or disappear
+            % silently from the uncertainty interval.
+            if ~result.feasible || ~isfinite(result.lapTime)
+                error('lts_prediction_DesignStudy:InfeasiblePrediction', ...
+                    'Design study requires a feasible finite lap: %s.', result.status);
+            end
         end
 
         function attribution = attribute( ...
