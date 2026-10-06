@@ -420,6 +420,12 @@ Check whether the supplied stiffness is:
 
 The model expects torsional stiffness together with lever arm and motion ratio.
 
+The ARB motion ratio is bar-end travel divided by wheel travel and may exceed
+one. Enabled bars need a finite, strictly positive lever arm. A zero arm is
+accepted only as a disabled-bar placeholder. Use an installed effective rate
+to include mounting/link compliance; the built-in bar is linear, symmetric,
+and has no preload or friction model.
+
 Set `enabled = false` when no bar is fitted. Do not leave a default bar enabled
 on a car that has no ARB.
 

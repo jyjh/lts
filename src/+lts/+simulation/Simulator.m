@@ -70,11 +70,41 @@ classdef Simulator < handle
         end
         
         function [newState, forces] = step(obj, state, input, ref)
+            % Subcycle the whole coupled vehicle, so suspension and chassis
+            % exchange reactions at every physical step. Advancing either
+            % subsystem alone with frozen forces does not protect stability.
+            obj.requireChassis();
+            maxStep = 0.001;
+            suspension = obj.vehicleManager.suspension;
+            if ismethod(suspension, 'getMaxIntegrationStep')
+                maxStep = min(maxStep, suspension.getMaxIntegrationStep());
+            end
+            chassis = obj.vehicleManager.chassis;
+            if isprop(chassis, 'maxIntegrationStep') && ...
+                    isfinite(chassis.maxIntegrationStep) && chassis.maxIntegrationStep > 0
+                maxStep = min(maxStep, chassis.maxIntegrationStep);
+            end
+            n = max(1, ceil(obj.dt / maxStep));
+            newState = state;
+            for idx = 1:n
+                [newState, forces] = obj.advanceStep(newState, input, ref, obj.dt / n);
+                nextRef = obj.cachedNextRef;
+                if isfield(ref, 'trackData')
+                    nextRef.trackData = ref.trackData;
+                end
+                ref = nextRef;
+                newState.mu = ref.mu;
+            end
+            % Inputs are held over the requested step; telemetry describes
+            % the last substep. The caller's dt and logging cadence stay fixed.
+        end
+
+        function [newState, forces] = advanceStep(obj, state, input, ref, dt)
             % Advance one force-first physics step.
             
             vm = obj.vehicleManager;
             obj.requireChassis();
-            input = obj.normalizeDriverInput(input, state);
+            input = obj.normalizeDriverInput(input, state, dt);
             throttle = input.throttle;
             steer = input.steer;
 
@@ -108,7 +138,7 @@ classdef Simulator < handle
             % this step's accelerations rather than the previous step's.
             % The chassis is advanced later in this step with the newly
             % computed accelerations.
-            cornerLoads = obj.getCurrentCornerLoads(steer);
+            cornerLoads = obj.getCurrentCornerLoads(steer, dt);
             
             % Motor speed follows the differential carrier.
             carrierOmega0 = 0.5 * (vm.tire.RL.angularVelocity + vm.tire.RR.angularVelocity);
@@ -122,7 +152,7 @@ classdef Simulator < handle
             diffOut = obj.solveDifferential( ...
                 totalDriveTorque, totalCoastdownTorque, ...
                 vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
-                inertia.RL, obj.dt);
+                inertia.RL, dt);
             T_drive_RL = diffOut.TL;
             T_drive_RR = diffOut.TR;
 
@@ -164,18 +194,18 @@ classdef Simulator < handle
                 vm.tire.RL.angularVelocity = omegaStart(3);
                 vm.tire.RR.angularVelocity = omegaStart(4);
 
-                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, obj.dt, inertia.FL, wheelLongSpeeds(1));
-                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, obj.dt, inertia.FR, wheelLongSpeeds(2));
+                vm.tire.updateWheelDynamics(vm.tire.FL, T_drive_front, T_brake_front, dt, inertia.FL, wheelLongSpeeds(1));
+                vm.tire.updateWheelDynamics(vm.tire.FR, T_drive_front, T_brake_front, dt, inertia.FR, wheelLongSpeeds(2));
                 vm.tire.updateDrivenWheelPairDynamics( ...
                     vm.tire.RL, vm.tire.RR, T_drive_RL, T_drive_RR, ...
-                    T_brake_rear, T_brake_rear, obj.dt, inertia.RL, inertia.RR, ...
+                    T_brake_rear, T_brake_rear, dt, inertia.RL, inertia.RR, ...
                     inertia.reflectedRotorInertia, wheelLongSpeeds(3), wheelLongSpeeds(4));
 
                 % Re-solve after wheel speeds change.
                 diffOut = obj.solveDifferential( ...
                     totalDriveTorque, totalCoastdownTorque, ...
                     vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
-                    inertia.RL, obj.dt);
+                    inertia.RL, dt);
                 T_drive_RL = diffOut.TL;
                 T_drive_RR = diffOut.TR;
 
@@ -194,7 +224,7 @@ classdef Simulator < handle
                     diffOut = obj.solveDifferential( ...
                         totalDriveTorque, totalCoastdownTorque, ...
                         vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity, ...
-                        inertia.RL, obj.dt);
+                        inertia.RL, dt);
                     T_drive_RL = diffOut.TL;
                     T_drive_RR = diffOut.TR;
                 end
@@ -202,10 +232,10 @@ classdef Simulator < handle
                 % Commit tire relaxation only on the final iteration.
                 if iter < nWheelIter
                     tireData = obj.updatePlanarTireForces( ...
-                        tireInputState, cornerLoads, obj.dt, false, 'preview', tireContact);
+                        tireInputState, cornerLoads, dt, false, 'preview', tireContact);
                 else
                     tireData = obj.updatePlanarTireForces( ...
-                        tireInputState, cornerLoads, obj.dt, true, 'advance', tireContact);
+                        tireInputState, cornerLoads, dt, true, 'advance', tireContact);
                 end
             end
             dynamics = obj.computePlanarDynamics(state, tireData, aeroForces);
@@ -216,7 +246,7 @@ classdef Simulator < handle
             % (ground effect, pitch sensitivity) and are read back by
             % lts.simulation.VehicleState.computePitch/Roll/RideHeight below.
             vm.chassis.updateFromAccelerations( ...
-                dynamics.ax, dynamics.ay, aeroForces, obj.dt, dynamics.yawAccel);
+                dynamics.ax, dynamics.ay, aeroForces, dt, dynamics.yawAccel);
 
             vm.powertrain.updateStateFromDrivenWheels( ...
                 [vm.tire.RL.angularVelocity, vm.tire.RR.angularVelocity]);
@@ -236,7 +266,7 @@ classdef Simulator < handle
             end
 
             kinematics = obj.integratePlanarKinematics( ...
-                state, dynamics, obj.dt);
+                state, dynamics, dt);
             yawRateNew = kinematics.yawRate;
             yawNew = kinematics.yaw;
             vxNew = kinematics.vx;
@@ -266,7 +296,7 @@ classdef Simulator < handle
                 dynamics.ax, dynamics.ay, dynamics.yawAccel, ...
                 vxNew, vyNew, yawRateNew, yawNew, xNew, yNew, ...
                 nextRef.s, nextRef.heading, nextRef.curvature, ...
-                nextRef.lateralError, obj.dt, ...
+                nextRef.lateralError, dt, ...
                 dynamics.frontAxleAy, dynamics.rearAxleAy);
             newState.onTrack = nextRef.onTrack;
             
@@ -933,7 +963,10 @@ classdef Simulator < handle
             input = obj.normalizeDriverInput(input, state);
         end
 
-        function input = normalizeDriverInput(obj, input, state)
+        function input = normalizeDriverInput(obj, input, state, dt)
+            if nargin < 4
+                dt = obj.dt;
+            end
             if isstruct(input) && isfield(input, 'normalized') && ...
                     logical(input.normalized)
                 return;
@@ -973,7 +1006,7 @@ classdef Simulator < handle
                 end
                 rampTime = obj.getSteeringRampTime();
                 if obj.applySteeringSlew && rampTime > 0 && isfinite(rampTime) && isfinite(maxSteer)
-                    maxDelta = maxSteer * obj.dt / max(rampTime, eps);
+                    maxDelta = maxSteer * dt / max(rampTime, eps);
                     delta = input.steer - previousSteer;
                     delta = lts.util.clamp(delta, -maxDelta, maxDelta);
                     input.steer = previousSteer + delta;
@@ -1128,11 +1161,14 @@ classdef Simulator < handle
             end
         end
 
-        function loads = getCurrentCornerLoads(obj, steer)
+        function loads = getCurrentCornerLoads(obj, steer, dt)
             % Read chassis-driven tire loads from the suspension. With the
             % attitude predictor enabled, the suspension is driven by the
             % extrapolated end-of-step attitude so this step's loads are not
             % generated by the previous step's chassis state.
+            if nargin < 3
+                dt = obj.dt;
+            end
             vm = obj.vehicleManager;
             predictDt = 0;
             if obj.useAttitudePredictor
@@ -1140,10 +1176,10 @@ classdef Simulator < handle
                 % are second-order accurate in dt, keeping lap-time results
                 % converged across timesteps (a full-step lead reintroduces
                 % an O(dt) bias).
-                predictDt = 0.5 * obj.dt;
+                predictDt = 0.5 * dt;
             end
             loads = vm.suspension.computeCornerLoadsFromChassis( ...
-                vm.chassis, steer, obj.dt, predictDt);
+                vm.chassis, steer, dt, predictDt);
         end
 
         function resetForSimulation(obj, preserveInitialComponentState)

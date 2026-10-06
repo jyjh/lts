@@ -88,12 +88,23 @@ derive the `body` residual from the chosen device shares.
 | `dampingHighSpeedRatio` | — | optional, finite |
 | `dampingReboundKneeSpeed` | m/s | optional, NaN = none |
 | `frontArb`/`rearArb.stiffness` | N·m/rad | ≥ 0 |
-| `frontArb`/`rearArb.motionRatio` | — | (0, 1] |
-| `frontArb`/`rearArb.leverArm` | m | ≥ 0 |
+| `frontArb`/`rearArb.motionRatio` | — | finite, > 0 (may exceed 1) |
+| `frontArb`/`rearArb.leverArm` | m | finite, > 0 when enabled; ≥ 0 when disabled |
 | `frontArb`/`rearArb.enabled` | — | logical |
 | `rollStiffnessOverride` | — | NaN (derive) or [0, 1] |
 | `coupleChassisRollToLoadTransfer` | — | logical |
 | `geometry` | — | struct with `front`/`rear` (travelGrid + camber/toe/motion-ratio curves, roll-center height) and `steering` (steeringRatio, ackermann, maxWheelSteerAngle) |
+
+An enabled ARB must produce a finite differential wheel rate. Enable values
+are scalar logicals or numeric 0/1. These checks preserve all field names and
+types while rejecting singular installations.
+
+`SuspensionManager.getMaxIntegrationStep()` is an optional structural
+capability for the simulator: it includes the coupled ARB wheel-hop mode.
+The simulator advances the complete vehicle on shared substeps no larger
+than this bound or 1 ms, holding the requested input over the outer step.
+Logging cadence and the public simulation timestep remain unchanged;
+force telemetry reports the final substep.
 
 ### Powertrain (`cfg.powertrain`)
 

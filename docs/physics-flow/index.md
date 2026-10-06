@@ -157,6 +157,13 @@ SuspensionManager.computeCornerLoadsFromChassis(chassis, steer, dt)
 
 The chassis state from the previous completed step gives heave, pitch, and front/rear roll. `ChassisState.updateCornerKinematics` converts those attitudes into four suspension pickup displacements and velocities. Each `SimpleSuspension` corner then advances the unsprung mass against the suspension spring/damper/bump stop and tire spring.
 
+The simulator subdivides an outer step into shared vehicle steps no larger
+than 1 ms or the suspension's ARB-aware integration bound. Tire forces,
+unsprung motion, and chassis reactions are exchanged on every shared step.
+Within an axle, bar forces use both wheels at the same instant and are
+refreshed after integration. Warm starts solve both corner equilibria and
+the connecting bar force together, including tire lift and bump stops.
+
 Without a chassis, the algebraic fallback computes load transfer directly:
 
 ```text
@@ -375,7 +382,7 @@ then adds the direct drag moment about the CG exactly once:
 
 ```text
 ax_non_aero = ax + F_drag_longitudinal / totalMass
-M_pitch = sprungMass * ax_non_aero * cg_height
+M_pitch = sprungMass * ax_non_aero * sprung_cg_height
         + (Fz_rear*a_rear - Fz_front*a_front)
         + F_drag_longitudinal * (dragHeight - cg_height)
         + (reaction_front*a_front - reaction_rear*a_rear)
@@ -386,15 +393,25 @@ the lateral roll moment from its own axle-center lateral acceleration, is
 resisted by the actual left/right suspension-reaction moment, and is coupled to
 the other axle by chassis torsional rigidity:
 
+The configured `cg_height` belongs to the whole car. Splitting the masses
+preserves its first moment: `sprungMass * sprung_cg_height = totalMass *
+cg_height - unsprungMassTotal * hubHeight`. Each axle's sprung mass is its
+static total mass minus the corner unsprung masses. The unsprung lateral
+transfer is `unsprungAxleMass * ay_axle * hubHeight / track` at that axle;
+spring and ARB tuning cannot redistribute it. Hub height remains an
+approximation to the unsprung CG height.
+
 ```text
 ay_front = ay + yawAccel*frontArm
 ay_rear = ay - yawAccel*rearArm
 twist = frontRoll - rearRoll
-M_front_roll = sprungMass*frontWeight*ay_front*cg_height
+M_front_roll = frontSprungMass*(ay_front*(sprung_cg_height-frontRollCenterHeight)
+               + g*frontRollCenterLateral)
              + (reaction_FL - reaction_FR)*track/2
              - K_torsion*twist
              - C_torsion*twistRate
-M_rear_roll = sprungMass*rearWeight*ay_rear*cg_height
+M_rear_roll = rearSprungMass*(ay_rear*(sprung_cg_height-rearRollCenterHeight)
+              + g*rearRollCenterLateral)
              + (reaction_RL - reaction_RR)*track/2
              + K_torsion*twist
              + C_torsion*twistRate
@@ -460,6 +477,8 @@ This means correlation overlays answer: "What path and acceleration does this ve
 - Brake commands generate wheel torque; tire slip decides the resulting ground force.
 - The track centerline is not a rail.
 - Road height is flat; vertical dynamics are suspension/tire compliance about a flat road.
+- Anti-roll bars use a constant, symmetric differential wheel rate with zero preload. Bushing/link compliance must be included in an installed effective rate; friction, hysteresis, and travel-dependent bar geometry are not modeled.
+- Unsprung CG height is approximated by hub height. The sprung CG height is derived from the configured whole-vehicle mass-height balance.
 - Thermal tire behavior, aero yaw sensitivity, ABS, detailed inverter dynamics, and 3D road surface are not modeled.
 
 ## Reading The Code By Physics Topic
