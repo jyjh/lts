@@ -51,6 +51,14 @@ classdef Simulator < handle
         cachedPowertrainModeSource = []
         cachedNextRef = struct()
     end
+
+    properties (Access = private, Transient)
+        cachedTireCapabilityClass = ''
+        cachedTireHasSlipRatio = false
+        cachedTireHasDrivenCorner = false
+        cachedSuspensionCapabilityClass = ''
+        cachedSuspensionHasChassisLoads = false
+    end
     
     methods
         function obj = Simulator(vehicleManager, driverModel, dt)
@@ -747,8 +755,17 @@ classdef Simulator < handle
             % falls back to its own configured wheelRadius.
             radius = [];
             vm = obj.vehicleManager;
-            if ~isempty(vm) && ~isempty(vm.tire) && isprop(vm.tire, 'RL')
-                radius = vm.tire.RL.wheelRadius;
+            if ~isempty(vm) && ~isempty(vm.tire)
+                tire = vm.tire;
+                obj.cacheTireCapabilities(tire);
+                hasDrivenCorner = obj.cachedTireHasDrivenCorner;
+                % Dynamic properties may change without changing the class.
+                if isa(tire, 'dynamicprops')
+                    hasDrivenCorner = isprop(tire, 'RL');
+                end
+                if hasDrivenCorner
+                    radius = tire.RL.wheelRadius;
+                end
             end
         end
 
@@ -1099,8 +1116,13 @@ classdef Simulator < handle
                     ['Simulator requires a ChassisComponent; the obsolete ' ...
                     'algebraic no-chassis physics path has been removed.']);
             end
-            if isempty(vm.suspension) || ...
-                    ~ismethod(vm.suspension, 'computeCornerLoadsFromChassis')
+            suspensionClass = class(vm.suspension);
+            if ~strcmp(suspensionClass, obj.cachedSuspensionCapabilityClass)
+                obj.cachedSuspensionHasChassisLoads = ...
+                    ismethod(vm.suspension, 'computeCornerLoadsFromChassis');
+                obj.cachedSuspensionCapabilityClass = suspensionClass;
+            end
+            if isempty(vm.suspension) || ~obj.cachedSuspensionHasChassisLoads
                 error('lts_simulation_Simulator:ChassisSuspensionRequired', ...
                     'Simulator requires a chassis-coupled suspension model.');
             end
@@ -1145,6 +1167,8 @@ classdef Simulator < handle
             obj.cachedPowertrainMode = [];
             obj.cachedPowertrainModeSource = [];
             obj.cachedNextRef = struct();
+            obj.cachedTireCapabilityClass = '';
+            obj.cachedSuspensionCapabilityClass = '';
 
             vm = obj.vehicleManager;
             if isempty(vm) || preserveInitialComponentState
@@ -1386,11 +1410,13 @@ classdef Simulator < handle
             % Delegate to the tire model so standalone and simulator contact
             % paths cannot drift to different definitions.
             tire = obj.vehicleManager.tire;
-            if ~isempty(tire) && ...
-                    ismethod(tire, 'computeSlipRatioFromKinematics')
-                kappa = tire.computeSlipRatioFromKinematics( ...
-                    cornerState, longitudinalSpeed);
-                return;
+            if ~isempty(tire)
+                obj.cacheTireCapabilities(tire);
+                if obj.cachedTireHasSlipRatio
+                    kappa = tire.computeSlipRatioFromKinematics( ...
+                        cornerState, longitudinalSpeed);
+                    return;
+                end
             end
 
             % Generic TireModel fallback: ground-speed denominator with a
@@ -1433,6 +1459,20 @@ classdef Simulator < handle
             obj.cachedDiffLocksWheels = locked;
         end
 
+    end
+
+    methods (Access = private)
+        function cacheTireCapabilities(obj, tire)
+            % Methods belong to a class, so replacing an instance needs no
+            % reflection and never retains the old instance's mutable state.
+            tireClass = class(tire);
+            if ~strcmp(tireClass, obj.cachedTireCapabilityClass)
+                obj.cachedTireHasSlipRatio = ...
+                    ismethod(tire, 'computeSlipRatioFromKinematics');
+                obj.cachedTireHasDrivenCorner = isprop(tire, 'RL');
+                obj.cachedTireCapabilityClass = tireClass;
+            end
+        end
     end
 end
 

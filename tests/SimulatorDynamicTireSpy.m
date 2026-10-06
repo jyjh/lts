@@ -1,0 +1,2 @@
+classdef SimulatorDynamicTireSpy < dynamicprops
+end
