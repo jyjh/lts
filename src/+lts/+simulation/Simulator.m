@@ -58,6 +58,9 @@ classdef Simulator < handle
         cachedTireHasDrivenCorner = false
         cachedSuspensionCapabilityClass = ''
         cachedSuspensionHasChassisLoads = false
+        cachedSuspensionHasIntegrationStep = false
+        cachedChassisCapabilityClass = ''
+        cachedChassisHasIntegrationStep = false
     end
     
     methods
@@ -76,11 +79,17 @@ classdef Simulator < handle
             obj.requireChassis();
             maxStep = 0.001;
             suspension = obj.vehicleManager.suspension;
-            if ismethod(suspension, 'getMaxIntegrationStep')
+            if obj.cachedSuspensionHasIntegrationStep
                 maxStep = min(maxStep, suspension.getMaxIntegrationStep());
             end
             chassis = obj.vehicleManager.chassis;
-            if isprop(chassis, 'maxIntegrationStep') && ...
+            chassisClass = class(chassis);
+            if ~strcmp(chassisClass, obj.cachedChassisCapabilityClass) || ...
+                    isa(chassis, 'dynamicprops')
+                obj.cachedChassisHasIntegrationStep = isprop(chassis, 'maxIntegrationStep');
+                obj.cachedChassisCapabilityClass = chassisClass;
+            end
+            if obj.cachedChassisHasIntegrationStep && ...
                     isfinite(chassis.maxIntegrationStep) && chassis.maxIntegrationStep > 0
                 maxStep = min(maxStep, chassis.maxIntegrationStep);
             end
@@ -1153,6 +1162,8 @@ classdef Simulator < handle
             if ~strcmp(suspensionClass, obj.cachedSuspensionCapabilityClass)
                 obj.cachedSuspensionHasChassisLoads = ...
                     ismethod(vm.suspension, 'computeCornerLoadsFromChassis');
+                obj.cachedSuspensionHasIntegrationStep = ...
+                    ismethod(vm.suspension, 'getMaxIntegrationStep');
                 obj.cachedSuspensionCapabilityClass = suspensionClass;
             end
             if isempty(vm.suspension) || ~obj.cachedSuspensionHasChassisLoads
@@ -1205,6 +1216,7 @@ classdef Simulator < handle
             obj.cachedNextRef = struct();
             obj.cachedTireCapabilityClass = '';
             obj.cachedSuspensionCapabilityClass = '';
+            obj.cachedChassisCapabilityClass = '';
 
             vm = obj.vehicleManager;
             if isempty(vm) || preserveInitialComponentState

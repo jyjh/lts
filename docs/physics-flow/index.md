@@ -164,6 +164,9 @@ Within an axle, bar forces use both wheels at the same instant and are
 refreshed after integration. Warm starts solve both corner equilibria and
 the connecting bar force together, including tire lift and bump stops.
 
+Class capabilities are cached independently of current state. Forces, travel,
+masses, geometry-dependent motion ratios, and integration bounds remain live.
+
 Without a chassis, the algebraic fallback computes load transfer directly:
 
 ```text
